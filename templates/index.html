@@ -1,0 +1,2146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#07111F" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>IPL Fantasy 2026</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #07111F;
+      --surface:  #0E1E35;
+      --border:   rgba(245,197,24,.18);
+      --gold:     #F5C518;
+      --teal:     #00D4AA;
+      --text:     #D8E8F5;
+      --muted:    #5F7A9B;
+      --dim:      #3D5572;
+      --radius:   14px;
+      --font:     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Loading ── */
+    #app-loading {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 20px;
+      background: var(--bg); z-index: 100;
+      transition: opacity .4s ease;
+    }
+    #app-loading.hidden { opacity: 0; pointer-events: none; }
+    #app-loading .logo { font-size: 56px; }
+    #app-loading h1 { color: var(--gold); font-size: 22px; font-weight: 700; }
+    #app-loading p  { color: var(--muted); font-size: 14px; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid rgba(245,197,24,.15);
+      border-top-color: var(--gold);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Shell ── */
+    #app { min-height: 100vh; padding-bottom: 60px; }
+
+    /* ── Error banner ── */
+    #error-banner {
+      display: none; position: fixed;
+      top: 0; left: 0; right: 0; z-index: 200;
+      background: rgba(220,50,50,.92); color: #fff;
+      font-size: 13px; text-align: center; padding: 8px 16px;
+    }
+    #error-banner.visible { display: block; }
+
+    /* ── Layout ── */
+    .wrap { max-width: 900px; margin: 0 auto; padding: 20px 14px; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin-bottom: 14px;
+    }
+    .card-teal   { border-color: rgba(0,212,170,.3); }
+    .card-locked { border-color: rgba(245,197,24,.3); background: rgba(245,197,24,.025); }
+
+    /* ── Typography ── */
+    h2.page-title { color: var(--gold); font-size: 20px; margin-bottom: 2px; }
+    .subtitle     { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+    h3.section-title { color: var(--text); font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+
+    /* ── Buttons ── */
+    .btn {
+      padding: 9px 18px; border: none; border-radius: 8px;
+      font-weight: 700; font-size: 13px; cursor: pointer;
+      white-space: nowrap; transition: opacity .15s;
+    }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-gold   { background: var(--gold); color: #07111F; }
+    .btn-teal   { background: var(--teal); color: #07111F; }
+    .btn-ghost  { background: transparent; color: var(--muted); border: 1px solid rgba(95,122,155,.4); font-weight: 400; }
+    .btn-danger { background: rgba(220,50,50,.12); color: #FF6B6B; border: 1px solid rgba(220,50,50,.3); font-weight: 600; }
+    .btn-sm     { padding: 6px 12px; font-size: 12px; }
+
+    /* ── Badges ── */
+    .badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: .03em; line-height: 1.4; }
+    .badge-c    { background: var(--gold); color: #07111F; }
+    .badge-vc   { background: var(--teal); color: #07111F; }
+    .badge-wk   { background: rgba(0,212,170,.15);  color: var(--teal); }
+    .badge-bat  { background: rgba(245,197,24,.15);  color: var(--gold); }
+    .badge-ar   { background: rgba(130,90,230,.2);   color: #A78BFA; }
+    .badge-bowl { background: rgba(220,50,50,.15);   color: #FF6B6B; }
+    .badge-lock { background: rgba(245,197,24,.1);   color: var(--gold); padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; }
+    .tab-btn {
+      padding: 7px 13px; border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px; background: transparent;
+      color: var(--muted); font-size: 12px; cursor: pointer;
+      transition: all .15s;
+    }
+    .tab-btn.active { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+
+    /* ── User header ── */
+    .user-header { display: flex; justify-content: space-between; align-items: center; }
+    .user-header .label,
+    .user-header-bar .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .user-header .name,
+    .user-header-bar .name  { color: var(--text); font-size: 16px; font-weight: 700; margin-top: 2px; }
+
+    /* ── Budget bar ── */
+    .budget-bar {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(0,0,0,.2); border-radius: 8px;
+      padding: 8px 12px; margin-bottom: 12px;
+      border: 1px solid rgba(255,255,255,.06);
+    }
+    .budget-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .budget-amount { font-size: 18px; font-weight: 800; }
+    .budget-amount.ok   { color: var(--teal); }
+    .budget-amount.warn { color: var(--gold); }
+    .budget-amount.over { color: #FF6B6B; }
+    .budget-track { flex: 1; height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; overflow: hidden; }
+    .budget-fill  { height: 100%; border-radius: 3px; transition: width .3s, background .3s; }
+
+    /* ── Week label ── */
+    .week-label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 6px; }
+
+    /* ── XI Grid ── */
+    .xi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .xi-card {
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 10px;
+      padding: 10px;
+      display: flex; align-items: center; gap: 9px;
+      position: relative;
+    }
+    .xi-card.is-cap { border-color: rgba(245,197,24,.45); background: rgba(245,197,24,.06); }
+    .xi-card.is-vc  { border-color: rgba(0,212,170,.35);  background: rgba(0,212,170,.05); }
+    .xi-card.editable { cursor: default; }
+
+    .xi-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 800; flex-shrink: 0;
+      background: rgba(255,255,255,.1); color: var(--text);
+    }
+    .xi-info { flex: 1; min-width: 0; }
+    .xi-name { font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .xi-sub  { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .xi-badge-wrap { position: absolute; top: 6px; right: 6px; }
+
+    /* Editable card action row */
+    .xi-edit-row { display: flex; gap: 3px; position: absolute; bottom: 5px; right: 5px; }
+    .ecap-btn, .evc-btn, .erem-btn {
+      width: 22px; height: 22px; border: none; border-radius: 4px;
+      font-size: 9px; font-weight: 800; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ecap-btn     { background: rgba(245,197,24,.15); color: var(--gold); }
+    .ecap-btn.on  { background: var(--gold);          color: #07111F; }
+    .evc-btn      { background: rgba(0,212,170,.15);  color: var(--teal); }
+    .evc-btn.on   { background: var(--teal);          color: #07111F; }
+    .erem-btn     { background: rgba(220,50,50,.15);  color: #FF6B6B; font-size: 13px; }
+    .erem-btn:hover { background: rgba(220,50,50,.35); }
+
+    /* Space for edit-row below player info */
+    .xi-card.editable { padding-bottom: 32px; }
+
+    /* ── Avatar team colours ── */
+    .av-rcb  { background: rgba(220,50,50,.3);  color: #FF6B6B; }
+    .av-srh  { background: rgba(245,120,0,.3);  color: #F97316; }
+    .av-mi   { background: rgba(0,100,200,.3);  color: #60A5FA; }
+    .av-kkr  { background: rgba(90,30,150,.3);  color: #C084FC; }
+    .av-csk  { background: rgba(245,197,24,.2); color: var(--gold); }
+    .av-rr   { background: rgba(255,0,100,.2);  color: #FB7185; }
+    .av-dc   { background: rgba(0,150,220,.2);  color: #38BDF8; }
+    .av-pbks { background: rgba(220,30,30,.2);  color: #FCA5A5; }
+    .av-lsg  { background: rgba(0,180,120,.2);  color: #4ADE80; }
+    .av-gt   { background: rgba(0,160,200,.2);  color: #67E8F9; }
+
+    /* ── Cap hint ── */
+    .cap-hint {
+      display: flex; gap: 14px; flex-wrap: wrap;
+      font-size: 11px; color: var(--muted); margin-bottom: 10px;
+    }
+    .cap-hint span { display: flex; align-items: center; gap: 5px; }
+
+    /* ── Save row ── */
+    .save-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+    .save-status { font-size: 12px; }
+    .save-status.ok  { color: var(--teal); }
+    .save-status.err { color: #FF6B6B; }
+
+    /* ── Picker ── */
+    .picker-shell {
+      background: var(--surface);
+      border: 1px solid rgba(0,212,170,.2);
+      border-radius: var(--radius);
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    .picker-toolbar {
+      padding: 12px 12px 8px;
+      border-bottom: 1px solid rgba(255,255,255,.05);
+      background: rgba(0,0,0,.15);
+    }
+    .picker-search {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px; padding: 6px 10px; margin-bottom: 8px;
+    }
+    .picker-search input {
+      background: none; border: none; outline: none;
+      color: var(--text); font-size: 13px; flex: 1;
+      font-family: var(--font);
+    }
+    .picker-search-icon { color: var(--muted); font-size: 13px; }
+    .picker-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+    .pf-btn {
+      padding: 4px 10px; border: 1px solid rgba(255,255,255,.1);
+      border-radius: 20px; background: transparent;
+      color: var(--muted); font-size: 11px; cursor: pointer;
+      transition: all .15s;
+    }
+    .pf-btn.active { background: var(--teal); color: #07111F; border-color: var(--teal); font-weight: 700; }
+    .pf-btn:hover:not(.active) { color: var(--text); border-color: rgba(255,255,255,.2); }
+
+    .picker-list { max-height: 340px; overflow-y: auto; padding: 4px 0; }
+    .picker-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+    .picker-lockout-banner {
+      padding: 8px 14px; font-size: 12px; font-weight: 600;
+      background: rgba(245,197,24,.07);
+      border-bottom: 1px solid rgba(245,197,24,.18);
+      color: var(--gold); text-align: center; letter-spacing: .02em;
+    }
+
+    .picker-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; cursor: pointer;
+      transition: background .1s;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+    }
+    .picker-row:hover:not(.full-xi) { background: rgba(255,255,255,.04); }
+    .picker-row.selected { background: rgba(0,212,170,.07); }
+    .picker-row.selected:hover { background: rgba(0,212,170,.12); }
+    /* 35% opacity when squad is full and player not selected */
+    .picker-row.full-xi { opacity: 0.35; cursor: not-allowed; }
+    /* Dim row if adding this player would exceed budget */
+    .picker-row.over-budget { opacity: 0.35; cursor: not-allowed; }
+
+    .prow-avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 800; flex-shrink: 0;
+      background: rgba(255,255,255,.1); color: var(--text);
+    }
+    .prow-info { flex: 1; min-width: 0; }
+    .prow-name { font-size: 13px; font-weight: 600; color: var(--text); }
+    .prow-sub  { font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .prow-price { font-size: 12px; font-weight: 700; color: var(--gold); min-width: 44px; text-align: right; }
+    .prow-tick  { width: 18px; font-size: 13px; color: var(--teal); text-align: center; opacity: 0; }
+    .picker-row.selected .prow-tick { opacity: 1; }
+
+    /* ── History ── */
+    .history-bar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin-bottom: 12px; font-size: 12px; color: var(--muted);
+    }
+    .history-bar select {
+      background: var(--surface); border: 1px solid rgba(255,255,255,.12);
+      color: var(--text); font-size: 12px; border-radius: 6px;
+      padding: 4px 8px; cursor: pointer;
+    }
+    .ro-note { color: var(--gold); font-size: 11px; font-weight: 600; }
+
+    /* ── Leaderboard ── */
+    .lb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .lb-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .lb-table td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .lb-table tr:last-child td { border-bottom: none; }
+    .lb-table .rank { color: var(--gold); font-weight: 700; width: 30px; }
+    .lb-table .pts  { color: var(--teal); font-weight: 700; text-align: right; }
+    .lb-table .mvp  { color: var(--dim); font-size: 11px; }
+    .lb-table tr.me td { background: rgba(245,197,24,.05); }
+
+    /* ── Matches ── */
+    .match-item { padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .match-item:last-child { border-bottom: none; }
+    .match-title { font-size: 13px; color: var(--text); margin-bottom: 2px; }
+    .match-meta  { font-size: 11px; color: var(--muted); }
+    .status-pill { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; margin-left: 6px; }
+    .status-live      { background: rgba(220,50,50,.2);   color: #FF6B6B; }
+    .status-completed { background: rgba(0,212,170,.15);  color: var(--teal); }
+    .status-upcoming  { background: rgba(255,255,255,.08); color: var(--muted); }
+
+    /* ── Members tab: side-by-side XI cards ── */
+    .members-dual { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }
+    @media (max-width: 600px) { .members-dual { grid-template-columns: 1fr; } }
+
+    .member-xi-card {
+      background: rgba(255,255,255,.02);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 12px; padding: 14px;
+    }
+    .member-xi-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    }
+    .member-xi-name { font-size: 15px; font-weight: 800; color: var(--text); }
+    .member-xi-name.me { color: var(--gold); }
+    .me-tag { font-size: 10px; font-weight: 700; color: var(--gold); background: rgba(245,197,24,.12); padding: 2px 6px; border-radius: 4px; }
+
+    /* mini xi-grid inside member card */
+    .member-xi-card .xi-grid { grid-template-columns: 1fr; gap: 5px; }
+    .member-xi-card .xi-card { padding: 7px 9px; }
+    .member-xi-card .xi-avatar { width: 28px; height: 28px; font-size: 10px; }
+    .member-xi-card .xi-name { font-size: 11px; }
+    .member-xi-card .xi-sub  { font-size: 9px; }
+    .member-xi-card .xi-badge-wrap { top: 5px; right: 5px; }
+
+    /* ── Login ── */
+    .login-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .login-row select {
+      flex: 1; background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px; color: var(--text);
+      font-size: 13px; padding: 8px 10px;
+    }
+    .register-hint { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    #register-input {
+      width: 100%; background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px; color: var(--text);
+      font-size: 13px; padding: 8px 10px;
+    }
+
+    /* ── Dev tools ── */
+    .devtools {
+      background: rgba(220,50,50,.05);
+      border: 1px solid rgba(220,50,50,.2);
+      border-radius: var(--radius); padding: 14px; margin-bottom: 14px;
+    }
+    .devtools h4 { color: #FF6B6B; font-size: 13px; margin-bottom: 8px; }
+    .devtools p  { color: var(--muted); font-size: 12px; margin-bottom: 10px; line-height: 1.5; }
+    #rollover-result { font-size: 12px; margin-top: 8px; min-height: 16px; }
+
+    /* ── Refresh / scraper ── */
+    .refresh-bar {
+      display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+      margin-bottom: 6px;
+    }
+    .btn-refresh {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(0,212,170,.1); color: var(--teal);
+      border: 1px solid rgba(0,212,170,.3); border-radius: 8px;
+      padding: 6px 13px; font-size: 12px; font-weight: 700; cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-refresh:hover { background: rgba(0,212,170,.2); }
+    .btn-refresh:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-refresh .spin { display: inline-block; animation: spin 1s linear infinite; }
+    .refresh-status { font-size: 11px; color: var(--muted); }
+    .refresh-status.ok  { color: var(--teal); }
+    .refresh-status.err { color: #FF6B6B; }
+
+    /* ── User header ── */
+    .user-header-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 8px;
+    }
+    .user-header-left { display: flex; align-items: center; gap: 10px; }
+    .user-avatar-large {
+      width: 40px; height: 40px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800;
+      background: rgba(245,197,24,.15); color: var(--gold);
+      border: 1px solid rgba(245,197,24,.3); flex-shrink: 0;
+    }
+    .user-header-btns { display: flex; gap: 6px; align-items: center; }
+
+    /* ── Login card improvements ── */
+    .login-member-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .login-chip {
+      padding: 7px 16px; border-radius: 20px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size: 13px; font-weight: 600; color: var(--text);
+      cursor: pointer; transition: all .15s;
+    }
+    .login-chip:hover { border-color: var(--gold); color: var(--gold); background: rgba(245,197,24,.08); }
+
+    /* ── History empty state ── */
+    .history-empty {
+      padding: 20px; text-align: center;
+      color: var(--muted); font-size: 13px; line-height: 1.6;
+    }
+    .history-empty strong { color: var(--text); display: block; margin-bottom: 4px; }
+
+    .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+    /* ── Members pill grid (top summary) ── */
+    .members-grid { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+    .member-pill {
+      padding: 5px 12px; border-radius: 20px;
+      border: 1px solid rgba(255,255,255,.1);
+      font-size: 12px; color: var(--muted); cursor: pointer;
+      transition: all .15s;
+    }
+    .member-pill:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+    .member-pill.me { color: var(--gold); border-color: rgba(245,197,24,.4); }
+
+    /* ── Responsive ── */
+    @media (max-width: 500px) {
+      .wrap { padding: 14px 10px; }
+      .xi-grid { grid-template-columns: 1fr 1fr; }
+      .tabs { gap: 3px; }
+      .tab-btn { padding: 6px 10px; font-size: 11px; }
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       CRICKET PITCH — "This Week" view
+       ══════════════════════════════════════════════════════════════ */
+
+    /* Top info strip */
+    .pitch-topbar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .pitch-budget {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.1);
+      border-radius: 8px; padding: 6px 12px; flex: 1; min-width: 180px;
+    }
+    .pitch-budget-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .pitch-budget-amt   { font-size: 18px; font-weight: 900; color: var(--gold); }
+    .pitch-track { flex: 1; height: 5px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .pitch-fill  { height: 100%; background: var(--gold); border-radius: 3px; }
+    .pitch-count { font-size: 12px; font-weight: 700; color: var(--text);
+                   background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.1);
+                   border-radius: 6px; padding: 5px 12px; white-space: nowrap; }
+
+    /* Role count pills */
+    .pitch-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+    .pitch-pill {
+      font-size: 11px; font-weight: 700; padding: 4px 10px;
+      border-radius: 20px; border: 1px solid;
+    }
+    .pill-wk   { color: var(--teal);  border-color: rgba(0,212,170,.4);  background: rgba(0,212,170,.1); }
+    .pill-bat  { color: var(--gold);  border-color: rgba(245,197,24,.4); background: rgba(245,197,24,.1); }
+    .pill-ar   { color: #A78BFA;      border-color: rgba(167,139,250,.4);background: rgba(167,139,250,.1); }
+    .pill-bowl { color: #FF6B6B;      border-color: rgba(255,107,107,.4);background: rgba(255,107,107,.1); }
+    .pill-valid { color: var(--teal); border-color: rgba(0,212,170,.4);  background: rgba(0,212,170,.1); }
+    .pill-invalid { color: #FF6B6B;   border-color: rgba(255,107,107,.4);background: rgba(255,107,107,.1); }
+
+    /* C/VC strip */
+    .pitch-cvc {
+      background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 8px; padding: 7px 14px;
+      font-size: 12px; color: var(--muted);
+      margin-bottom: 12px; line-height: 1.6;
+    }
+    .pitch-cvc strong { color: var(--text); }
+    .cvc-c  { color: var(--gold); font-weight: 800; }
+    .cvc-vc { color: var(--teal); font-weight: 800; }
+
+    /* The pitch itself */
+    .pitch-ground {
+      border-radius: 14px; overflow: hidden; position: relative;
+      /* cricket ground gradient: deep green outer → brighter inner oval */
+      background:
+        radial-gradient(ellipse 68% 55% at 50% 50%,
+          #2d6a2d 0%, #1e5c1e 40%, #134813 70%, #0c380c 100%);
+      padding: 20px 10px;
+      min-height: 400px;
+      display: flex; flex-direction: column;
+      justify-content: space-between;
+      gap: 0;
+    }
+
+    /* Pitch crease lines in centre */
+    .pitch-ground::before {
+      content: "";
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 60px; height: 160px;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 4px;
+      pointer-events: none;
+    }
+
+    /* Role row inside pitch */
+    .pitch-row {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 6px; margin-bottom: 8px;
+    }
+    .pitch-row:last-child { margin-bottom: 0; }
+
+    .pitch-role-label {
+      font-size: 9px; font-weight: 800; letter-spacing: .12em;
+      color: rgba(255,255,255,.5); text-transform: uppercase;
+    }
+
+    .pitch-players {
+      display: flex; justify-content: center; flex-wrap: wrap; gap: 14px;
+    }
+
+    /* Individual player circle on pitch */
+    .pitch-player {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      cursor: default;
+    }
+    .pitch-circle {
+      width: 52px; height: 52px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 900;
+      border: 2px solid rgba(255,255,255,.25);
+      position: relative;
+      box-shadow: 0 2px 8px rgba(0,0,0,.4);
+      transition: transform .15s;
+    }
+    .pitch-circle:hover { transform: scale(1.08); }
+
+    /* C/VC crown badges on circle */
+    .pitch-badge {
+      position: absolute; top: -4px; right: -4px;
+      width: 18px; height: 18px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 8px; font-weight: 900;
+      border: 1px solid rgba(0,0,0,.3);
+    }
+    .pitch-badge-c  { background: var(--gold);  color: #07111F; }
+    .pitch-badge-vc { background: var(--teal);  color: #07111F; }
+
+    .pitch-name {
+      font-size: 10px; font-weight: 700; color: rgba(255,255,255,.9);
+      text-align: center; max-width: 60px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      text-shadow: 0 1px 3px rgba(0,0,0,.8);
+    }
+
+    @media (max-width: 480px) {
+      .pitch-circle { width: 42px; height: 42px; font-size: 11px; }
+      .pitch-players { gap: 8px; }
+      .pitch-name { font-size: 9px; max-width: 48px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="app-loading">
+  <div class="logo">🏏</div>
+  <h1>IPL Fantasy 2026</h1>
+  <div class="spinner"></div>
+  <p>Loading your league…</p>
+</div>
+
+<div id="error-banner" role="alert"></div>
+<div id="app"></div>
+
+<script>
+"use strict";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEASON CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
+var BUDGET_TOTAL = 100.0;
+var XI_SIZE      = 11;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EMBEDDED PLAYER ROSTER — 214 players (full IPL 2026 squads)
+// Format: {id, name, team, role, price}
+// "Name - TEAM" is displayed in picker for disambiguation.
+// ═══════════════════════════════════════════════════════════════════════════
+var EMBEDDED_PLAYERS = [
+  // ── RCB (22) ──────────────────────────────────────────────────────────────
+  {id:"r01",name:"Virat Kohli",          team:"RCB", role:"BAT",  price:9.5},
+  {id:"r02",name:"Rajat Patidar",        team:"RCB", role:"BAT",  price:9.0},
+  {id:"r03",name:"Devdutt Padikkal",     team:"RCB", role:"BAT",  price:8.5},
+  {id:"r04",name:"Phil Salt",            team:"RCB", role:"WK",   price:8.0},
+  {id:"r05",name:"Jitesh Sharma",        team:"RCB", role:"WK",   price:7.5},
+  {id:"r06",name:"Liam Livingstone",     team:"RCB", role:"AR",   price:8.5},
+  {id:"r07",name:"Krunal Pandya",        team:"RCB", role:"AR",   price:8.0},
+  {id:"r08",name:"Tim David",            team:"RCB", role:"BAT",  price:8.5},
+  {id:"r09",name:"Romario Shepherd",     team:"RCB", role:"AR",   price:7.5},
+  {id:"r10",name:"Swapnil Singh",        team:"RCB", role:"AR",   price:6.0},
+  {id:"r11",name:"Rasikh Dar",           team:"RCB", role:"BOWL", price:6.5},
+  {id:"r12",name:"Nuwan Thushara",       team:"RCB", role:"BOWL", price:7.0},
+  {id:"r13",name:"Yash Dayal",           team:"RCB", role:"BOWL", price:6.5},
+  {id:"r14",name:"Josh Hazlewood",       team:"RCB", role:"BOWL", price:8.5},
+  {id:"r15",name:"Bhuvneshwar Kumar",    team:"RCB", role:"BOWL", price:8.0},
+  {id:"r16",name:"Lungi Ngidi",          team:"RCB", role:"BOWL", price:7.5},
+  {id:"r17",name:"Suyash Sharma RCB",   team:"RCB", role:"BOWL", price:6.5},
+  {id:"r18",name:"Suyash Sharma",        team:"RCB", role:"BOWL", price:6.5},
+  {id:"r19",name:"Manoj Bhandage",       team:"RCB", role:"AR",   price:6.0},
+  {id:"r20",name:"Jacob Duffy",          team:"RCB", role:"BOWL", price:7.0},
+  {id:"r21",name:"Swastik Chikara",      team:"RCB", role:"BOWL", price:5.5},
+  {id:"r22",name:"Abhinandan Singh",     team:"RCB", role:"BAT",  price:5.5},
+
+  // ── SRH (22) ──────────────────────────────────────────────────────────────
+  {id:"s01",name:"Travis Head",          team:"SRH", role:"BAT",  price:9.5},
+  {id:"s02",name:"Abhishek Sharma",      team:"SRH", role:"BAT",  price:8.5},
+  {id:"s03",name:"Ishan Kishan",         team:"SRH", role:"WK",   price:9.0},
+  {id:"s04",name:"Heinrich Klaasen",     team:"SRH", role:"WK",   price:9.0},
+  {id:"s05",name:"Aniket Verma",         team:"SRH", role:"BAT",  price:6.5},
+  {id:"s06",name:"Atharva Taide",        team:"SRH", role:"BAT",  price:6.0},
+  {id:"s07",name:"Zeeshan Ansari",       team:"SRH", role:"BOWL", price:6.0},
+  {id:"s08",name:"Pat Cummins",          team:"SRH", role:"BOWL", price:9.5},
+  {id:"s09",name:"Nitish Reddy",         team:"SRH", role:"AR",   price:8.5},
+  {id:"s10",name:"Adam Zampa",           team:"SRH", role:"BOWL", price:7.5},
+  {id:"s11",name:"Mohammed Shami",       team:"SRH", role:"BOWL", price:9.0},
+  {id:"s12",name:"Simarjeet Singh",      team:"SRH", role:"BOWL", price:6.0},
+  {id:"s13",name:"Harshal Patel",        team:"SRH", role:"BOWL", price:7.5},
+  {id:"s14",name:"Sachin Baby",          team:"SRH", role:"BAT",  price:5.5},
+  {id:"s15",name:"Kamindu Mendis",       team:"SRH", role:"BAT",  price:7.5},
+  {id:"s16",name:"Harsh Dubey",          team:"SRH", role:"BOWL", price:7.0},
+  {id:"s17",name:"Jaydev Unadkat SRH",  team:"SRH", role:"BOWL", price:7.5},
+  {id:"s18",name:"Jaydev Unadkat",       team:"SRH", role:"BOWL", price:7.5},
+  {id:"s19",name:"Brydon Carse",         team:"SRH", role:"BOWL", price:7.0},
+  {id:"s20",name:"Eshan Malinga",        team:"SRH", role:"BOWL", price:6.5},
+  {id:"s21",name:"Rahul Chahar",         team:"SRH", role:"BOWL", price:7.0},
+  {id:"s22",name:"Aiden Markram",        team:"SRH", role:"BAT",  price:8.0},
+
+  // ── MI (22) ───────────────────────────────────────────────────────────────
+  {id:"m01",name:"Rohit Sharma",         team:"MI",  role:"BAT",  price:9.0},
+  {id:"m02",name:"Suryakumar Yadav",     team:"MI",  role:"BAT",  price:9.5},
+  {id:"m03",name:"Tilak Varma",          team:"MI",  role:"BAT",  price:8.5},
+  {id:"m04",name:"Ryan Rickelton",       team:"MI",  role:"WK",   price:8.5},
+  {id:"m05",name:"Naman Dhir",           team:"MI",  role:"AR",   price:6.5},
+  {id:"m06",name:"Will Jacks",           team:"MI",  role:"AR",   price:7.5},
+  {id:"m07",name:"Ryan Rutherford",      team:"MI",  role:"BAT",  price:7.0},
+  {id:"m08",name:"Trent Boult",          team:"MI",  role:"BOWL", price:8.5},
+  {id:"m09",name:"Hardik Pandya",        team:"MI",  role:"AR",   price:9.0},
+  {id:"m10",name:"Jasprit Bumrah",       team:"MI",  role:"BOWL", price:10.0},
+  {id:"m11",name:"Marco Jansen",         team:"MI",  role:"AR",   price:8.5},
+  {id:"m12",name:"Deepak Chahar",        team:"MI",  role:"BOWL", price:7.5},
+  {id:"m13",name:"Robin Minz",           team:"MI",  role:"WK",   price:6.0},
+  {id:"m14",name:"Vignesh Puthur",       team:"MI",  role:"BOWL", price:5.5},
+  {id:"m15",name:"Arjun Tendulkar",      team:"MI",  role:"BOWL", price:6.5},
+  {id:"m16",name:"Reece Topley",         team:"MI",  role:"BOWL", price:7.0},
+  {id:"m17",name:"Bevon Jacobs",         team:"MI",  role:"BAT",  price:6.0},
+  {id:"m18",name:"Karn Sharma",          team:"MI",  role:"BOWL", price:6.5},
+  {id:"m19",name:"Raj Angad Bawa",       team:"MI",  role:"AR",   price:6.0},
+  {id:"m20",name:"Dewald Brevis",        team:"MI",  role:"BAT",  price:8.0},
+  {id:"m21",name:"Mujeeb ur Rahman",     team:"MI",  role:"BOWL", price:7.5},
+  {id:"m22",name:"Mitchell Santner",     team:"MI",  role:"AR",   price:7.5},
+
+  // ── KKR (22) ──────────────────────────────────────────────────────────────
+  {id:"k01",name:"Ajinkya Rahane",       team:"KKR", role:"BAT",  price:8.0},
+  {id:"k02",name:"Quinton de Kock",      team:"KKR", role:"WK",   price:9.0},
+  {id:"k03",name:"Angkrish Raghuvanshi", team:"KKR", role:"BAT",  price:7.5},
+  {id:"k04",name:"Rinku Singh",          team:"KKR", role:"BAT",  price:8.5},
+  {id:"k05",name:"Venkatesh Iyer",       team:"KKR", role:"AR",   price:8.5},
+  {id:"k06",name:"Andre Russell",        team:"KKR", role:"AR",   price:9.0},
+  {id:"k07",name:"Sunil Narine",         team:"KKR", role:"AR",   price:9.0},
+  {id:"k08",name:"Moeen Ali",            team:"KKR", role:"AR",   price:8.0},
+  {id:"k09",name:"Spencer Johnson",      team:"KKR", role:"BOWL", price:7.5},
+  {id:"k10",name:"Harshit Rana",         team:"KKR", role:"BOWL", price:7.5},
+  {id:"k11",name:"Rachin Ravindra",      team:"KKR", role:"BAT",  price:8.5},
+  {id:"k12",name:"Anrich Nortje",        team:"KKR", role:"BOWL", price:8.5},
+  {id:"k13",name:"Mitchell Starc",       team:"KKR", role:"BOWL", price:9.0},
+  {id:"k14",name:"Nitish Rana",          team:"KKR", role:"BAT",  price:8.0},
+  {id:"k15",name:"Manish Pandey",        team:"KKR", role:"BAT",  price:7.5},
+  {id:"k16",name:"Varun Chakravarthy",   team:"KKR", role:"BOWL", price:8.5},
+  {id:"k17",name:"Rovman Powell",        team:"KKR", role:"BAT",  price:8.0},
+  {id:"k18",name:"Rahmanullah Gurbaz",   team:"KKR", role:"WK",   price:8.5},
+  {id:"k19",name:"Luvnith Sisodia",      team:"KKR", role:"WK",   price:6.0},
+  {id:"k20",name:"Suyash Sharma KKR",   team:"KKR", role:"BOWL", price:6.5},
+  {id:"k21",name:"Mayank Markande",      team:"KKR", role:"BOWL", price:6.5},
+  {id:"k22",name:"Chetan Sakariya",      team:"KKR", role:"BOWL", price:6.5},
+
+  // ── CSK (22) ──────────────────────────────────────────────────────────────
+  {id:"c01",name:"Ruturaj Gaikwad",      team:"CSK", role:"BAT",  price:9.0},
+  {id:"c02",name:"Rahul Tripathi",       team:"CSK", role:"BAT",  price:7.5},
+  {id:"c03",name:"Devon Conway",         team:"CSK", role:"WK",   price:8.5},
+  {id:"c04",name:"Ravindra Jadeja",      team:"CSK", role:"AR",   price:9.0},
+  {id:"c05",name:"Shivam Dube",          team:"CSK", role:"AR",   price:8.5},
+  {id:"c06",name:"Shardul Thakur",       team:"CSK", role:"AR",   price:7.5},
+  {id:"c07",name:"Moeen Ali CSK",        team:"CSK", role:"AR",   price:7.5},
+  {id:"c08",name:"Matheesha Pathirana",  team:"CSK", role:"BOWL", price:8.0},
+  {id:"c09",name:"Deepak Chahar CSK",   team:"CSK", role:"BOWL", price:7.5},
+  {id:"c10",name:"Tushar Deshpande",     team:"CSK", role:"BOWL", price:7.0},
+  {id:"c11",name:"Noor Ahmad",           team:"CSK", role:"BOWL", price:7.5},
+  {id:"c12",name:"Mukesh Choudhary",     team:"CSK", role:"BOWL", price:6.5},
+  {id:"c13",name:"Simarjeet Singh CSK", team:"CSK", role:"BOWL", price:6.0},
+  {id:"c14",name:"Prashant Solanki",     team:"CSK", role:"AR",   price:6.0},
+  {id:"c15",name:"Vijay Shankar",        team:"CSK", role:"AR",   price:7.0},
+  {id:"c16",name:"Rilee Rossouw",        team:"CSK", role:"BAT",  price:8.0},
+  {id:"c17",name:"Sameer Rizvi",         team:"CSK", role:"BAT",  price:7.0},
+  {id:"c18",name:"MS Dhoni",             team:"CSK", role:"WK",   price:8.5},
+  {id:"c19",name:"Jamie Overton",        team:"CSK", role:"AR",   price:7.5},
+  {id:"c20",name:"Anshul Kamboj",        team:"CSK", role:"BOWL", price:6.5},
+  {id:"c21",name:"Khaleel Ahmed",        team:"CSK", role:"BOWL", price:7.5},
+  {id:"c22",name:"Ajay Mandal",          team:"CSK", role:"AR",   price:5.5},
+
+  // ── RR (22) ───────────────────────────────────────────────────────────────
+  {id:"rr01",name:"Yashasvi Jaiswal",    team:"RR",  role:"BAT",  price:9.5},
+  {id:"rr02",name:"Jos Buttler",         team:"RR",  role:"WK",   price:9.5},
+  {id:"rr03",name:"Sanju Samson",        team:"RR",  role:"WK",   price:9.5},
+  {id:"rr04",name:"Riyan Parag",         team:"RR",  role:"BAT",  price:8.5},
+  {id:"rr05",name:"Shimron Hetmyer",     team:"RR",  role:"BAT",  price:8.5},
+  {id:"rr06",name:"Dhruv Jurel",         team:"RR",  role:"WK",   price:7.5},
+  {id:"rr07",name:"Rovman Powell RR",    team:"RR",  role:"BAT",  price:8.0},
+  {id:"rr08",name:"Yuzvendra Chahal",    team:"RR",  role:"BOWL", price:8.0},
+  {id:"rr09",name:"Jofra Archer",        team:"RR",  role:"BOWL", price:9.0},
+  {id:"rr10",name:"Trent Boult RR",      team:"RR",  role:"BOWL", price:8.0},
+  {id:"rr11",name:"Sandeep Sharma",      team:"RR",  role:"BOWL", price:7.0},
+  {id:"rr12",name:"Ravichandran Ashwin", team:"RR",  role:"BOWL", price:8.5},
+  {id:"rr13",name:"Maheesh Theekshana",  team:"RR",  role:"BOWL", price:7.5},
+  {id:"rr14",name:"Kuldeep Sen",         team:"RR",  role:"BOWL", price:6.5},
+  {id:"rr15",name:"Vaibhav Suryavanshi", team:"RR",  role:"BAT",  price:9.0},
+  {id:"rr16",name:"Nitish Kumar Reddy",  team:"RR",  role:"AR",   price:7.5},
+  {id:"rr17",name:"Akash Madhwal",       team:"RR",  role:"BOWL", price:7.0},
+  {id:"rr18",name:"Tom Kohler-Cadmore",  team:"RR",  role:"BAT",  price:7.0},
+  {id:"rr19",name:"Kunal Rathore",       team:"RR",  role:"WK",   price:6.0},
+  {id:"rr20",name:"Adam Zampa RR",       team:"RR",  role:"BOWL", price:7.0},
+  {id:"rr21",name:"Fazalhaq Farooqi",    team:"RR",  role:"BOWL", price:7.5},
+  {id:"rr22",name:"Shubham Dubey",       team:"RR",  role:"BAT",  price:6.5},
+
+  // ── DC (22) ───────────────────────────────────────────────────────────────
+  {id:"d01",name:"Rishabh Pant",         team:"DC",  role:"WK",   price:10.0},
+  {id:"d02",name:"David Warner",         team:"DC",  role:"BAT",  price:9.0},
+  {id:"d03",name:"Mitchell Marsh",       team:"DC",  role:"AR",   price:8.5},
+  {id:"d04",name:"Axar Patel",           team:"DC",  role:"AR",   price:8.5},
+  {id:"d05",name:"Tristan Stubbs",       team:"DC",  role:"BAT",  price:7.5},
+  {id:"d06",name:"Abishek Porel",        team:"DC",  role:"WK",   price:7.0},
+  {id:"d07",name:"Harry Brook",          team:"DC",  role:"BAT",  price:8.5},
+  {id:"d08",name:"Anrich Nortje DC",     team:"DC",  role:"BOWL", price:8.0},
+  {id:"d09",name:"Mukesh Kumar",         team:"DC",  role:"BOWL", price:7.0},
+  {id:"d10",name:"Kuldeep Yadav",        team:"DC",  role:"BOWL", price:8.5},
+  {id:"d11",name:"Ishant Sharma",        team:"DC",  role:"BOWL", price:7.0},
+  {id:"d12",name:"Lungi Ngidi DC",       team:"DC",  role:"BOWL", price:7.5},
+  {id:"d13",name:"Vipraj Nigam",         team:"DC",  role:"BOWL", price:6.0},
+  {id:"d14",name:"Sameer Rizvi DC",      team:"DC",  role:"BAT",  price:6.5},
+  {id:"d15",name:"Jake Fraser-McGurk",   team:"DC",  role:"BAT",  price:8.0},
+  {id:"d16",name:"Faf du Plessis",       team:"DC",  role:"BAT",  price:8.5},
+  {id:"d17",name:"T Natarajan",          team:"DC",  role:"BOWL", price:7.5},
+  {id:"d18",name:"Karun Nair",           team:"DC",  role:"BAT",  price:7.5},
+  {id:"d19",name:"Swastik Chikara DC",   team:"DC",  role:"BOWL", price:5.5},
+  {id:"d20",name:"Darshan Nalkande",     team:"DC",  role:"BOWL", price:6.0},
+  {id:"d21",name:"Ashutosh Sharma",      team:"DC",  role:"AR",   price:7.0},
+  {id:"d22",name:"KL Rahul",             team:"DC",  role:"WK",   price:9.0},
+
+  // ── PBKS (22) ─────────────────────────────────────────────────────────────
+  {id:"p01",name:"Prabhsimran Singh",    team:"PBKS",role:"WK",   price:8.5},
+  {id:"p02",name:"Shashank Singh",       team:"PBKS",role:"BAT",  price:8.0},
+  {id:"p03",name:"Rilee Rossouw PBKS",   team:"PBKS",role:"BAT",  price:8.0},
+  {id:"p04",name:"Jonny Bairstow",       team:"PBKS",role:"WK",   price:9.0},
+  {id:"p05",name:"Glenn Maxwell",        team:"PBKS",role:"AR",   price:9.0},
+  {id:"p06",name:"Sam Curran",           team:"PBKS",role:"AR",   price:8.5},
+  {id:"p07",name:"Arshdeep Singh",       team:"PBKS",role:"BOWL", price:8.5},
+  {id:"p08",name:"Kagiso Rabada",        team:"PBKS",role:"BOWL", price:9.0},
+  {id:"p09",name:"Harshal Patel PBKS",   team:"PBKS",role:"BOWL", price:7.5},
+  {id:"p10",name:"Rahul Chahar PBKS",    team:"PBKS",role:"BOWL", price:7.0},
+  {id:"p11",name:"Shreyas Iyer",         team:"PBKS",role:"BAT",  price:8.5},
+  {id:"p12",name:"Liam Livingstone PBKS",team:"PBKS",role:"AR",   price:8.0},
+  {id:"p13",name:"Josh Inglis",          team:"PBKS",role:"WK",   price:7.5},
+  {id:"p14",name:"Azmatullah Omarzai",   team:"PBKS",role:"AR",   price:7.5},
+  {id:"p15",name:"Marcus Stoinis",       team:"PBKS",role:"AR",   price:8.5},
+  {id:"p16",name:"Harpreet Brar",        team:"PBKS",role:"AR",   price:7.0},
+  {id:"p17",name:"Vishwanath Shankar",   team:"PBKS",role:"AR",   price:6.5},
+  {id:"p18",name:"Suryansh Shedge",      team:"PBKS",role:"AR",   price:6.0},
+  {id:"p19",name:"Nehal Wadhera",        team:"PBKS",role:"BAT",  price:7.0},
+  {id:"p20",name:"Musheer Khan",         team:"PBKS",role:"BAT",  price:7.0},
+  {id:"p21",name:"Lockie Ferguson",      team:"PBKS",role:"BOWL", price:8.0},
+  {id:"p22",name:"Pravin Dubey",         team:"PBKS",role:"BOWL", price:6.0},
+
+  // ── LSG (22) ──────────────────────────────────────────────────────────────
+  {id:"l01",name:"KL Rahul LSG",         team:"LSG", role:"WK",   price:9.0},
+  {id:"l02",name:"Quinton de Kock LSG",  team:"LSG", role:"WK",   price:8.5},
+  {id:"l03",name:"Nicholas Pooran",      team:"LSG", role:"WK",   price:9.0},
+  {id:"l04",name:"Deepak Hooda",         team:"LSG", role:"AR",   price:7.5},
+  {id:"l05",name:"Krunal Pandya LSG",    team:"LSG", role:"AR",   price:7.5},
+  {id:"l06",name:"Marcus Stoinis LSG",   team:"LSG", role:"AR",   price:8.5},
+  {id:"l07",name:"Ayush Badoni",         team:"LSG", role:"BAT",  price:7.5},
+  {id:"l08",name:"Ravi Bishnoi",         team:"LSG", role:"BOWL", price:8.0},
+  {id:"l09",name:"Avesh Khan",           team:"LSG", role:"BOWL", price:7.5},
+  {id:"l10",name:"Mohsin Khan",          team:"LSG", role:"BOWL", price:7.0},
+  {id:"l11",name:"Mark Wood",            team:"LSG", role:"BOWL", price:8.5},
+  {id:"l12",name:"Lungi Ngidi LSG",      team:"LSG", role:"BOWL", price:7.5},
+  {id:"l13",name:"Shamar Joseph",        team:"LSG", role:"BOWL", price:7.5},
+  {id:"l14",name:"Matt Henry",           team:"LSG", role:"BOWL", price:7.5},
+  {id:"l15",name:"Mayank Yadav",         team:"LSG", role:"BOWL", price:8.0},
+  {id:"l16",name:"Yash Thakur",          team:"LSG", role:"BOWL", price:6.5},
+  {id:"l17",name:"Himmat Singh",         team:"LSG", role:"BAT",  price:6.0},
+  {id:"l18",name:"M Siddharth",          team:"LSG", role:"BOWL", price:6.0},
+  {id:"l19",name:"Manimaran Siddharth",  team:"LSG", role:"BOWL", price:6.0},
+  {id:"l20",name:"Aryan Juyal",          team:"LSG", role:"WK",   price:5.5},
+  {id:"l21",name:"Aiden Markram LSG",    team:"LSG", role:"BAT",  price:7.5},
+  {id:"l22",name:"David Miller",         team:"LSG", role:"BAT",  price:8.5},
+
+  // ── GT (22) ───────────────────────────────────────────────────────────────
+  {id:"g01",name:"Shubman Gill",         team:"GT",  role:"BAT",  price:9.5},
+  {id:"g02",name:"Wriddhiman Saha",      team:"GT",  role:"WK",   price:7.0},
+  {id:"g03",name:"Abhinav Manohar",      team:"GT",  role:"BAT",  price:7.5},
+  {id:"g04",name:"David Miller GT",      team:"GT",  role:"BAT",  price:8.5},
+  {id:"g05",name:"Vijay Shankar GT",     team:"GT",  role:"AR",   price:7.0},
+  {id:"g06",name:"Hardik Pandya GT",     team:"GT",  role:"AR",   price:8.5},
+  {id:"g07",name:"Rahul Tewatia",        team:"GT",  role:"AR",   price:8.0},
+  {id:"g08",name:"Rashid Khan",          team:"GT",  role:"BOWL", price:9.0},
+  {id:"g09",name:"Mohammed Siraj",       team:"GT",  role:"BOWL", price:8.5},
+  {id:"g10",name:"Alzarri Joseph",       team:"GT",  role:"BOWL", price:8.0},
+  {id:"g11",name:"Noor Ahmad",           team:"GT",  role:"BOWL", price:7.5},
+  {id:"g12",name:"Darshan Nalkande GT",  team:"GT",  role:"BOWL", price:6.0},
+  {id:"g13",name:"Arshad Khan",          team:"GT",  role:"BOWL", price:6.5},
+  {id:"g14",name:"Sai Kishore",          team:"GT",  role:"BOWL", price:7.0},
+  {id:"g15",name:"Jayant Yadav",         team:"GT",  role:"AR",   price:7.0},
+  {id:"g16",name:"B Sai Sudharsan",      team:"GT",  role:"BAT",  price:8.5},
+  {id:"g17",name:"Shahrukh Khan",        team:"GT",  role:"BAT",  price:7.5},
+  {id:"g18",name:"Azmatullah Omarzai GT",team:"GT",  role:"AR",   price:7.5},
+  {id:"g19",name:"Manav Suthar",         team:"GT",  role:"BOWL", price:6.0},
+  {id:"g20",name:"Sanvir Singh",         team:"GT",  role:"AR",   price:6.0},
+  {id:"g21",name:"Kartik Tyagi",         team:"GT",  role:"BOWL", price:6.5},
+  {id:"g22",name:"Jos Buttler GT",       team:"GT",  role:"WK",   price:9.0},
+
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GLOBAL STATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _state         = null;
+var _leaderboard   = null;
+var _players       = null;
+var _username      = null;
+var _activeTab     = "team";
+var _currentWeek   = 1;
+var _historyData   = null;
+var _historyViewWk = null;
+
+// Next-week draft (editable, client-side)
+var _nwDraft = { team: [], cap: null, vc: null };
+
+// Player picker filter state
+var _pickerSearch  = "";
+var _pickerRole    = "All";
+var _pickerTeam    = "All Teams";
+
+// Legacy aliases
+var members = {};
+var matches  = [];
+
+var $app         = document.getElementById("app");
+var $loading     = document.getElementById("app-loading");
+var $errorBanner = document.getElementById("error-banner");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYER CATALOGUE
+// Merged: embedded list + API results (API wins on conflict by id)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildCatalogue() {
+  var map = {};
+  EMBEDDED_PLAYERS.forEach(function(p) {
+    map[p.id] = p;
+    map[p.name.toLowerCase()] = p;
+  });
+  if (_players && _players.players) {
+    _players.players.forEach(function(p) {
+      map[p.id] = p;
+      map[p.name.toLowerCase()] = p;
+    });
+  }
+  return map;
+}
+
+// Deduplicated player array for picker (API preferred, embedded fills gaps)
+function _allPlayers() {
+  var seen = {};
+  var out  = [];
+  var src = (_players && _players.players && _players.players.length > 0)
+    ? _players.players : EMBEDDED_PLAYERS;
+
+  var merged = src.slice();
+  if (_players && _players.players && _players.players.length > 0) {
+    EMBEDDED_PLAYERS.forEach(function(ep) {
+      var found = false;
+      for (var i = 0; i < merged.length; i++) {
+        if (merged[i].id === ep.id || merged[i].name.toLowerCase() === ep.name.toLowerCase()) {
+          found = true; break;
+        }
+      }
+      if (!found) merged.push(ep);
+    });
+  }
+
+  merged.forEach(function(p) {
+    var key = p.name.toLowerCase();
+    if (!seen[key]) { seen[key] = true; out.push(p); }
+  });
+
+  out.sort(function(a,b) { return a.name < b.name ? -1 : 1; });
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYER RESOLUTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+function resolvePlayer(idOrName) {
+  if (!idOrName) return { name: "", role: "", team: "", price: 0 };
+  var cat = _buildCatalogue();
+  var p = cat[idOrName] || cat[String(idOrName).toLowerCase()];
+  if (p) return p;
+  // Suffix match — "Kishan" → "Ishan Kishan"
+  var key = String(idOrName).toLowerCase();
+  var all = _allPlayers();
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].name && all[i].name.toLowerCase().endsWith(key)) return all[i];
+  }
+  return { name: String(idOrName), role: "", team: "", price: 0 };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUDGET HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _teamCost(nameOrIdArr) {
+  var total = 0;
+  nameOrIdArr.forEach(function(idOrName) {
+    var p = resolvePlayer(idOrName);
+    total += (p.price || 0);
+  });
+  return Math.round(total * 10) / 10;
+}
+
+function _remaining() {
+  return Math.round((BUDGET_TOTAL - _teamCost(_nwDraft.team)) * 10) / 10;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOCALSTORAGE
+// ═══════════════════════════════════════════════════════════════════════════
+
+var LS_KEY = "ipl_username";
+function getSavedUsername() { try { return localStorage.getItem(LS_KEY)||null; } catch(e) { return null; } }
+function saveUsername(n)    { try { localStorage.setItem(LS_KEY, n); } catch(e) {} }
+function clearUsername()    { try { localStorage.removeItem(LS_KEY); } catch(e) {} }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// XSS HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function escAttr(s) { return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function hideLoading() {
+  if ($loading && !$loading.classList.contains("hidden")) {
+    $loading.classList.add("hidden");
+    setTimeout(function(){ if($loading) $loading.remove(); }, 450);
+  }
+}
+function showErrorBanner(msg) {
+  if (!$errorBanner) return;
+  $errorBanner.textContent = "⚠️  " + (msg || "Server error — retrying…");
+  $errorBanner.classList.add("visible");
+}
+function hideErrorBanner() { if ($errorBanner) $errorBanner.classList.remove("visible"); }
+
+function _avClass(team) {
+  if (!team) return "";
+  switch (team.toLowerCase()) {
+    case "rcb":  return "av-rcb";
+    case "srh":  return "av-srh";
+    case "mi":   return "av-mi";
+    case "kkr":  return "av-kkr";
+    case "csk":  return "av-csk";
+    case "rr":   return "av-rr";
+    case "dc":   return "av-dc";
+    case "pbks": return "av-pbks";
+    case "lsg":  return "av-lsg";
+    case "gt":   return "av-gt";
+    default:     return "";
+  }
+}
+
+function _roleBadge(role) {
+  if (!role) return "";
+  var map = { WK:"badge-wk", BAT:"badge-bat", AR:"badge-ar", BOWL:"badge-bowl" };
+  var cls = map[role] || "";
+  return cls ? '<span class="badge '+cls+'">'+esc(role)+'</span>' : "";
+}
+
+function _initials(name) {
+  if (!name) return "?";
+  var parts = name.split(" ");
+  if (parts.length === 1) return name.substring(0,2).toUpperCase();
+  return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+}
+
+// Display label: "Name - TEAM" for picker, "Name" for cards
+function _displayLabel(p) {
+  if (!p || !p.name) return "";
+  if (p.team) return p.name + " - " + p.team;
+  return p.name;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION
+// ═══════════════════════════════════════════════════════════════════════════
+
+function login(name) {
+  if (!name) return false;
+  var known = _state ? Object.keys(_state.members||{}) : [];
+  if (known.length > 0 && !_state.members[name]) return false;
+  _username      = name;
+  _activeTab     = "team";
+  _historyData   = null;
+  _historyViewWk = null;
+  saveUsername(name);
+  _loadHistory();
+  if (_state) render(_state);
+  return true;
+}
+
+function logout() {
+  _username = null; clearUsername();
+  _historyData = null; _historyViewWk = null;
+  _nwDraft = { team:[], cap:null, vc:null };
+  if (_state) render(_state);
+}
+
+function switchTab(tab) {
+  _activeTab = tab;
+  if (_state) render(_state);
+}
+
+function _handleLogin() {
+  var sel = document.getElementById("login-select");
+  if (sel && sel.value) login(sel.value);
+}
+function _showRegister() {
+  var p = document.getElementById("register-panel");
+  if (p) p.style.display = "block";
+}
+function _handleRegister() {
+  var inp  = document.getElementById("register-input");
+  var name = inp ? inp.value.trim() : "";
+  if (!name || name.length > 30) { alert("Name must be 1–30 characters."); return; }
+  _username = name;
+  saveUsername(name);
+  if (window.IplApi) {
+    window.IplApi.saveMember(name, {
+      this_week: { team:[], cap:null, vc:null },
+      next_week:  { team:[], cap:null, vc:null }
+    }).then(function(){ window.dispatchEvent(new CustomEvent("ipl:saved")); })
+      .catch(function(e){ console.error("Register error:", e); });
+  }
+  if (_state) render(_state);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HISTORY LOADING
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _loadHistory() {
+  if (!_username || !window.IplApi) return;
+  window.IplApi.getHistory(_username)
+    .then(function(data) {
+      if (!data || !data.ok) return;
+      _historyData = data;
+      _currentWeek = data.current_week;
+      var cur = _getCurrentWeekRow(data);
+      if (cur) {
+        var nw = cur.next_week;
+        var tw = cur.this_week;
+        if (nw && nw.team && nw.team.length > 0) {
+          _nwDraft = { team: nw.team.slice(), cap: nw.cap, vc: nw.vc };
+        } else if (tw && tw.team && tw.team.length > 0) {
+          _nwDraft = { team: tw.team.slice(), cap: tw.cap, vc: tw.vc };
+        }
+      }
+      if (_state) render(_state);
+    })
+    .catch(function(e){ console.error("[IPL] loadHistory error:", e); });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _getCurrentWeekRow(hd) {
+  var d = hd || _historyData;
+  if (!d || !d.weeks) return null;
+  for (var i = d.weeks.length - 1; i >= 0; i--) {
+    if (d.weeks[i].is_current) return d.weeks[i];
+  }
+  return d.weeks[d.weeks.length - 1] || null;
+}
+
+function _getThisWeekData() {
+  // 1. State members is available immediately after first render — use it first
+  if (_state && _username && _state.members && _state.members[_username]) {
+    var tw = _state.members[_username].this_week;
+    if (tw && tw.team && tw.team.length > 0) return tw;
+  }
+  // 2. History API row (more accurate after async load)
+  var cur = _getCurrentWeekRow();
+  if (cur && cur.this_week && cur.this_week.team && cur.this_week.team.length > 0) {
+    return cur.this_week;
+  }
+  return null;
+}
+
+function _selectHistoryWeek(wkNo) {
+  _historyViewWk = (wkNo === _currentWeek) ? null : wkNo;
+  if (_state) render(_state);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEXT-WEEK DRAFT MUTATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _nwSetCap(idOrName) {
+  _nwDraft.cap = (_nwDraft.cap === idOrName) ? null : idOrName;
+  _nwDraft.vc  = (_nwDraft.vc  === idOrName) ? null : _nwDraft.vc;
+  _rerenderNw();
+}
+function _nwSetVc(idOrName) {
+  _nwDraft.vc  = (_nwDraft.vc  === idOrName) ? null : idOrName;
+  _nwDraft.cap = (_nwDraft.cap === idOrName) ? null : _nwDraft.cap;
+  _rerenderNw();
+}
+function _nwRemove(idOrName) {
+  _nwDraft.team = _nwDraft.team.filter(function(x){ return x !== idOrName; });
+  if (_nwDraft.cap === idOrName) _nwDraft.cap = null;
+  if (_nwDraft.vc  === idOrName) _nwDraft.vc  = null;
+  _rerenderNw();
+}
+
+// Toggle player in/out of the draft (called from picker rows)
+function _nwToggle(idOrName) {
+  var idx = _nwDraft.team.indexOf(idOrName);
+  if (idx !== -1) {
+    _nwRemove(idOrName);
+  } else {
+    if (_nwDraft.team.length >= XI_SIZE) return; // XI full
+    // Budget guard
+    var p    = resolvePlayer(idOrName);
+    var cost = _teamCost(_nwDraft.team) + (p.price || 0);
+    if (cost > BUDGET_TOTAL) return;
+    _nwDraft.team.push(idOrName);
+    _rerenderNw();
+  }
+}
+
+function _rerenderNw() {
+  if (_state) render(_state);
+}
+
+function _nwSave() {
+  if (!_username) return;
+  if (_nwDraft.team.length !== XI_SIZE) {
+    alert("You must select exactly 11 players before saving.");
+    return;
+  }
+  var btn = document.getElementById("nw-save-btn");
+  var msg = document.getElementById("nw-save-msg");
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  if (msg) { msg.textContent = ""; msg.className = "save-status"; }
+
+  window.IplApi.saveNextWeek(_username, _nwDraft)
+    .then(function() {
+      if (btn) { btn.disabled = false; btn.textContent = "Save Draft"; }
+      if (msg) { msg.textContent = "✓ Saved!"; msg.className = "save-status ok"; }
+      window.dispatchEvent(new CustomEvent("ipl:saved"));
+      setTimeout(function(){ if(msg) msg.textContent = ""; }, 3000);
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = "Save Draft"; }
+      if (msg) { msg.textContent = "✗ " + (e.serverMessage||e.message); msg.className = "save-status err"; }
+    });
+}
+
+// Picker filter handlers
+function _pickerSetRole(role) { _pickerRole = role; if (_state) render(_state); }
+function _pickerSetTeam(team) { _pickerTeam = team; if (_state) render(_state); }
+function _pickerSearchChanged() {
+  var el = document.getElementById("picker-search-input");
+  if (el) { _pickerSearch = el.value; }
+  if (_state) render(_state);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFRESH DATA (manual scraper trigger)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _refreshData() {
+  var btn = document.getElementById("refresh-btn");
+  var msg = document.getElementById("refresh-status");
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">⟳</span> Refreshing…'; }
+  if (msg) { msg.textContent = ""; msg.className = "refresh-status"; }
+
+  // Bust the ETag so next poll does a full fetch
+  if (window.IplPolling) { window.IplPolling.stop(); }
+
+  // Re-fetch all data
+  var stateP   = fetch("/api/state", { headers: { "Accept": "application/json", "Cache-Control": "no-cache" } })
+    .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  var lbP      = fetch("/api/leaderboard", { headers: { "Accept": "application/json" } })
+    .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  var historyP = (_username && window.IplApi)
+    ? window.IplApi.getHistory(_username).catch(function(){ return null; })
+    : Promise.resolve(null);
+
+  Promise.all([stateP, lbP, historyP]).then(function(results) {
+    var state   = results[0];
+    var lb      = results[1];
+    var history = results[2];
+
+    var ts = new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
+
+    if (state) {
+      if (history && history.ok) {
+        _historyData = history;
+        _currentWeek = history.current_week;
+      }
+      if (lb) {
+        var norm = window.normaliseLeaderboard ? window.normaliseLeaderboard(lb) : lb;
+        _leaderboard = norm;
+      }
+      render(state);
+      // Restore msg after render (render rebuilds DOM)
+      var msgAfter = document.getElementById("refresh-status");
+      if (msgAfter) { msgAfter.textContent = "✓ Updated " + ts; msgAfter.className = "refresh-status ok"; }
+      var btnAfter = document.getElementById("refresh-btn");
+      if (btnAfter) { btnAfter.disabled = false; btnAfter.innerHTML = "⟳ Refresh"; }
+    } else {
+      var btnA = document.getElementById("refresh-btn");
+      var msgA = document.getElementById("refresh-status");
+      if (btnA) { btnA.disabled = false; btnA.innerHTML = "⟳ Refresh"; }
+      if (msgA) { msgA.textContent = "✗ Could not reach server"; msgA.className = "refresh-status err"; }
+    }
+    if (window.IplPolling) { window.IplPolling.start(); }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROLLOVER (dev simulate)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _simulateRollover() {
+  var btn = document.getElementById("rollover-btn");
+  var res = document.getElementById("rollover-result");
+  if (btn) { btn.disabled = true; btn.textContent = "Running…"; }
+  if (res) { res.textContent = ""; }
+
+  window.IplApi.rollover(true)
+    .then(function(data) {
+      if (btn) { btn.disabled = false; btn.textContent = "▶ Simulate Monday 2:00 PM Rollover"; }
+      if (res) {
+        if (data && data.rolled) {
+          res.textContent = "✓ Done! New week: W" + (data.new_week_no || "?");
+          res.style.color = "var(--teal)";
+        } else {
+          res.textContent = "No-op: " + (data && data.reason ? data.reason : "already rolled");
+          res.style.color = "var(--muted)";
+        }
+      }
+      _historyData = null;
+      _nwDraft = { team:[], cap:null, vc:null };
+      window.dispatchEvent(new CustomEvent("ipl:saved"));
+      _loadHistory();
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = "▶ Simulate Monday 2:00 PM Rollover"; }
+      if (res) { res.textContent = "✗ Error: " + (e.serverMessage||e.message); res.style.color = "#FF6B6B"; }
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// XI CARD BUILDERS (read-only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildXiGrid(teamArr, capId, vcId) {
+  if (!teamArr || teamArr.length === 0) {
+    return '<p class="empty">No XI recorded.</p>';
+  }
+  var h = '<div class="xi-grid">';
+  teamArr.forEach(function(id) {
+    var p   = resolvePlayer(id);
+    var nm  = p.name || id;
+    var iC  = (id === capId);
+    var iV  = (id === vcId);
+    var cls = "xi-card" + (iC ? " is-cap" : iV ? " is-vc" : "");
+    var ini = _initials(nm);
+    var avC = _avClass(p.team);
+    var bdg = iC
+      ? '<span class="badge badge-c">C</span>'
+      : iV ? '<span class="badge badge-vc">VC</span>' : '';
+    var sub = [p.role, p.team].filter(Boolean).join(" · ");
+    h += '<div class="'+cls+'">'
+       + '<div class="xi-avatar '+avC+'">'+esc(ini)+'</div>'
+       + '<div class="xi-info">'
+       + '<div class="xi-name">'+esc(nm)+'</div>'
+       + (sub ? '<div class="xi-sub">'+esc(sub)+'</div>' : '')
+       + '</div>'
+       + (bdg ? '<div class="xi-badge-wrap">'+bdg+'</div>' : '')
+       + '</div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EDITABLE XI GRID (Next Week tab)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildNwSquad() {
+  var team = _nwDraft.team;
+  var cap  = _nwDraft.cap;
+  var vc   = _nwDraft.vc;
+
+  if (team.length === 0) {
+    return '<p class="empty" style="margin-bottom:4px">No players selected. Pick from the list below.</p>';
+  }
+
+  var h = '<div class="xi-grid">';
+  team.forEach(function(id) {
+    var p   = resolvePlayer(id);
+    var nm  = p.name || id;
+    var iC  = (id === cap);
+    var iV  = (id === vc);
+    var cls = "xi-card editable" + (iC ? " is-cap" : iV ? " is-vc" : "");
+    var ini = _initials(nm);
+    var avC = _avClass(p.team);
+    var sub = [p.role, p.team].filter(Boolean).join(" · ");
+    h += '<div class="'+cls+'">'
+       + '<div class="xi-avatar '+avC+'">'+esc(ini)+'</div>'
+       + '<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'
+       + (sub ? '<div class="xi-sub">'+esc(sub)+'</div>' : '')
+       + '</div>'
+       + '<div class="xi-edit-row">'
+       + '<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'
+       + '<button class="evc-btn'+(iV?' on':'')+'"  onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'
+       + '<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">×</button>'
+       + '</div></div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUDGET BAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildBudgetBar() {
+  var spent   = _teamCost(_nwDraft.team);
+  var rem     = Math.round((BUDGET_TOTAL - spent) * 10) / 10;
+  var pct     = Math.min(100, (spent / BUDGET_TOTAL) * 100);
+  var cls     = rem < 0 ? "over" : rem < 10 ? "warn" : "ok";
+  var fillBg  = rem < 0 ? "#FF6B6B" : rem < 10 ? "var(--gold)" : "var(--teal)";
+
+  var h = '<div class="budget-bar">';
+  h += '<div>';
+  h += '<div class="budget-label">Budget</div>';
+  h += '<div class="budget-amount '+cls+'">'
+     + (rem < 0 ? '−' : '') + Math.abs(rem).toFixed(1) + ' CR left'
+     + '</div>';
+  h += '</div>';
+  h += '<div class="budget-track">'
+     + '<div class="budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div>'
+     + '</div>';
+  h += '<div style="font-size:11px;color:var(--muted);min-width:80px;text-align:right">'
+     + spent.toFixed(1)+' / '+BUDGET_TOTAL.toFixed(1)+' CR'
+     + '</div>';
+  h += '</div>';
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYER PICKER (searchable grid — full budget + 11-guard enforcement)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildPicker() {
+  var allP   = _allPlayers();
+  var teams  = [];
+  var teamSeen = {};
+  allP.forEach(function(p) { if (p.team && !teamSeen[p.team]) { teamSeen[p.team] = true; teams.push(p.team); } });
+  teams.sort();
+
+  var q = _pickerSearch.toLowerCase().trim();
+  var filtered = allP.filter(function(p) {
+    if (_pickerRole !== "All" && p.role !== _pickerRole) return false;
+    if (_pickerTeam !== "All Teams" && p.team !== _pickerTeam) return false;
+    if (q) {
+      // Search in name AND team
+      var label = (p.name + " " + (p.team||"")).toLowerCase();
+      if (label.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+
+  var selectedSet = {};
+  _nwDraft.team.forEach(function(n){ selectedSet[n] = true; });
+  var xi_full = _nwDraft.team.length >= XI_SIZE;
+  var rem     = _remaining();
+
+  var h = '<div class="picker-shell">';
+
+  // Toolbar
+  h += '<div class="picker-toolbar">';
+  h += '<div class="picker-search">'
+     + '<span class="picker-search-icon">🔍</span>'
+     + '<input id="picker-search-input" type="text" placeholder="Search by name or team…"'
+     + ' value="'+esc(_pickerSearch)+'"'
+     + ' oninput="_pickerSearch=this.value;if(_state)render(_state)"'
+     + '></div>';
+
+  // Role filters
+  h += '<div class="picker-filters">';
+  ["All","WK","BAT","AR","BOWL"].forEach(function(r) {
+    var cls = "pf-btn" + (_pickerRole === r ? " active" : "");
+    var lbl = r === "All" ? "All" : r === "WK" ? "🧤 WK" : r === "BAT" ? "⚡ BAT" : r === "AR" ? "🌀 AR" : "🏏 BOWL";
+    h += '<button class="'+cls+'" onclick="_pickerRole=\''+r+'\';if(_state)render(_state)">'+lbl+'</button>';
+  });
+  h += '</div>';
+
+  // Team filters
+  h += '<div class="picker-filters">';
+  ["All Teams"].concat(teams).forEach(function(t) {
+    var cls = "pf-btn" + (_pickerTeam === t ? " active" : "");
+    h += '<button class="'+cls+'" onclick="_pickerTeam=\''+escAttr(t)+'\';if(_state)render(_state)">'+esc(t)+'</button>';
+  });
+  h += '</div>';
+  h += '</div>'; // end toolbar
+
+  // ── Lockout banner ────────────────────────────────────────────────────────
+  var lockedMsg = "";
+  if (xi_full && rem >= -0.001) {
+    lockedMsg = "\uD83D\uDD12 XI complete (11/11) \u2014 remove a player to swap";
+  } else if (rem <= 0) {
+    lockedMsg = "\uD83D\uDCB8 Budget limit reached (100.0 CR) \u2014 remove a player to free up funds";
+  }
+
+  // Player list
+  h += '<div class="picker-list">';
+  if (lockedMsg) {
+    h += '<div class="picker-lockout-banner">' + esc(lockedMsg) + '</div>';
+  }
+  if (filtered.length === 0) {
+    h += '<div class="picker-empty">No players match your filters.</div>';
+  } else {
+    filtered.forEach(function(p) {
+      var key        = p.id || p.name;
+      var isSelected = !!selectedSet[key] || !!selectedSet[p.name];
+      var wouldOver  = !isSelected && (rem - (p.price||0) < -0.001);
+      var isFull     = xi_full && !isSelected;
+      var disabled   = isFull || wouldOver;
+      var rowCls     = "picker-row"
+                     + (isSelected ? " selected" : "")
+                     + (isFull     ? " full-xi"  : "")
+                     + (!isFull && wouldOver && !isSelected ? " over-budget" : "");
+      // ── Visual lockout: opacity + pointer-events when limits hit ──────────
+      var lockStyle  = "";
+      if (disabled && !isSelected) {
+        lockStyle = ' style="opacity:0.60;pointer-events:none;"';
+      }
+      var ini        = _initials(p.name);
+      var avC        = _avClass(p.team);
+      // Display "Name - TEAM" for disambiguation
+      var dispName   = p.name + (p.team ? " - " + p.team : "");
+      var sub        = p.role || "";
+      var onclick    = disabled ? "" : ' onclick="_nwToggle(\''+escAttr(key)+'\')"';
+
+      h += '<div class="'+rowCls+'"'+onclick+lockStyle+'>'
+         + '<div class="prow-avatar '+avC+'">'+esc(ini)+'</div>'
+         + '<div class="prow-info">'
+         + '<div class="prow-name">'+esc(dispName)+'</div>'
+         + (sub ? '<div class="prow-sub">'+esc(sub)+'</div>' : '')
+         + '</div>'
+         + '<div class="prow-price">'+(p.price ? p.price.toFixed(1)+' CR' : '')+'</div>'
+         + '<div class="prow-tick">✓</div>'
+         + '</div>';
+    });
+  }
+  h += '</div>'; // end picker-list
+  h += '</div>'; // end picker-shell
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION BUILDERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _buildLoginCard(memberNames) {
+  var h = '<div class="card">';
+  h += '<h3 class="section-title">Who are you?</h3>';
+
+  if (memberNames.length > 0) {
+    // Clickable chips — no submit button needed, no broken select dependency
+    h += '<div class="login-member-chips">';
+    memberNames.forEach(function(n) {
+      h += '<button class="login-chip" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</button>';
+    });
+    h += '</div>';
+    h += '<p class="register-hint">New member? <button style="background:none;border:none;color:var(--teal);cursor:pointer;font-size:12px;text-decoration:underline" onclick="_showRegister()">Register here</button></p>';
+    h += '<div id="register-panel" style="display:none;margin-top:10px">';
+  } else {
+    h += '<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet — enter your name to join.</p>';
+    h += '<div id="register-panel" style="display:block;margin-top:0">';
+  }
+  h += '<input id="register-input" type="text" maxlength="30" placeholder="Your display name">';
+  h += '<button class="btn btn-teal" onclick="_handleRegister()" style="margin-top:6px;width:100%">Join League</button>';
+  h += '</div></div>';
+  return h;
+}
+
+// ── This Week: LOCKED — cricket pitch view, no edit/save ──────────────────
+function _buildThisWeekCard() {
+  var tw = _getThisWeekData();
+
+  var h = '<div class="card card-locked">';
+  h += '<div class="week-label">Week '+_currentWeek+' &nbsp;<span class="badge-lock">🔒 Locked</span></div>';
+  h += '<h3 class="section-title">⚡ This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
+
+  if (!tw || !tw.team || tw.team.length === 0) {
+    var loading = (_username && !_historyData) ? " Loading…" : "";
+    h += '<p class="empty">No XI locked for this week yet.'+loading+'</p>';
+    h += '</div>';
+    return h;
+  }
+
+  h += _buildPitchView(tw.team, tw.cap, tw.vc);
+  h += '</div>';
+  return h;
+}
+
+// ── Cricket pitch view ──────────────────────────────────────────────────────
+function _buildPitchView(teamArr, capId, vcId) {
+  if (!teamArr || teamArr.length === 0) return '<p class="empty">No XI recorded.</p>';
+
+  // Group players by role
+  var groups = { BOWL: [], AR: [], BAT: [], WK: [] };
+  var roleOrder = ["BOWL", "AR", "BAT", "WK"];
+  var roleLabels = { BOWL: "Bowlers", AR: "All-Rounders", BAT: "Batsmen", WK: "Wicket-Keepers" };
+
+  teamArr.forEach(function(id) {
+    var p = resolvePlayer(id);
+    var r = (p.role || "BAT").toUpperCase();
+    if (!groups[r]) r = "BAT";
+    groups[r].push({ id: id, player: p });
+  });
+
+  // Count by role for pills
+  var wkC   = groups.WK.length;
+  var batC  = groups.BAT.length;
+  var arC   = groups.AR.length;
+  var bowlC = groups.BOWL.length;
+  var total = teamArr.length;
+
+  // Budget (for locked squad we just show the cost)
+  var cost  = _teamCost(teamArr);
+  var rem   = Math.round((BUDGET_TOTAL - cost) * 10) / 10;
+  var pct   = Math.min(100, (cost / BUDGET_TOTAL) * 100);
+  var isValid = total === XI_SIZE;
+
+  // Resolve C/VC names for display
+  var capPlayer = capId ? resolvePlayer(capId) : null;
+  var vcPlayer  = vcId  ? resolvePlayer(vcId)  : null;
+
+  var h = '';
+
+  // ── Top bar: budget remaining + count ──
+  h += '<div class="pitch-topbar">';
+  h += '<div class="pitch-budget">'
+     + '<div>'
+     + '<div class="pitch-budget-label">Budget Remaining</div>'
+     + '<div class="pitch-budget-amt">₹'+rem.toFixed(1)+'cr</div>'
+     + '<div class="pitch-track"><div class="pitch-fill" style="width:'+pct+'%"></div></div>'
+     + '</div>'
+     + '</div>';
+  h += '<div class="pitch-count">'+total+' / '+XI_SIZE+'</div>';
+  h += '</div>';
+
+  // ── Role pills ──
+  h += '<div class="pitch-pills">';
+  h += '<span class="pitch-pill pill-wk">WK: '+wkC+'/1+</span>';
+  h += '<span class="pitch-pill pill-bat">BAT: '+batC+'/3+</span>';
+  h += '<span class="pitch-pill pill-ar">AR: '+arC+'/2+</span>';
+  h += '<span class="pitch-pill pill-bowl">BOWL: '+bowlC+'/3+</span>';
+  if (isValid) {
+    h += '<span class="pitch-pill pill-valid">✅ Team valid</span>';
+  } else {
+    h += '<span class="pitch-pill pill-invalid">⚠ '+total+' players</span>';
+  }
+  h += '</div>';
+
+  // ── C / VC strip ──
+  if (capPlayer || vcPlayer) {
+    h += '<div class="pitch-cvc">';
+    if (capPlayer) h += '<span class="cvc-c">C:</span> <strong>'+esc(capPlayer.name)+'</strong> <span style="color:var(--muted)">(2×)</span>';
+    if (capPlayer && vcPlayer) h += ' &nbsp;·&nbsp; ';
+    if (vcPlayer)  h += '<span class="cvc-vc">VC:</span> <strong>'+esc(vcPlayer.name)+'</strong> <span style="color:var(--muted)">(1.5×)</span>';
+    h += '</div>';
+  }
+
+  // ── Pitch ground — roles top to bottom: BOWL, AR, BAT, WK ──
+  h += '<div class="pitch-ground">';
+  roleOrder.forEach(function(role) {
+    var grp = groups[role];
+    if (grp.length === 0) return;
+    h += '<div class="pitch-row">';
+    h += '<div class="pitch-role-label">'+esc(roleLabels[role])+'</div>';
+    h += '<div class="pitch-players">';
+    grp.forEach(function(item) {
+      var p   = item.player;
+      var id  = item.id;
+      var nm  = p.name || id;
+      var ini = _initials(nm);
+      var avC = _avClass(p.team);
+      var iC  = (id === capId);
+      var iV  = (id === vcId);
+      // Short last-name for pitch display
+      var shortName = nm.split(" ").pop();
+
+      h += '<div class="pitch-player">';
+      h += '<div class="pitch-circle '+avC+'">';
+      h += esc(ini);
+      if (iC) h += '<span class="pitch-badge pitch-badge-c">C</span>';
+      else if (iV) h += '<span class="pitch-badge pitch-badge-vc">V</span>';
+      h += '</div>';
+      h += '<div class="pitch-name">'+esc(shortName)+'</div>';
+      h += '</div>';
+    });
+    h += '</div></div>';
+  });
+  h += '</div>'; // end pitch-ground
+
+  return h;
+}
+
+// ── Next Week: Active Planner with full budget + picker ────────────────────
+function _buildNextWeekCard() {
+  var nextWk = _currentWeek + 1;
+  var count  = _nwDraft.team.length;
+  var rem    = _remaining();
+  var canSave = count === XI_SIZE && rem >= -0.001;
+
+  var h = '<div class="card card-teal">';
+  h += '<div class="week-label" style="color:var(--teal)">Week '+nextWk+' Draft &nbsp;'
+     + '<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span></div>';
+  h += '<h3 class="section-title" style="color:var(--teal)">🔄 My Squad Draft'
+     + ' <span style="font-size:11px;font-weight:400;color:var(--muted)">('+count+'/'+XI_SIZE+' selected)</span></h3>';
+
+  // Budget bar
+  h += _buildBudgetBar();
+
+  // Selected players grid
+  h += _buildNwSquad();
+
+  if (count > 0) {
+    h += '<div class="cap-hint">';
+    h += '<span><span class="badge badge-c">C</span> ×2 — tap C to assign</span>';
+    h += '<span><span class="badge badge-vc">VC</span> ×1.5 — tap VC to assign</span>';
+    h += '</div>';
+  }
+
+  // Save row — disabled if not 11 or over budget
+  var saveTitle = !canSave
+    ? (count < XI_SIZE ? 'Select all '+XI_SIZE+' players first' : 'Over 100 CR budget')
+    : '';
+  h += '<div class="save-row">';
+  h += '<button id="nw-save-btn" class="btn btn-teal" onclick="_nwSave()" '
+     + (!canSave ? 'disabled title="'+esc(saveTitle)+'"' : '')+'>Save Draft</button>';
+  if (!canSave && count > 0) {
+    h += '<span style="font-size:11px;color:var(--muted)">' + esc(saveTitle) + '</span>';
+  }
+  h += '<span id="nw-save-msg" class="save-status"></span>';
+  h += '</div>';
+  h += '</div>'; // end squad card
+
+  // Player picker
+  h += _buildPicker();
+  return h;
+}
+
+// ── History tab ─────────────────────────────────────────────────────────────
+function _buildHistoryTab() {
+  if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
+    var isLoading = (_username && !_historyData);
+    if (isLoading) {
+      return '<div class="card"><p class="empty">History loading… Please wait a moment.</p></div>';
+    }
+    return '<div class="card"><div class="history-empty">'
+         + '<strong>No history yet</strong>'
+         + 'Your weekly XIs will appear here once you\'ve set and locked a team.'
+         + '</div></div>';
+  }
+
+  var weeks  = _historyData.weeks;
+  var viewWk = (_historyViewWk === null) ? _currentWeek : _historyViewWk;
+
+  var h = '<div class="history-bar">';
+  h += '<label>📖 Browse:</label>';
+  h += '<select onchange="_selectHistoryWeek(parseInt(this.value))">';
+  weeks.forEach(function(w) {
+    var lbl = "Week " + w.week_no + (w.week_no === 0 ? " (Pre-season)" : w.is_current ? " (Current)" : " (Archive)");
+    h += '<option value="'+w.week_no+'"'+(w.week_no===viewWk?' selected':'')+'>'+esc(lbl)+'</option>';
+  });
+  h += '</select>';
+
+  var selectedRow = null;
+  for (var i = 0; i < weeks.length; i++) {
+    if (weeks[i].week_no === viewWk) { selectedRow = weeks[i]; break; }
+  }
+  if (selectedRow && !selectedRow.is_current) {
+    h += '<span class="ro-note">🔒 Read-only archive</span>';
+  }
+  h += '</div>';
+
+  if (!selectedRow) {
+    return h + '<div class="card"><p class="empty">No data for selected week.</p></div>';
+  }
+
+  var tw = selectedRow.this_week;
+  h += '<div class="card'+(selectedRow.is_current?'':' card-locked')+'">';
+  h += '<div class="week-label">Week '+selectedRow.week_no
+     + (selectedRow.week_no === 0 ? ' — Pre-season' : selectedRow.is_current ? '' : ' &nbsp;<span class="badge-lock">Archive</span>')+'</div>';
+  h += '<h3 class="section-title">⚡ This Week\'s XI</h3>';
+
+  if (tw && tw.team && tw.team.length > 0) {
+    h += _buildXiGrid(tw.team, tw.cap, tw.vc);
+    h += '<div class="cap-hint">';
+    h += '<span><span class="badge badge-c">C</span> ×2 pts</span>';
+    h += '<span><span class="badge badge-vc">VC</span> ×1.5 pts</span>';
+    h += '</div>';
+  } else {
+    h += '<p class="empty">No XI recorded for this week.</p>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// ── Members tab: simultaneous full XI cards for all members ─────────────────
+function _buildMembersCard(memberNames) {
+  var h = '<div class="card">';
+  h += '<h3 class="section-title">👥 All Members ('+memberNames.length+')</h3>';
+
+  if (memberNames.length === 0) {
+    h += '<p class="empty">No members yet.</p></div>';
+    return h;
+  }
+
+  // Member pills (quick-switch identity)
+  h += '<div class="members-grid">';
+  memberNames.forEach(function(n) {
+    var isMe = n === _username;
+    h += '<span class="member-pill'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';
+  });
+  h += '</div>';
+  h += '</div>'; // close summary card
+
+  // ── Simultaneously render full 11-player cards for ALL members ───────────
+  // Resolution priority for each member's XI:
+  //   1. _historyData (current user from /api/history) — most authoritative
+  //   2. _state.members[n].this_week — from DB state, covers all other users
+  // Every player ID is resolved through resolvePlayer() so the card always
+  // shows Full Name + Team from the Players master table.
+  h += '<div class="members-dual">';
+
+  memberNames.forEach(function(n) {
+    var isMe  = n === _username;
+    var tw    = [];
+    var capId = null;
+    var vcId  = null;
+
+    // Priority 1: logged-in user's fresh history data.
+    // Falls back to next_week draft when this_week is empty (pre-rollover).
+    if (isMe && _historyData) {
+      var cur = _getCurrentWeekRow();
+      if (cur) {
+        var twSrc = null;
+        if (cur.this_week && cur.this_week.team && cur.this_week.team.length > 0) {
+          twSrc = cur.this_week;
+        } else if (cur.next_week && cur.next_week.team && cur.next_week.team.length > 0) {
+          twSrc = cur.next_week;
+        }
+        if (twSrc) {
+          tw    = twSrc.team;
+          capId = twSrc.cap;
+          vcId  = twSrc.vc;
+        }
+      }
+    }
+
+    // Priority 2: state.members — covers all users including non-logged-in.
+    // Also falls back to next_week draft so Moe is always visible.
+    if (tw.length === 0) {
+      var picks = _state && _state.members && _state.members[n];
+      if (picks) {
+        var twRaw = null;
+        if (picks.this_week && picks.this_week.team && picks.this_week.team.length > 0) {
+          twRaw = picks.this_week;
+        } else if (picks.next_week && picks.next_week.team && picks.next_week.team.length > 0) {
+          twRaw = picks.next_week;
+        } else if (picks.team && picks.team.length > 0) {
+          twRaw = picks;
+        }
+        if (twRaw) {
+          tw    = twRaw.team || [];
+          capId = twRaw.cap  || null;
+          vcId  = twRaw.vc   || null;
+        }
+      }
+    }
+
+    // Cost/budget summary for this member
+    var memberCost = 0;
+    tw.forEach(function(id) {
+      var p = resolvePlayer(id);
+      memberCost += (p.price || 0);
+    });
+    memberCost = Math.round(memberCost * 10) / 10;
+
+    h += '<div class="member-xi-card">';
+    h += '<div class="member-xi-header">';
+    h += '<span class="member-xi-name'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';
+    if (isMe) h += '&nbsp;<span class="me-tag">You</span>';
+    // Show squad cost inline
+    if (tw.length > 0) {
+      h += '&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'
+         + memberCost.toFixed(1)+' CR</span>';
+    }
+    h += '</div>';
+
+    if (tw.length > 0) {
+      // _buildXiGrid resolves every id → Full Name + Team via resolvePlayer()
+      h += _buildXiGrid(tw, capId, vcId);
+    } else {
+      h += '<p class="empty" style="padding:14px 0;color:var(--dim)">No XI set this week</p>';
+      if (isMe) {
+        h += '<button class="btn btn-teal btn-sm" onclick="switchTab(\'next\')" style="margin-top:4px">✏️ Set my XI</button>';
+      } else {
+        h += '<p style="font-size:11px;color:var(--dim);margin-top:4px">'
+           + 'Waiting for '+esc(n)+' to set their squad.</p>';
+      }
+    }
+    h += '</div>';
+  });
+
+  h += '</div>';
+  return h;
+}
+
+function _buildLeaderboardCard(lb) {
+  var h = '<div class="card">';
+  if (!lb || !lb.rankings || lb.rankings.length === 0) {
+    h += '<h3 class="section-title">🏆 Leaderboard</h3>';
+    h += '<p class="empty">No scores yet — check back after the first match.</p></div>';
+    return h;
+  }
+  h += '<h3 class="section-title">🏆 Leaderboard';
+  if (lb.week_no) h += ' — Week '+lb.week_no;
+  h += '</h3>';
+  h += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">'
+     + 'Avg: <strong style="color:var(--text)">'+lb.league_avg+'</strong>'
+     + ' &nbsp;·&nbsp; Top: <strong style="color:var(--gold)">'+lb.top_score+'</strong>'
+     + ' &nbsp;·&nbsp; '+lb.member_count+' members</p>';
+  h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th><th>Pts</th><th>MVP</th></tr></thead><tbody>';
+  lb.rankings.forEach(function(row) {
+    var isMe = row.name === _username;
+    h += '<tr'+(isMe?' class="me"':'')+'>'+
+      '<td class="rank">'+row.rank+'</td>'+
+      '<td>'+esc(row.name)+(isMe?' <span style="color:var(--gold);font-size:11px">(you)</span>':'')+
+      '</td><td class="pts">'+(row.total_pts||0)+'</td>'+
+      '<td class="mvp">'+(row.mvp&&row.mvp.player_name?esc(row.mvp.player_name)+' ('+row.mvp.pts+')':'—')+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  return h;
+}
+
+function _buildMatchesCard(matchList) {
+  var h = '<div class="card"><h3 class="section-title">📅 Matches</h3>';
+  if (!matchList || matchList.length === 0) {
+    h += '<p class="empty">No matches scheduled yet.</p></div>';
+    return h;
+  }
+  matchList.forEach(function(m) {
+    var st = m.status||"upcoming";
+    h += '<div class="match-item">'+
+      '<div class="match-title">'+esc(m.title||m.id)+
+      '<span class="status-pill status-'+st+'">'+st.charAt(0).toUpperCase()+st.slice(1)+'</span></div>'+
+      '<div class="match-meta">Wk '+m.wk+' · '+esc(m.date||"TBD")+'</div></div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+function _buildDevTools() {
+  var h = '<div class="devtools">';
+  h += '<h4>🛠 Dev Tools — Testing Mode</h4>';
+  h += '<p>Force-trigger the Monday 2:00 PM rollover. Promotes the current Next Week draft into a new locked This Week row and creates a fresh editable draft for the following week. Validates player/team IDs and budget enforcement during transition.</p>';
+  h += '<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">▶ Simulate Monday 2:00 PM Rollover</button>';
+  h += '<div id="rollover-result"></div>';
+  h += '</div>';
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════════════════
+
+function render(state) {
+  _state  = state;
+  members = state.members || {};
+  matches = state.matches  || [];
+
+  hideLoading();
+  hideErrorBanner();
+
+  var memberNames = Object.keys(members).sort();
+  var html = '<div class="wrap">';
+
+  html += '<h2 class="page-title">🏏 IPL Fantasy 2026</h2>';
+  html += '<p class="subtitle">'+memberNames.length+' members · '+matches.length+' matches · Week '+_currentWeek
+        + ' · 💰 '+BUDGET_TOTAL.toFixed(0)+' CR budget</p>';
+
+  if (!_username) {
+    html += _buildLoginCard(memberNames);
+    html += _buildLeaderboardCard(_leaderboard);
+    html += _buildMembersCard(memberNames);
+  } else {
+    // User header with avatar + refresh button
+    var ini = _initials(_username);
+    html += '<div class="card">';
+    html += '<div class="user-header-bar">';
+    html += '<div class="user-header-left">';
+    html += '<div class="user-avatar-large">'+esc(ini)+'</div>';
+    html += '<div><p class="label">Logged in as</p><p class="name">'+esc(_username)+'</p></div>';
+    html += '</div>';
+    html += '<div class="user-header-btns">';
+    html += '<button class="btn-refresh" id="refresh-btn" onclick="_refreshData()" title="Refresh latest scores &amp; data">⟳ Refresh</button>';
+    html += '<button class="btn btn-ghost btn-sm" onclick="logout()">Switch user</button>';
+    html += '</div>';
+    html += '</div>';
+    html += '<div id="refresh-status" class="refresh-status" style="margin-top:4px;text-align:right"></div>';
+    html += '</div>';
+
+    // Tabs
+    html += '<div class="tabs">';
+    [
+      { id:"team",        label:"This Week 🔒" },
+      { id:"next",        label:"Next Week ✏️" },
+      { id:"history",     label:"History 📖" },
+      { id:"leaderboard", label:"Leaderboard" },
+      { id:"matches",     label:"Matches" },
+      { id:"members",     label:"Members" },
+    ].forEach(function(t) {
+      html += '<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
+    });
+    html += '</div>';
+
+    if      (_activeTab === "team")        { html += _buildThisWeekCard(); html += _buildDevTools(); }
+    else if (_activeTab === "next")        { html += _buildNextWeekCard(); }
+    else if (_activeTab === "history")     { html += _buildHistoryTab(); }
+    else if (_activeTab === "leaderboard") { html += _buildLeaderboardCard(_leaderboard); }
+    else if (_activeTab === "matches")     { html += _buildMatchesCard(matches); }
+    else                                   { html += _buildMembersCard(memberNames); }
+  }
+
+  html += '</div>';
+  $app.innerHTML = html;
+
+  // Restore picker search input focus
+  if (_activeTab === "next") {
+    var inp = document.getElementById("picker-search-input");
+    if (inp) { inp.focus(); inp.selectionStart = inp.selectionEnd = inp.value.length; }
+  }
+}
+
+function renderLeaderboard(lb) {
+  _leaderboard = lb;
+  if (_state && (_activeTab === "leaderboard" || !_username)) render(_state);
+}
+
+function setPlayers(pl) {
+  if (!pl) return;
+  _players = pl;
+  if (_state) render(_state);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOOTSTRAP
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _bootstrap() {
+  var savedUser = getSavedUsername();
+
+  var stateP = fetch("/api/state", { headers: { "Accept": "application/json" } })
+    .then(function(r){ if (!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+
+  var historyP = (savedUser && window.IplApi)
+    ? window.IplApi.getHistory(savedUser).catch(function(){ return null; })
+    : Promise.resolve(null);
+
+  var playersP = (!_players && window.IplApi)
+    ? window.IplApi.getPlayers().catch(function(){ return null; })
+    : Promise.resolve(null);
+
+  var lbP = fetch("/api/leaderboard", { headers: { "Accept": "application/json" } })
+    .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+
+  var weekP = fetch("/api/current-week", { headers: { "Accept": "application/json" } })
+    .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+
+  stateP.then(function(state) {
+    if (!_username) {
+      if (savedUser && state.members && state.members[savedUser]) {
+        _username = savedUser;
+      } else if (savedUser) {
+        clearUsername();
+      }
+    }
+    render(state);
+  }).catch(function(err) {
+    console.error("[IPL] Bootstrap state fetch failed:", err);
+    showErrorBanner("Could not reach server — retrying…");
+  });
+
+  Promise.all([stateP, historyP]).then(function(results) {
+    var state   = results[0];
+    var history = results[1];
+    if (!state) return;
+    if (history && history.ok) {
+      _historyData = history;
+      _currentWeek = history.current_week;
+      if (_nwDraft.team.length === 0) {
+        var cur = _getCurrentWeekRow(history);
+        if (cur) {
+          var nw = cur.next_week;
+          var tw = cur.this_week;
+          if (nw && nw.team && nw.team.length > 0) {
+            _nwDraft = { team: nw.team.slice(), cap: nw.cap, vc: nw.vc };
+          } else if (tw && tw.team && tw.team.length > 0) {
+            _nwDraft = { team: tw.team.slice(), cap: tw.cap, vc: tw.vc };
+          }
+        }
+      }
+    }
+    render(state);
+  }).catch(function(){});
+
+  playersP.then(function(pl) {
+    if (pl && pl.ok !== false) {
+      setPlayers(pl);
+      window.dispatchEvent(new CustomEvent("ipl:players-updated", { detail: pl }));
+    }
+  });
+
+  lbP.then(function(lb) {
+    if (lb) {
+      var norm = window.normaliseLeaderboard ? window.normaliseLeaderboard(lb) : lb;
+      renderLeaderboard(norm);
+    }
+  });
+
+  weekP.then(function(d) {
+    if (d && d.ok && d.week_no !== _currentWeek) {
+      _currentWeek = d.week_no;
+      if (_state) render(_state);
+    }
+  });
+}
+
+// ── Bootstrap trigger ──────────────────────────────────────────────────────
+// ipl_glue.js dispatches "ipl:ready" after defining window.IplApi.
+// We listen for it here. If ipl_glue somehow already fired before this
+// listener registered (unlikely but possible), _glueReady flag catches it.
+var _glueReady = false;
+window.addEventListener("ipl:ready", function() {
+  _glueReady = true;
+  _bootstrap();
+});
+// Safety net: if ipl_glue.js already dispatched ipl:ready synchronously
+// (i.e. it was cached and executed before this listener ran), bootstrap now.
+// We use a short timeout so the current script frame finishes first.
+setTimeout(function() {
+  if (!_glueReady && window.IplApi) {
+    _glueReady = true;
+    _bootstrap();
+  }
+}, 50);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EVENT WIRES
+// ═══════════════════════════════════════════════════════════════════════════
+
+window.addEventListener("ipl:state-updated", function(e) {
+  var state = e.detail;
+  if (!state || typeof state.members !== "object") return;
+  if (!_username) {
+    var saved = getSavedUsername();
+    if (saved && state.members[saved]) _username = saved;
+    else if (saved && !state.members[saved]) clearUsername();
+  }
+  render(state);
+});
+
+window.addEventListener("ipl:leaderboard-updated", function(e) { renderLeaderboard(e.detail); });
+window.addEventListener("ipl:players-updated",     function(e) { setPlayers(e.detail); });
+
+window.addEventListener("ipl:error", function(e) {
+  var err = e.detail;
+  if (err && err.status && err.status < 500) return;
+  showErrorBanner(err && err.serverMessage ? err.serverMessage : "Server error — retrying in 60 s…");
+});
+
+window.addEventListener("ipl:saved", function() { _bootstrap(); });
+</script>
+
+<!--
+  ipl_glue.js MUST load AFTER the app script above.
+  Flask serves it from /static/ipl_glue.js
+-->
+<script src="/static/ipl_glue.js"></script>
+</body>
+</html>
