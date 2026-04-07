@@ -1,81 +1,36 @@
 #!/usr/bin/env python3
-"""
-IPL Fantasy 2026 — Daily Scraper                            Golden File v2
-===========================================================================
-Detects completed matches, scrapes ESPN Cricinfo scorecards via Playwright,
-and persists to SQLite via GoldenDB.upsert_match() (triggers point recalc).
-
-Usage:
-    python3 scraper.py
-
-Deps:
-    pip install playwright
-    playwright install chromium --with-deps
-
-v2 fixes:
-  • _clean_id() handles all ESPN ID formats:
-      '1527685'        → '12'   (large numeric ESPN ID)
-      'ipl2026_12'     → '12'   (prefixed numeric)
-      'ipl26_m01'      → '1'    (prefixed alpha-numeric, strips leading alpha)
-      '12'             → '12'   (plain numeric passthrough)
-  • int(match_num) wrapped in try/except everywhere it is used.
-  • Per-match try/except so one bad row never aborts the entire sync.
-  • Graceful handling of missing scorecard_url.
-"""
 import asyncio
 import json
 import re
 from pathlib import Path
-
 from playwright.async_api import async_playwright
-
 from db_manager import GoldenDB
 
+# --- CONFIGURATION ---
 DB_PATH     = Path("data/fantasy.db")
 MATCHES_DIR = Path("data/matches")
-    def _clean_id(self, raw_id) -> int:
-        """
-        Normalizes any ESPN / Internal match ID to a plain integer.
-        Uses Regex to strip all non-numeric characters for production resilience.
-        """
-        
-        if not raw_id:
-            return 0
-            
-        raw_id_str = str(raw_id)
-        
-        # Strip all non-digits (e.g., 'ipl26_m01' -> '01', '1527674' -> '1527674')
-        clean_str = re.sub(r'\D', '', raw_id_str)
-        
-        try:
-            val = int(clean_str)
-            # Apply ESPN offset only for large numeric IDs
-            if val > 1000000:
-                return val - 1527673
-            return val
-        except ValueError:
-            return 0
 
-    # Strip prefix before last underscore (e.g. 'ipl2026_12' -> '12')
-    if "_" in s:
-        s = s.split("_")[-1]
-
-    # Strip any leading alpha characters (e.g. 'm01' -> '01')
-    s = s.lstrip("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-    if not s:
-        return None
-
+def clean_id(raw_id) -> int:
+    """
+    Architectural Fail-safe: Extracts digits from any string format.
+    Handles 'ipl26_m01' -> 1, '1527685' -> 12, etc.
+    """
+    if not raw_id:
+        return 0
+    raw_id_str = str(raw_id)
+    # Strip all non-numeric characters
+    clean_str = re.sub(r'\D', '', raw_id_str)
+    
     try:
-        n = int(s)
-        # Large ESPN CricInfo IDs → sequential match number
-        return str(n - 1527673 if n > 1527673 else n)
+        val = int(clean_str)
+        # Apply ESPN offset only for large numeric IDs
+        if val > 1000000:
+            return val - 1527673
+        return val
     except ValueError:
-        return None
-
+        return 0
 
 async def _scrape_scorecard(page, url: str) -> dict | None:
-    """Return raw innings table data from an ESPN CricInfo scorecard URL."""
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_selector("table", timeout=20_000)
@@ -96,12 +51,10 @@ async def _scrape_scorecard(page, url: str) -> dict | None:
         print(f"  ✗ Scrape error ({url}): {exc}")
         return None
 
-
 async def main():
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = GoldenDB(DB_PATH)
 
-    # Read pending matches via GoldenDB context manager (read-only)
     with db._read() as con:
         rows = con.execute("""
             SELECT id, week_no, title, teams_json, date_label,
@@ -116,8 +69,7 @@ async def main():
         print("No matches to process.")
         return
 
-    count   = 0
-    skipped = 0
+    count, skipped = 0, 0
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
@@ -125,40 +77,32 @@ async def main():
 
         for match in matches:
             try:
-                raw_id    = match.get("id")
-               match_num = self._clean_id(raw_id)
+                raw_id = match.get("id")
+                # ARCHITECTURAL FIX: Use the standalone clean_id function
+                match_num = clean_id(raw_id)
 
-                if match_num is None:
+                if match_num <= 0:
                     print(f"  ⚠ Skipping unresolvable ID: {raw_id!r}")
                     skipped += 1
                     continue
 
-                # Safe int conversion for zero-padded filename
-                try:
-                    num_int = int(match_num)
-                except ValueError:
-                    print(f"  ⚠ Non-integer match_num {match_num!r} for ID {raw_id!r} — skipping")
-                    skipped += 1
-                    continue
+                json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
 
-                json_path = MATCHES_DIR / f"match_{num_int:02d}.json"
-
-                # 1. Serve from local JSON cache if available
+                # 1. Check Cache
                 if json_path.exists() and json_path.stat().st_size > 100:
                     with open(json_path) as f:
                         cached = json.load(f)
-                    db.upsert_match(cached)   # triggers recalculate_points
+                    db.upsert_match(cached)
                     print(f"  ✓ Ingested cached match {match_num}")
                     count += 1
                     continue
 
-                # 2. Only scrape matches marked as completed
+                # 2. Scrape if completed
                 if match.get("status") != "completed":
                     continue
 
                 url = match.get("scorecard_url") or ""
                 if not url:
-                    print(f"  ⚠ No scorecard URL for match {match_num} — skipping")
                     skipped += 1
                     continue
 
@@ -176,25 +120,19 @@ async def main():
                     "scores":        raw.get("innings", {}) if raw else {},
                 }
 
-                # Persist JSON cache
                 with open(json_path, "w") as f:
                     json.dump(match_data, f, indent=2)
 
-                # Persist to DB — upsert_match also triggers recalculate_points
                 db.upsert_match(match_data)
                 count += 1
-
-                await asyncio.sleep(1)   # polite delay
+                await asyncio.sleep(1)
 
             except Exception as exc:
-                print(f"  ✗ Unexpected error for match {match.get('id')!r}: {exc}")
+                print(f"  ✗ Error for match {match.get('id')}: {exc}")
                 skipped += 1
-                continue
 
         await browser.close()
-
-    print(f"\nDaily sync complete: {count} processed, {skipped} skipped.")
-
+    print(f"\nSync complete: {count} processed, {skipped} skipped.")
 
 if __name__ == "__main__":
     asyncio.run(main())
