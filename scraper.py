@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Daily Scraper                            Golden File v1
+IPL Fantasy 2026 — Daily Scraper                            Golden File v2
 ===========================================================================
 Detects completed matches, scrapes ESPN Cricinfo scorecards via Playwright,
 and persists to SQLite via GoldenDB.upsert_match() (triggers point recalc).
@@ -11,6 +11,16 @@ Usage:
 Deps:
     pip install playwright
     playwright install chromium --with-deps
+
+v2 fixes:
+  • _clean_id() handles all ESPN ID formats:
+      '1527685'        → '12'   (large numeric ESPN ID)
+      'ipl2026_12'     → '12'   (prefixed numeric)
+      'ipl26_m01'      → '1'    (prefixed alpha-numeric, strips leading alpha)
+      '12'             → '12'   (plain numeric passthrough)
+  • int(match_num) wrapped in try/except everywhere it is used.
+  • Per-match try/except so one bad row never aborts the entire sync.
+  • Graceful handling of missing scorecard_url.
 """
 import asyncio
 import json
@@ -26,18 +36,38 @@ MATCHES_DIR = Path("data/matches")
 
 def _clean_id(raw_id) -> str | None:
     """
-    Normalise a match ID to a short numeric string.
-    Strips prefix (e.g. 'ipl2026_12' → '12').
-    ESPN CricInfo IDs > 1527673 are mapped to sequential match numbers.
+    Normalise any ESPN / internal match ID to a plain integer string.
+
+    Handled formats
+    ---------------
+    '1527685'      -> '12'    large ESPN numeric ID (subtract 1527673 base)
+    'ipl2026_12'   -> '12'    underscore-prefixed numeric suffix
+    'ipl26_m01'    -> '1'     underscore-prefixed alpha-numeric (strip alpha)
+    '12'           -> '12'    plain numeric passthrough
+    None / ''      -> None
     """
-    s = str(raw_id)
+    if raw_id is None:
+        return None
+    s = str(raw_id).strip()
+    if not s:
+        return None
+
+    # Strip prefix before last underscore (e.g. 'ipl2026_12' -> '12')
     if "_" in s:
         s = s.split("_")[-1]
+
+    # Strip any leading alpha characters (e.g. 'm01' -> '01')
+    s = s.lstrip("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+    if not s:
+        return None
+
     try:
         n = int(s)
+        # Large ESPN CricInfo IDs → sequential match number
         return str(n - 1527673 if n > 1527673 else n)
     except ValueError:
-        return s or None
+        return None
 
 
 async def _scrape_scorecard(page, url: str) -> dict | None:
@@ -82,62 +112,84 @@ async def main():
         print("No matches to process.")
         return
 
-    count = 0
+    count   = 0
+    skipped = 0
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page    = await browser.new_page()
 
         for match in matches:
-            match_num = _clean_id(match["id"])
-            if match_num is None:
-                continue
+            try:
+                raw_id    = match.get("id")
+                match_num = _clean_id(raw_id)
 
-            json_path = MATCHES_DIR / f"match_{int(match_num):02d}.json"
+                if match_num is None:
+                    print(f"  ⚠ Skipping unresolvable ID: {raw_id!r}")
+                    skipped += 1
+                    continue
 
-            # 1. Serve from local JSON cache if available
-            if json_path.exists() and json_path.stat().st_size > 100:
-                with open(json_path) as f:
-                    cached = json.load(f)
-                db.upsert_match(cached)   # triggers recalculate_points
-                print(f"  ✓ Ingested cached match {match_num}")
+                # Safe int conversion for zero-padded filename
+                try:
+                    num_int = int(match_num)
+                except ValueError:
+                    print(f"  ⚠ Non-integer match_num {match_num!r} for ID {raw_id!r} — skipping")
+                    skipped += 1
+                    continue
+
+                json_path = MATCHES_DIR / f"match_{num_int:02d}.json"
+
+                # 1. Serve from local JSON cache if available
+                if json_path.exists() and json_path.stat().st_size > 100:
+                    with open(json_path) as f:
+                        cached = json.load(f)
+                    db.upsert_match(cached)   # triggers recalculate_points
+                    print(f"  ✓ Ingested cached match {match_num}")
+                    count += 1
+                    continue
+
+                # 2. Only scrape matches marked as completed
+                if match.get("status") != "completed":
+                    continue
+
+                url = match.get("scorecard_url") or ""
+                if not url:
+                    print(f"  ⚠ No scorecard URL for match {match_num} — skipping")
+                    skipped += 1
+                    continue
+
+                print(f"  → Scraping match {match_num}: {url}")
+                raw = await _scrape_scorecard(page, url)
+
+                match_data = {
+                    "id":            raw_id,
+                    "wk":            match.get("week_no", 1),
+                    "title":         match.get("title", ""),
+                    "teams":         json.loads(match.get("teams_json") or "[]"),
+                    "date":          match.get("date_label", ""),
+                    "status":        "completed",
+                    "scorecard_url": url,
+                    "scores":        raw.get("innings", {}) if raw else {},
+                }
+
+                # Persist JSON cache
+                with open(json_path, "w") as f:
+                    json.dump(match_data, f, indent=2)
+
+                # Persist to DB — upsert_match also triggers recalculate_points
+                db.upsert_match(match_data)
                 count += 1
+
+                await asyncio.sleep(1)   # polite delay
+
+            except Exception as exc:
+                print(f"  ✗ Unexpected error for match {match.get('id')!r}: {exc}")
+                skipped += 1
                 continue
-
-            # 2. Only scrape matches marked as completed
-            if match["status"] != "completed":
-                continue
-
-            url = match.get("scorecard_url", "")
-            if not url:
-                continue
-
-            print(f"  → Scraping match {match_num}: {url}")
-            raw = await _scrape_scorecard(page, url)
-
-            match_data = {
-                "id":            match["id"],
-                "wk":            match["week_no"],
-                "title":         match["title"],
-                "teams":         json.loads(match["teams_json"] or "[]"),
-                "date":          match["date_label"],
-                "status":        "completed",
-                "scorecard_url": url,
-                "scores":        raw.get("innings", {}) if raw else {},
-            }
-
-            # Persist JSON cache
-            with open(json_path, "w") as f:
-                json.dump(match_data, f, indent=2)
-
-            # Persist to DB — upsert_match also triggers recalculate_points
-            db.upsert_match(match_data)
-            count += 1
-
-            await asyncio.sleep(1)   # polite delay
 
         await browser.close()
 
-    print(f"\nDaily sync complete: {count} matches processed.")
+    print(f"\nDaily sync complete: {count} processed, {skipped} skipped.")
 
 
 if __name__ == "__main__":

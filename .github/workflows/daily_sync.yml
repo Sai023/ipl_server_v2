@@ -3,10 +3,10 @@ name: IPL 2026 Daily Sync
 on:
   schedule:
     - cron: '0 0 * * *'  # Daily at midnight UTC
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch:     # Allow manual triggering
 
 permissions:
-  contents: write  # Required for git push
+  contents: write
 
 jobs:
   sync:
@@ -22,22 +22,20 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install playwright requests beautifulsoup4 pandas
+        run: pip install playwright
 
-      - name: Install Playwright browsers and system deps
+      - name: Install Playwright browsers
         run: python -m playwright install --with-deps chromium
 
-      - name: Run unified scraper
-        run: python Scraper.py
-
-      - name: Update database
-        run: python Golden_State_DB_v2.py
+      - name: Run daily scraper
+        run: python scraper.py
+        # GoldenDB (db_manager.py) initialises the schema automatically on
+        # first run — no separate DB setup script is required.
 
       - name: Commit and push updates
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add **/*.json data/fantasy.db
-          git diff --staged --quiet || git commit -m "Daily sync: Update match data $(date +'%Y-%m-%d')"
+          git add data/matches/ data/fantasy.db 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Daily sync: $(date +'%Y-%m-%d')"
           git push
