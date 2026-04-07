@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+      # ARCHITECTURAL FIX: Expand shared memory to prevent Chromium crashes in Docker
+      options: --shm-size=2gb
 
     permissions:
       contents: write
@@ -18,25 +20,36 @@ jobs:
       - name: 1. Checkout repository
         uses: actions/checkout@v4
 
-      - name: 2. Install Project Dependencies
+      - name: 2. Fix Directory Permissions
+        # Ensures the container user can write to the volume
+        run: chown -R $(id -u):$(id -g) $GITHUB_WORKSPACE
+
+      - name: 3. Install Project Dependencies
         run: |
           pip install --upgrade pip
           pip install playwright flask
-          # ARCHITECTURAL FIX: Install browser binaries inside the container
+          # Install chromium binaries specifically for the Jammy container
           playwright install chromium --with-deps
 
-      - name: 3. Run Daily Scraper
+      - name: 4. Run Daily Scraper
+        # Setting PYTHONPATH ensures local imports like db_manager work perfectly
         run: |
           mkdir -p data/matches
+          export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
-      - name: 4. Atomic Data Sync
+      - name: 5. Atomic Data Sync
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # Add the DB and all generated JSONs
           git add data/fantasy.db data/matches/*.json 2>/dev/null || true
+          
           if ! git diff --staged --quiet; then
             git commit -m "data: sync $(date +%Y-%m-%d)"
             git push origin main
+          else
+            echo "No new match data detected today."
           fi
