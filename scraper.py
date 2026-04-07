@@ -3,159 +3,226 @@ import asyncio
 import json
 import re
 import sqlite3
+import os
+import sys
 from pathlib import Path
-from playwright.async_api import async_playwright
+from datetime import datetime
+from playwright.async_api import async_playwright, TimeoutError
 from db_manager import GoldenDB
 
-# --- CONFIGURATION ---
-DB_PATH     = Path("data/fantasy.db")
-MATCHES_DIR = Path("data/matches")
+# --- ARCHITECTURAL CONTAINER FIX ---
+# Inside a GitHub Action container, relative paths like 'data/fantasy.db' can fail.
+# This forces the script to look relative to its own physical location.
+BASE_DIR    = Path(__file__).resolve().parent
+DB_PATH     = BASE_DIR / "data" / "fantasy.db"
+MATCHES_DIR = BASE_DIR / "data" / "matches"
+MAX_RETRIES = 3
 
 def clean_id(raw_id) -> int:
-    """
-    Architectural Fail-safe: Extracts digits from any string format.
-    """
-    if not raw_id:
-        return 0
+    """Extracts match number and handles ESPN ID offsets."""
+    if not raw_id: return 0
     m = re.search(r'(\d+)$', str(raw_id))
-    if not m:
-        return 0
+    if not m: return 0
     try:
         val = int(m.group(1))
-        if val > 1000000:
-            return val - 1527673
-        return val
-    except ValueError:
-        return 0
+        return val - 1527673 if val > 1000000 else val
+    except ValueError: return 0
 
-async def _scrape_scorecard(page, url: str) -> dict | None:
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        await page.wait_for_selector("table", timeout=20_000)
-        return await page.evaluate("""
-            () => {
-                const innings = [];
-                document.querySelectorAll('table').forEach(tbl => {
-                    tbl.querySelectorAll('tbody tr').forEach(tr => {
-                        const cells = [...tr.querySelectorAll('td')]
-                            .map(td => td.innerText.trim());
-                        if (cells.length >= 6) innings.push(cells);
-                    });
+async def parse_detailed_scorecard(page):
+    """
+    Injected JavaScript to extract granular player data.
+    Captures Batting, Bowling, Fielding, and Fall of Wickets.
+    """
+    return await page.evaluate("""
+        () => {
+            const results = {
+                innings: [],
+                metadata: {
+                    scraped_at: new Date().toISOString(),
+                    match_notes: []
+                }
+            };
+
+            // Select all tables with the specific ESPN data class
+            const tables = document.querySelectorAll('table.ds-table');
+            
+            tables.forEach((tbl) => {
+                const rows = [];
+                const header = tbl.querySelector('thead tr');
+                
+                // Identify table type for fantasy calculation
+                let type = 'general';
+                if (header) {
+                    const txt = header.innerText;
+                    if (txt.includes('R') && txt.includes('B')) type = 'batting';
+                    else if (txt.includes('O') && txt.includes('M')) type = 'bowling';
+                }
+
+                tbl.querySelectorAll('tbody tr').forEach(tr => {
+                    // Skip hidden rows but keep info-rich cells
+                    if (tr.classList.contains('ds-hidden')) return;
+                    
+                    const cells = [...tr.querySelectorAll('td')].map(td => td.innerText.trim());
+                    // Capture everything with at least name and status/runs
+                    if (cells.length >= 2) rows.push(cells);
                 });
-                return { innings };
-            }
-        """)
-    except Exception as exc:
-        print(f"  \u2717 Scrape error ({url}): {exc}")
-        return None
+
+                if (rows.length > 0) {
+                    results.innings.push({ type, data: rows });
+                }
+            });
+
+            // Capture Match Summary (Toss, Venue, Result)
+            document.querySelectorAll('.ds-p-4 .ds-text-tight-m').forEach(note => {
+                results.metadata.match_notes.push(note.innerText.trim());
+            });
+
+            return results;
+        }
+    """)
+
+async def scrape_match_with_retry(page, url, match_num):
+    """Guard against Container/Network timeouts with exponential backoff."""
+    # Force 'full-scorecard' view to get detailed player stats
+    target_url = url.replace("match-report", "full-scorecard")
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            print(f"  → [{attempt+1}/{MAX_RETRIES}] Accessing Match {match_num}...")
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=45_000)
+            
+            # Wait for data tables to appear in DOM
+            await page.wait_for_selector("table.ds-table", timeout=15_000)
+            
+            # Brief pause for dynamic content hydration
+            await asyncio.sleep(2)
+            
+            data = await parse_detailed_scorecard(page)
+            if data and len(data['innings']) > 0:
+                return data
+                
+        except TimeoutError:
+            print(f"  ⚠ Timeout on attempt {attempt+1}. Retrying...")
+            await asyncio.sleep(5 * (attempt + 1))
+        except Exception as e:
+            print(f"  ❌ Error on Match {match_num}: {e}")
+            break
+    return None
 
 async def main():
+    """Main Scraper Orchestrator for IPL 2026."""
+    print(f"\n{'='*60}")
+    print(f"IPL 2026 CONTAINERIZED SCRAPER ENGINE")
+    print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'='*60}\n")
+    
+    # Ensure local directory exists inside the container volume
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     
-    # --- ARCHITECTURAL DIAGNOSTICS ---
     if not DB_PATH.exists():
-        print(f"CRITICAL ERROR: Database not found at {DB_PATH.absolute()}")
-        return
+        print(f"FATAL: Database not found at {DB_PATH.absolute()}")
+        sys.exit(1)
 
     db = GoldenDB(DB_PATH)
 
-    # 1. Debug: What is actually in the DB?
-    with db._read() as con:
-        con.row_factory = sqlite3.Row
-        total_rows = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        sample = con.execute("SELECT id, status FROM matches LIMIT 1").fetchone()
-        
-        print(f"--- SYSTEM DIAGNOSIS ---")
-        print(f"DATABASE PATH: {DB_PATH.absolute()}")
-        print(f"TOTAL MATCHES IN DB: {total_rows}")
-        if sample:
-            print(f"SAMPLE MATCH: ID={sample['id']}, STATUS='{sample['status']}'")
-        else:
-            print("WARNING: 'matches' table is EMPTY.")
-        print(f"------------------------")
+    # 1. Database & Schema Verification
+    try:
+        with db._read() as con:
+            con.row_factory = sqlite3.Row
+            count_res = con.execute("SELECT COUNT(*) FROM matches").fetchone()
+            total_matches = count_res[0] if count_res else 0
+            
+            print(f"DB STATUS: Connected.")
+            print(f"DB STATUS: {total_matches} records found.")
 
-    # 2. Bulletproof Query (Case Insensitive + Explicit Columns)
-    with db._read() as con:
-        con.row_factory = sqlite3.Row
-        rows = con.execute("""
-            SELECT id, week_no, title, teams_json, date_label, scorecard_url, status
-            FROM   matches
-            WHERE  LOWER(status) IN ('completed', 'upcoming')
-            ORDER  BY id
-        """).fetchall()
-        matches = [dict(r) for r in rows]
-
-    if not matches:
-        print("No matches to process after applying filters.")
+            # Load targets: prioritizes completed but un-scraped matches
+            rows = con.execute("""
+                SELECT id, week_no, title, teams_json, date_label, scorecard_url, status
+                FROM   matches
+                WHERE  LOWER(status) IN ('completed', 'upcoming')
+                ORDER  BY id ASC
+            """).fetchall()
+            target_list = [dict(r) for r in rows]
+    except Exception as db_err:
+        print(f"DATABASE ERROR: {db_err}")
         return
 
-    print(f"Found {len(matches)} matches to evaluate...")
-    count, skipped = 0, 0
+    if not target_list:
+        print("LOG: No matches meet criteria for scraping.")
+        return
 
+    processed = 0
+    
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        page    = await browser.new_page()
+        # CRITICAL CONTAINER FLAGS: These prevent Chromium from crashing in Docker
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--disable-dev-shm-usage", # Essential for containers
+                "--disable-gpu"
+            ]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
 
-        for match in matches:
-            try:
-                raw_id = match.get("id")
-                match_num = clean_id(raw_id)
+        for match in target_list:
+            match_id = match.get("id")
+            match_num = clean_id(match_id)
+            
+            # Logic Guard: Only process 'completed' matches
+            if str(match.get("status")).lower() != "completed":
+                continue
 
-                if match_num <= 0:
-                    print(f"  \u26a0 Skipping unresolvable ID: {raw_id!r}")
-                    skipped += 1
-                    continue
+            json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
+            
+            # Smart Cache: Skip if file is already detailed (>5KB)
+            if json_path.exists() and json_path.stat().st_size > 5000:
+                print(f"  ✓ Match {match_num}: Cached.")
+                continue
 
-                json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
-
-                # 1. Check Cache
-                if json_path.exists() and json_path.stat().st_size > 100:
-                    with open(json_path) as f:
-                        cached = json.load(f)
-                    db.upsert_match(cached)
-                    print(f"  \u2713 Ingested cached match {match_num}")
-                    count += 1
-                    continue
-
-                # 2. Only scrape if status is 'completed' (case-insensitive check)
-                current_status = str(match.get("status", "")).lower()
-                if current_status != "completed":
-                    skipped += 1
-                    continue
-
-                url = match.get("scorecard_url") or ""
-                if not url:
-                    print(f"  \u26a0 No URL for match {match_num}")
-                    skipped += 1
-                    continue
-
-                print(f"  \u2192 Scraping match {match_num}: {url}")
-                raw = await _scrape_scorecard(page, url)
-
+            print(f"INGESTING: {match.get('title')}...")
+            
+            payload = await scrape_match_with_retry(page, match.get('scorecard_url'), match_num)
+            
+            if payload:
+                # Build production-ready JSON object
                 match_data = {
-                    "id":            raw_id,
-                    "wk":            match.get("week_no", 1),
-                    "title":         match.get("title", ""),
-                    "teams":         json.loads(match.get("teams_json") or "[]"),
-                    "date":          match.get("date_label", ""),
-                    "status":        "completed",
-                    "scorecard_url": url,
-                    "scores":        raw.get("innings", {}) if raw else {},
+                    "metadata": {
+                        "id": match_id,
+                        "match_no": match_num,
+                        "week": match.get("week_no"),
+                        "teams": json.loads(match.get("teams_json") or "[]"),
+                        "date": match.get("date_label"),
+                        "info": payload['metadata']
+                    },
+                    "scorecard": payload['innings'],
+                    "status": "completed"
                 }
 
-                with open(json_path, "w") as f:
-                    json.dump(match_data, f, indent=2)
-
+                # Save to filesystem
+                with open(json_path, "w", encoding='utf-8') as f:
+                    json.dump(match_data, f, indent=2, ensure_ascii=False)
+                
+                # Sync back to DB for other app modules
                 db.upsert_match(match_data)
-                count += 1
-                await asyncio.sleep(1)
-
-            except Exception as exc:
-                print(f"  \u2717 Error for match {match.get('id')}: {exc}")
-                skipped += 1
+                
+                processed += 1
+                print(f"  ✅ SUCCESS: Match {match_num} synced.")
+                await asyncio.sleep(1.5)
+            else:
+                print(f"  ❌ FAILED: Skipping Match {match_num} after retries.")
 
         await browser.close()
-    print(f"\nSync complete: {count} processed, {skipped} skipped.")
+
+    print(f"\nSUMMARY: {processed} matches successfully updated.")
+    print(f"{'='*60}\n")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nShutdown signal received.")
