@@ -8,28 +8,25 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # ARCHITECTURAL OVERRIDE: Run inside the official Playwright container
     container:
-      image: ://microsoft.com
-    
+      image: mcr.microsoft.com/playwright/python:v1.52.0-noble
+
     permissions:
       contents: write
 
     steps:
       - name: 1. Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: 2. Install Project Dependencies
         run: |
           pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # Ensure db_manager deps are present
           pip install playwright
 
       - name: 3. Run Daily Scraper
         run: |
           mkdir -p data/matches
-          # No need to 'install browsers' - they are built into this container
           python scraper.py
 
       - name: 4. Atomic Data Sync
