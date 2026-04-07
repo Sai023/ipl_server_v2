@@ -9,6 +9,7 @@ player-matching / fuzzy-resolution engine.
 v10 changes (Phase-2 polish):
   • /api/rollover passes _resolver closure into db.rollover_season()
     so carry-forward IDs are canonicalised by the full fuzzy engine.
+  • Cold-start hydration from JSON archives on empty DB.
 """
 
 import collections
@@ -487,6 +488,27 @@ def _auto_seed_history_if_needed():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 db = DatabaseManager(DB_PATH)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COLD-START HYDRATION (Zero-DB Self-Healing)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _cold_start_hydrate():
+    """If DB is empty, rebuild from archived JSON match files."""
+    try:
+        with db._read() as con:
+            n = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        if n == 0:
+            json_dir = DATA_DIR / "matches"
+            if json_dir.exists() and any(json_dir.glob("*.json")):
+                print("\n  [startup] Cold DB detected — hydrating from JSON archives...")
+                ingested = db.hydrate_from_json(json_dir)
+                print(f"  [startup] Hydration complete: {ingested} matches restored.\n")
+    except Exception as e:
+        print(f"  [startup] Hydration check failed: {e}")
+
+_cold_start_hydrate()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
