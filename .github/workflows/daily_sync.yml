@@ -23,8 +23,8 @@ jobs:
           pip install playwright
           playwright install chromium
       
-      - name: Run daily scraper
-        run: python Scraper_Daily.py
+      - name: Run unified scraper
+        run: python Scraper.py
       
       - name: Update database
         run: python Golden_State_DB_v2.py
