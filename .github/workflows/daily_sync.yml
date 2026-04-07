@@ -20,7 +20,8 @@ jobs:
 
       - name: 2. Install Project Dependencies
         run: |
-          pip install --upgrade pip
+          apt-get update && apt-get install -y python3-dev build-essential
+          pip install --upgrade pip setuptools wheel
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install playwright
 
