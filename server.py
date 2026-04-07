@@ -1,10 +1,19 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v8
+IPL Fantasy 2026 — Flask Server                             Golden File v9
 ===========================================================================
-All persistence delegated to DatabaseManager (db_manager.py).
+All persistence delegated to DatabaseManager / GoldenDB (db_manager.py).
 This file owns: routing, rate-limiting, tunnel management, startup,
 season-history seeding, rolling-week rollover, and the intelligent
 player-matching / fuzzy-resolution engine.
+
+v9 changes (Phase-1 refactor):
+  • Removed standalone _get_current_week() and _validate_budget() helpers.
+  • api_current_week  → db.get_current_week()
+  • api_history       → db.get_history(n)
+  • api_save_next_week → db.validate_budget() + db.save_next_week()
+  • api_rollover      → db.rollover_season()
+  • api_players       → db.get_players()
+  • _db_con() retained for resolver functions only.
 
 PLAYER MATCHING ENGINE  (v8 — "Sensible Decision" resolver)
 ────────────────────────────────────────────────────────────
@@ -16,40 +25,7 @@ Resolution priority (highest → lowest):
   5. Token-set fuzzy name              (e.g. "V. Kohli" → "Virat Kohli")
   6. Last-name / suffix fallback       (e.g. "Pandya" → best candidate)
 
-Once matched, if the input was a bare name (not already an ID) the
-user_selections record is patched in-place to the canonical player ID.
-
-POST /api/resolve-player  — resolve a single name/shorthand → player row
-POST /api/save-next-week/<n> — now runs every item through the resolver
-
-SEASON HISTORY ARCHITECTURE (v8 — 8-week season, 100 CR budget)
-────────────────────────────────────────────────────────────────
-user_selections stores ONE ROW per (display_name, week_no).
-
-  week_no=0  →  Pre-season / W0 (read-only once locked)
-  week_no=1  →  IPL W1        (read-only once locked)
-  week_no=N  →  current live week  (max=8)
-
-Each row carries:
-  tw_team_json / tw_cap_id / tw_vc_id  ← LOCKED "this week" squad (player IDs)
-  nw_team_json / nw_cap_id / nw_vc_id  ← EDITABLE "next week" draft (player IDs)
-
-Monday 14:00 UTC rollover INSERTS a new row (week_no+1) instead of
-updating in-place, so history is never overwritten.
-
-Budget enforcement:
-  POST /api/save-next-week/<n> validates sum(player.price) ≤ 100.0 CR.
-  Rollover carries the draft as-is (already validated on save).
-
-Seed data uses player IDs from the canonical EMBEDDED_PLAYERS list:
-  W0 Sai:  Chakravarthy(x23/VC), Chahar(x24), Duffy(x25), H.Pandya(x22),
-           Patel(x16), Sharma(x32), Kohli(x17/C), Rahane(x18), Varma(x19),
-           Kishan(x20), Salt(x21)
-  W0 Moe:  Chakravarthy(x23/VC), H.Pandya(x22), Ravindra(x26), David(x27),
-           Shepherd(x28), Rutherford(x29), Patidar(x30), Varma(x19),
-           Kishan(x20), Salt(x21/C), Klaasen(x31)
-
-Routes (v8):
+Routes (v9):
   GET  /api/history/<n>          → all week rows for a user
   GET  /api/current-week         → current active week_no
   POST /api/save-next-week/<n>   → save nw_* columns (resolves names → IDs; validates budget)
@@ -141,7 +117,7 @@ _SEMANTIC_MAP = {
     "chakravarthy":"varun chakravarthy",
     "chakra":      "varun chakravarthy",
     "chakar":      "varun chakravarthy",
-    "vc":          "varun chakravarthy",   # common alias in squad strings
+    "vc":          "varun chakravarthy",
     "chahar":      "deepak chahar",
     "duffy":       "jacob duffy",
     "patel":       "axar patel",
@@ -156,7 +132,6 @@ _SEMANTIC_MAP = {
     "hetmyer":     "shimron hetmyer",
     "rana":        "nitish rana",
     "pant":        "rishabh pant",
-    "klaasen":     "heinrich klaasen",
     "noor":        "noor ahmad",
     "dube":        "shivam dube",
     "samson":      "sanju samson",
@@ -165,43 +140,25 @@ _SEMANTIC_MAP = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SEASON HISTORY SEED DATA  (player IDs from EMBEDDED_PLAYERS in index.html)
-# ─────────────────────────────────────────────────────────────────────────────
-# W0 squads use the short-name alias IDs (x01-x32) that map 1:1 to the
-# historical name strings the spec uses.  These IDs are present in both
-# index.html EMBEDDED_PLAYERS and the /api/players endpoint (via Seed_ipl2026.py).
-#
-# ID ↔ player mapping (short aliases used in W0/W1):
-#   x17=Kohli(RCB)   x23=Chakravarthy(KKR)  x24=Chahar(MI)   x25=Duffy(RCB)
-#   x22=H.Pandya(MI) x16=Patel(SRH)         x32=Sharma(MI)   x18=Rahane(KKR)
-#   x19=Varma(MI)    x20=Kishan(SRH)        x21=Salt(RCB)
-#   x26=Ravindra(KKR) x27=David(RCB)        x28=Shepherd(RCB) x29=Rutherford(MI)
-#   x30=Patidar(RCB)  x31=Klaasen(SRH)
-#   x08=Bumrah(MI)    x09=Kumar(MI)          x10=Rana(KKR)    x11=Jansen(MI)
-#   x12=Brevis(MI)    x04=Hetmyer(RR)        x07=Suryavanshi(RR) x01=Chahal(RR)
-#   x02=Noor Ahmad(GT) x03=Dube(CSK)         x06=Samson(RR)
-#   x13=Rickelton(MI) x14=Pant(DC)           x15=Ngidi(LSG)
+# SEASON HISTORY SEED DATA
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# W0 — Pre-season squads  (canonical IDs — no x-aliases)
 _SAI_W0_TEAM = ["k16","m12","r20","m09","d04","rr11","r01","k01","m03","s03","r04"]
-_SAI_W0_CAP  = "r01"   # Virat Kohli
-_SAI_W0_VC   = "k16"   # Varun Chakravarthy
+_SAI_W0_CAP  = "r01"
+_SAI_W0_VC   = "k16"
 
 _MOE_W0_TEAM = ["k16","m09","k11","r08","r09","m07","r02","m03","s03","r04","s04"]
-_MOE_W0_CAP  = "r04"   # Phil Salt
-_MOE_W0_VC   = "k16"   # Varun Chakravarthy
+_MOE_W0_CAP  = "r04"
+_MOE_W0_VC   = "k16"
 
-# W1 — Last Monday squads  (canonical IDs — no x-aliases)
 _SAI_W1_TEAM = ["d12","rr08","g11","c05","g08","rr15","rr05","s22","rr03","p01","s03"]
-_SAI_W1_CAP  = "rr03"  # Sanju Samson
-_SAI_W1_VC   = "rr15"  # Vaibhav Suryavanshi
+_SAI_W1_CAP  = "rr03"
+_SAI_W1_VC   = "rr15"
 
 _MOE_W1_TEAM = ["m10","r15","k10","r09","m11","m20","rr05","rr11","m04","s03","d01"]
-_MOE_W1_CAP  = "d01"   # Rishabh Pant
-_MOE_W1_VC   = "s03"   # Ishan Kishan
+_MOE_W1_CAP  = "d01"
+_MOE_W1_VC   = "s03"
 
-# Ordered seed manifest: (display_name, week_no, team_ids, cap_id, vc_id)
 _HISTORY_SEED = [
     ("Sai", 0, _SAI_W0_TEAM, _SAI_W0_CAP, _SAI_W0_VC),
     ("Moe", 0, _MOE_W0_TEAM, _MOE_W0_CAP, _MOE_W0_VC),
@@ -211,14 +168,10 @@ _HISTORY_SEED = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# INTELLIGENT PLAYER-MATCHING ENGINE  ("Sensible Decision" resolver)
+# INTELLIGENT PLAYER-MATCHING ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _normalise(s: str) -> str:
-    """
-    Lower-case, strip diacritics, remove punctuation, collapse whitespace.
-    Produces a stable key for fuzzy comparison.
-    """
     s = str(s).lower().strip()
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
@@ -228,20 +181,10 @@ def _normalise(s: str) -> str:
 
 
 def _token_set_ratio(a: str, b: str) -> float:
-    """
-    Lightweight token-set similarity ratio in [0.0, 1.0].
-    Jaccard over word sets with single-char abbreviation expansion.
-
-    Examples:
-      _token_set_ratio("V. Kohli", "Virat Kohli")  → ~0.67
-      _token_set_ratio("H. Pandya", "Hardik Pandya") → ~0.67
-    """
     ta = set(_normalise(a).split())
     tb = set(_normalise(b).split())
     if not ta or not tb:
         return 0.0
-
-    # Expand single-char abbreviations against the other set
     expanded_a = set()
     for t in ta:
         if len(t) == 1:
@@ -250,7 +193,6 @@ def _token_set_ratio(a: str, b: str) -> float:
                     expanded_a.add(tb_tok)
         else:
             expanded_a.add(t)
-
     intersection = expanded_a & tb
     union = expanded_a | tb
     return len(intersection) / len(union) if union else 0.0
@@ -267,19 +209,6 @@ def resolve_player_id(
     team_hint: str = None,
     fuzzy_threshold: float = 0.40,
 ) -> dict | None:
-    """
-    "Sensible Decision" player resolver — v8.
-
-    Priority ladder:
-      Tier 1  Exact player ID               e.g. "r01", "x23"
-      Tier 2  Exact full-name + team hint   "Virat Kohli" + team="RCB"
-      Tier 3  Exact full-name (no team)     "Phil Salt"
-      Tier 4  Semantic shorthand            "VK" → "Virat Kohli"
-      Tier 5  Token-set fuzzy (abbrev-ok)   "V. Kohli" → "Virat Kohli"
-      Tier 6  Last-name / suffix fallback   "Pandya" → best suffix hit
-
-    Returns dict with id/name/team/role/price/_match_tier, or None.
-    """
     if not input_str:
         return None
 
@@ -291,23 +220,19 @@ def resolve_player_id(
     if not players:
         return None
 
-    # ── Tier 1: exact ID ────────────────────────────────────────────────────
     for p in players:
         if p["id"] == raw:
             return {**p, "_match_tier": 1}
 
-    # ── Tier 2: exact name + team hint ──────────────────────────────────────
     if th:
         for p in players:
             if _normalise(p["name"]) == norm and p["team"].upper() == th:
                 return {**p, "_match_tier": 2}
 
-    # ── Tier 3: exact name (any team) ───────────────────────────────────────
     for p in players:
         if _normalise(p["name"]) == norm:
             return {**p, "_match_tier": 3}
 
-    # ── Tier 4: semantic shorthand ─────────────────────────────────────────
     semantic_target = _SEMANTIC_MAP.get(norm) or _SEMANTIC_MAP.get(raw.lower())
     if semantic_target:
         st_norm = _normalise(semantic_target)
@@ -319,26 +244,20 @@ def resolve_player_id(
             if _normalise(p["name"]) == st_norm:
                 return {**p, "_match_tier": 4}
 
-    # ── Tier 5: token-set fuzzy match ──────────────────────────────────────
     best_score  = fuzzy_threshold
     best_player = None
-
     for p in players:
         score = _token_set_ratio(norm, _normalise(p["name"]))
-        # Boost when team hint matches
         if th and p["team"].upper() == th:
             score = min(1.0, score + 0.12)
         if score > best_score:
             best_score  = score
             best_player = p
-
     if best_player:
         return {**best_player, "_match_tier": 5}
 
-    # ── Tier 6: last-name / suffix fallback ────────────────────────────────
     words_in = norm.split()
     last_in  = words_in[-1] if words_in else norm
-
     if len(last_in) >= 3:
         suffix_hits = []
         for p in players:
@@ -346,7 +265,6 @@ def resolve_player_id(
             p_last  = p_words[-1] if p_words else ""
             if p_last == last_in:
                 suffix_hits.append(p)
-
         if suffix_hits:
             if th:
                 th_hits = [p for p in suffix_hits if p["team"].upper() == th]
@@ -363,15 +281,6 @@ def resolve_id_list(
     display_name: str = None,
     week_no: int = None,
 ) -> tuple:
-    """
-    Resolve a mixed list of player IDs and/or name strings to canonical IDs.
-
-    Returns:
-        (resolved_ids: list[str], resolution_log: list[dict])
-
-    If display_name and week_no are supplied, any name→ID correction is
-    written back into user_selections.nw_team_json (data-correction step).
-    """
     resolved    = []
     log         = []
     needs_patch = False
@@ -404,7 +313,6 @@ def resolve_id_list(
             log.append({"input": s, "output": s, "tier": -1, "action": "unresolved"})
             _log(f"[resolver] UNRESOLVED: '{s}'", "warning")
 
-    # ── Write-back: patch user_selections if names were corrected ───────────
     if needs_patch and display_name and week_no is not None:
         try:
             con.execute(
@@ -485,36 +393,16 @@ def _log(msg: str, level: str = "info"):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# DB HELPERS
+# DB HELPERS  (resolver-only — all route SQL delegated to DatabaseManager)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _db_con():
+    """Raw sqlite3 connection used exclusively by resolver functions."""
     con = sqlite3.connect(str(DB_PATH), timeout=10)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode = WAL")
     con.execute("PRAGMA foreign_keys = ON")
     return con
-
-
-def _get_current_week(con) -> int:
-    row = con.execute(
-        "SELECT COALESCE(MAX(week_no), 1) AS wn FROM user_selections"
-    ).fetchone()
-    return int(row["wn"]) if row else 1
-
-
-def _validate_budget(con, player_ids: list) -> tuple:
-    if not player_ids:
-        return True, 0.0
-    placeholders = ",".join("?" * len(player_ids))
-    rows = con.execute(
-        f"SELECT id, price FROM players WHERE id IN ({placeholders})",
-        player_ids,
-    ).fetchall()
-    price_map = {r["id"]: r["price"] for r in rows}
-    total = sum(price_map.get(pid, 0.0) for pid in player_ids)
-    total = round(total, 1)
-    return total <= BUDGET_TOTAL, total
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -548,14 +436,6 @@ def _auto_seed_if_needed():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _auto_seed_history_if_needed():
-    """
-    Insert W0 and W1 rows for Sai and Moe using player IDs.
-
-    FORCE-RESEED logic: if an existing row's tw_team_json contains bare name
-    strings instead of player IDs, it is considered stale and re-resolved
-    via the matching engine before replacement.
-    """
-
     def _looks_like_ids(team_json: str) -> bool:
         try:
             arr = _json.loads(team_json or "[]")
@@ -578,9 +458,8 @@ def _auto_seed_history_if_needed():
 
             if existing:
                 if _looks_like_ids(existing["tw_team_json"]):
-                    continue  # already correctly seeded with IDs
+                    continue
                 else:
-                    # Stale name-string seed — re-resolve and replace
                     resolved_team, rlog = resolve_id_list(con, team)
                     unresolved = [e for e in rlog if e["action"] == "unresolved"]
                     if unresolved:
@@ -590,7 +469,6 @@ def _auto_seed_history_if_needed():
                         (name, week_no),
                     )
                     team = resolved_team
-                    # Resolve cap/vc IDs too
                     if cap and not _ID_RE.match(str(cap)):
                         m = resolve_player_id(con, cap)
                         if m:
@@ -654,8 +532,6 @@ app = Flask(
 )
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
-
-# ── Global error handlers ──────────────────────────────────────────────────────
 
 @app.errorhandler(sqlite3.IntegrityError)
 def _handle_integrity(e):
@@ -750,10 +626,7 @@ def api_save_state():
 @app.route("/api/current-week", methods=["GET"])
 def api_current_week():
     try:
-        con = _db_con()
-        wn  = _get_current_week(con)
-        con.close()
-        return jsonify({"week_no": wn, "max_weeks": MAX_WEEKS, "ok": True})
+        return jsonify({"week_no": db.get_current_week(), "max_weeks": MAX_WEEKS, "ok": True})
     except Exception as e:
         _log(f"GET /api/current-week failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
@@ -763,22 +636,6 @@ def api_current_week():
 
 @app.route("/api/resolve-player", methods=["POST"])
 def api_resolve_player():
-    """
-    POST /api/resolve-player
-
-    Body: { "query": str, "team": str|null }
-
-    Runs the "Sensible Decision" matching engine against the Players table.
-
-    200: {
-      "ok": true,
-      "resolved": { "id", "name", "team", "role", "price" },
-      "match_tier": int,   // 1=exact-ID, 2=exact+team, 3=exact-name,
-                           // 4=semantic, 5=fuzzy, 6=suffix
-      "input": str
-    }
-    404: { "ok": false, "error": "No match found", "input": str }
-    """
     rate_err = _check_rate(_write_limiter)
     if rate_err:
         return rate_err
@@ -816,31 +673,7 @@ def api_history(n):
     try:
         if not n or len(n) > 30:
             return jsonify({"error": "invalid name", "code": 400}), 400
-
-        con = _db_con()
-        current_week = _get_current_week(con)
-        rows = con.execute("""
-            SELECT week_no, tw_team_json, tw_cap_id, tw_vc_id,
-                   nw_team_json, nw_cap_id, nw_vc_id
-            FROM   user_selections
-            WHERE  display_name = ?
-            ORDER  BY week_no ASC
-        """, (n,)).fetchall()
-        con.close()
-
-        weeks = []
-        for r in rows:
-            wn      = r["week_no"]
-            tw_team = _json.loads(r["tw_team_json"] or "[]")
-            nw_team = _json.loads(r["nw_team_json"] or "[]")
-            weeks.append({
-                "week_no":    wn,
-                "is_current": wn == current_week,
-                "this_week":  {"team": tw_team, "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
-                "next_week":  {"team": nw_team, "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
-            })
-
-        return jsonify({"name": n, "current_week": current_week, "weeks": weeks, "ok": True})
+        return jsonify(db.get_history(n))
     except Exception as e:
         _log(f"GET /api/history/{n} failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
@@ -852,17 +685,8 @@ def api_history(n):
 def api_save_next_week(n):
     """
     POST /api/save-next-week/<n>
-
-    Saves ONLY the nw_* columns for the user's current (max) week row.
-    NEVER touches tw_* (the locked this-week squad).
-
-    v8: each element of 'team' is run through the resolver engine before
-    validation, so bare names / shorthands are accepted and corrected to
-    canonical IDs automatically. Corrections are written back to the DB.
-
-    Body: { "team": [...], "cap": str|null, "vc": str|null }
-    200:  { "ok": true, "week_no": int, "total_cost": float, "resolution_log": [...] }
-    422:  { "error": "...", "total_cost": float, "budget": 100.0 }
+    Resolver pass runs first (names → IDs via _db_con), then
+    budget validation and upsert delegate to GoldenDB.
     """
     rate_err = _check_rate(_write_limiter)
     if rate_err:
@@ -882,39 +706,34 @@ def api_save_next_week(n):
         if not isinstance(team, list):
             return jsonify({"error": "team must be a list", "code": 400}), 400
 
-        con = _db_con()
-        current_week = _get_current_week(con)
-
-        # ── Resolution pass (names → canonical IDs) ─────────────────────────
+        # ── Resolver pass (names → canonical IDs) — uses raw connection ──────
         resolution_log = []
         if team:
+            con = _db_con()
             team, resolution_log = resolve_id_list(
-                con, team, display_name=n, week_no=current_week
+                con, team, display_name=n, week_no=db.get_current_week()
             )
-
-            # Resolve cap/vc if they look like name strings
             if cap and not _ID_RE.match(str(cap)):
-                cap_match = resolve_player_id(con, cap)
-                if cap_match:
-                    cap = cap_match["id"]
+                cap_m = resolve_player_id(con, cap)
+                if cap_m:
+                    cap = cap_m["id"]
             if vc and not _ID_RE.match(str(vc)):
-                vc_match = resolve_player_id(con, vc)
-                if vc_match:
-                    vc = vc_match["id"]
-
-        # ── Count validation ────────────────────────────────────────────────
-        if team and len(team) != XI_SIZE:
+                vc_m = resolve_player_id(con, vc)
+                if vc_m:
+                    vc = vc_m["id"]
             con.close()
+
+        # ── Count validation ─────────────────────────────────────────────────
+        if team and len(team) != XI_SIZE:
             return jsonify({
                 "error": f"Squad must have exactly {XI_SIZE} players (got {len(team)})",
                 "code": 422,
             }), 422
 
-        # ── Budget validation ────────────────────────────────────────────────
+        # ── Budget validation via GoldenDB ───────────────────────────────────
         if team:
-            is_valid, total_cost = _validate_budget(con, team)
+            is_valid, total_cost = db.validate_budget(team, BUDGET_TOTAL)
             if not is_valid:
-                con.close()
                 return jsonify({
                     "error":      f"Budget exceeded: {total_cost:.1f} CR > {BUDGET_TOTAL:.1f} CR limit",
                     "total_cost": total_cost,
@@ -924,34 +743,11 @@ def api_save_next_week(n):
         else:
             total_cost = 0.0
 
-        # ── Upsert ───────────────────────────────────────────────────────────
-        con.execute("""
-            INSERT INTO user_selections
-                (display_name, week_no,
-                 tw_team_json, tw_cap_id, tw_vc_id,
-                 nw_team_json, nw_cap_id, nw_vc_id)
-            VALUES (?,?,?,?,?,?,?,?)
-            ON CONFLICT(display_name, week_no) DO UPDATE SET
-                nw_team_json = excluded.nw_team_json,
-                nw_cap_id    = excluded.nw_cap_id,
-                nw_vc_id     = excluded.nw_vc_id
-        """, (
-            n, current_week,
-            "[]", None, None,
-            _json.dumps(team), cap, vc,
-        ))
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-        con.execute(
-            "INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
-            (now_iso,),
-        )
-        con.commit()
-        con.close()
-
+        # ── Persist via GoldenDB ─────────────────────────────────────────────
+        result = db.save_next_week(n, team, cap, vc)
         return jsonify({
             "ok":             True,
-            "week_no":        current_week,
+            "week_no":        result["week_no"],
             "total_cost":     total_cost,
             "resolution_log": resolution_log,
         })
@@ -1000,140 +796,23 @@ def api_match():
         return jsonify({"error": str(e), "code": 500}), 500
 
 
-# ── /api/rollover  (v8 — history-preserving 8-week rollover) ──────────────────
+# ── /api/rollover  (v8 history-preserving via GoldenDB) ───────────────────────
 
 @app.route("/api/rollover", methods=["POST"])
 def api_rollover():
     """
     POST /api/rollover[?force=1]
-
-    Season-history rollover (v8):
-      For every user at their current max week_no, insert a new row at
-      week_no+1 where:
-        tw_* = current nw_*  (draft becomes the new locked XI)
-        nw_* = same draft    (seeded; user can then edit)
-      If the user's nw_* was empty, current tw_* is carried forward.
-      Season is capped at MAX_WEEKS — no further rolls after week 8.
-      All team IDs are resolver-verified before the new row is written.
-
-    Idempotent: guarded by Monday 14:00 UTC _last_rollover meta stamp.
-    ?force=1 bypasses the deadline gate (dev/testing mode).
+    Delegates to db.rollover_season() — see GoldenDB.rollover_season() docstring.
     """
     force = request.args.get("force", "").strip() in ("1", "true", "yes")
-
     try:
-        con = _db_con()
-        now = datetime.now(timezone.utc)
-
-        # ── Deadline gate ─────────────────────────────────────────────────
-        if not force:
-            days_since_mon = now.weekday()
-            lmd = (now - timedelta(days=days_since_mon)).replace(
-                hour=DEADLINE_HOUR, minute=DEADLINE_MIN,
-                second=0, microsecond=0, tzinfo=timezone.utc,
-            )
-            if lmd > now:
-                lmd -= timedelta(days=7)
-
-            last_raw = con.execute(
-                "SELECT value FROM meta WHERE key='_last_rollover'"
-            ).fetchone()
-            if last_raw:
-                try:
-                    last_dt = datetime.fromisoformat(last_raw["value"])
-                    if last_dt.tzinfo is None:
-                        last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    if lmd <= last_dt:
-                        con.close()
-                        return jsonify({"ok": True, "rolled": False,
-                                        "new_week_no": None,
-                                        "season_complete": False,
-                                        "reason": "Already rolled for this deadline"})
-                except ValueError:
-                    pass
-
-        # ── Season cap check ──────────────────────────────────────────────
-        current_week = _get_current_week(con)
-        if current_week >= MAX_WEEKS:
-            con.close()
-            return jsonify({
-                "ok": True, "rolled": False, "new_week_no": None,
-                "season_complete": True,
-                "reason": f"Season complete — {MAX_WEEKS} weeks reached"
-            })
-
-        # ── Find all users and their current max week ─────────────────────
-        users = con.execute("""
-            SELECT display_name, MAX(week_no) AS cur_wk
-            FROM   user_selections
-            GROUP  BY display_name
-        """).fetchall()
-
-        if not users:
-            con.close()
-            return jsonify({"ok": True, "rolled": False,
-                            "new_week_no": None, "season_complete": False,
-                            "reason": "No members found"})
-
-        new_week_no = int(users[0]["cur_wk"]) + 1
-
-        for u in users:
-            name   = u["display_name"]
-            cur_wk = int(u["cur_wk"])
-            new_wk = cur_wk + 1
-
-            cur_row = con.execute("""
-                SELECT tw_team_json, tw_cap_id, tw_vc_id,
-                       nw_team_json, nw_cap_id, nw_vc_id
-                FROM   user_selections
-                WHERE  display_name = ? AND week_no = ?
-            """, (name, cur_wk)).fetchone()
-
-            if not cur_row:
-                continue
-
-            nw_team = cur_row["nw_team_json"] or "[]"
-            nw_cap  = cur_row["nw_cap_id"]
-            nw_vc   = cur_row["nw_vc_id"]
-
-            if _json.loads(nw_team) == []:
-                nw_team = cur_row["tw_team_json"] or "[]"
-                nw_cap  = cur_row["tw_cap_id"]
-                nw_vc   = cur_row["tw_vc_id"]
-
-            # Resolver pass to ensure canonical IDs
-            try:
-                nw_list, _ = resolve_id_list(con, _json.loads(nw_team))
-                nw_team = _json.dumps(nw_list)
-            except Exception:
-                pass
-
-            con.execute("""
-                INSERT OR IGNORE INTO user_selections
-                    (display_name, week_no,
-                     tw_team_json, tw_cap_id, tw_vc_id,
-                     nw_team_json, nw_cap_id, nw_vc_id)
-                VALUES (?,?,?,?,?,?,?,?)
-            """, (name, new_wk, nw_team, nw_cap, nw_vc, nw_team, nw_cap, nw_vc))
-
-        now_iso = now.isoformat()
-        if not force:
-            con.execute(
-                "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
-                (now_iso,),
-            )
-        con.execute(
-            "INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
-            (now_iso,),
+        result = db.rollover_season(
+            force=force,
+            max_weeks=MAX_WEEKS,
+            deadline_hour=DEADLINE_HOUR,
+            deadline_min=DEADLINE_MIN,
         )
-        con.commit()
-        con.close()
-
-        return jsonify({
-            "ok": True, "rolled": True, "new_week_no": new_week_no,
-            "season_complete": new_week_no >= MAX_WEEKS
-        })
-
+        return jsonify(result)
     except Exception as e:
         _log(f"POST /api/rollover failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
@@ -1159,12 +838,7 @@ def api_seed_history():
 @app.route("/api/players", methods=["GET"])
 def api_players():
     try:
-        con = _db_con()
-        rows = con.execute(
-            "SELECT id, name, team, role, price FROM players ORDER BY name"
-        ).fetchall()
-        con.close()
-        players = [dict(r) for r in rows]
+        players = db.get_players()
         by_id   = {p["id"]:           p for p in players}
         by_name = {p["name"].lower(): p for p in players}
         return jsonify({"players": players, "by_id": by_id, "by_name": by_name, "ok": True})
@@ -1237,7 +911,7 @@ def offline_page():
         "<html><body style='background:#07111F;color:#D8E8F5;font-family:sans-serif;"
         "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
         "<div style='text-align:center'>"
-        "<div style='font-size:64px'>🏏</div>"
+        "<div style='font-size:64px'>&#x1F3CF;</div>"
         "<h1 style='color:#F5C518;margin:16px 0 8px'>You're offline</h1>"
         "<p style='color:#5F7A9B'>Check your connection and try again.</p>"
         "</div></body></html>"
@@ -1507,9 +1181,7 @@ if __name__ == "__main__":
     _log(f"Database: {DB_PATH}")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
-    # 1. Seed match scorecard data
     _auto_seed_if_needed()
-    # 2. Seed W0 + W1 history for Sai and Moe (with resolver verification)
     _auto_seed_history_if_needed()
 
     if args.tunnel:

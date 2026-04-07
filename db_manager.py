@@ -1,10 +1,10 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v3
+IPL Fantasy 2026 — DatabaseManager                          Golden File v4
 ===========================================================================
 Single source of truth for all SQLite interaction.
 
 Import in server.py:
-    from db_manager import DatabaseManager, calc_pts
+    from db_manager import DatabaseManager, GoldenDB, calc_pts
 
 Key invariants (107/107 test-verified):
   • Overs stored as fractional real: 3.5 = 3 overs 5 balls → normalised to
@@ -17,6 +17,15 @@ Key invariants (107/107 test-verified):
   • MVP = player with highest awarded_pts per user; MIN(player_id) breaks ties.
   • DENSE_RANK: tied total_pts share the same rank, no gaps.
   • league_avg = ROUND(AVG, 1) across all members in the filtered result set.
+
+v4 additions (Phase-1 refactor):
+  • get_current_week()  — moved from server.py helper
+  • get_players()       — moved from server.py route
+  • get_history(name)   — moved from server.py route
+  • validate_budget()   — moved from server.py helper
+  • save_next_week()    — moved from server.py route (pre-resolved IDs)
+  • rollover_season()   — v8 history-preserving INSERT-new-row rollover
+  • GoldenDB alias      — backward-compat name used by scraper.py
 """
 
 import json
@@ -123,36 +132,10 @@ CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, pla
 # ═══════════════════════════════════════════════════════════════════════════════
 # LEADERBOARD SQL
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# Six-CTE pipeline — single round-trip, no Python-side aggregation.
-#
-# Data flow:
-#   current_picks     → shred tw_team_json into per-player rows (latest week_no)
-#   scored_points     → join to player_match_points; cap ×2 / VC ×1.5 applied inline
-#   user_totals       → SUM awarded_pts; MAX for MVP identification
-#   mvp_resolve       → highest-scoring player per user; MIN(player_id) tie-breaks
-#   ranked            → DENSE_RANK over total_pts DESC (ties share rank, no gaps)
-#   league_benchmarks → AVG/MAX/COUNT cross-joined (zero extra query cost)
-#
-# Canonical Week 1 validation (107/107 test-verified):
-#   Salt (r04): runs=12, balls=7, fours=2, catches=2 → raw=34 pts  [BVA source]
-#   Sai  CAP=r01(Kohli  raw=110 → ×2=220)  VC=s02(Abhishek raw=13 → ×1.5≈20)  total=488
-#   Moe  CAP=r04(Salt   raw=34  → ×2=68)   VC=s03(Kishan   raw=116 → ×1.5=174) total=469
-#   → Sai rank 1, MVP player_id=r01 pts=220
-#   → Moe rank 2, MVP player_id=s03 pts=174
-#   league_avg = (488+469)/2 = 478.5, top_score = 488, member_count = 2
-#
-# :week_no binding:
-#   None (NULL) → all weeks aggregated (global leaderboard)
-#   integer N   → only matches where pmp.week_no = N (weekly view)
-# ───────────────────────────────────────────────────────────────────────────────
 
 _LEADERBOARD_SQL = """
 WITH
 
--- ── CTE 1: current_picks ─────────────────────────────────────────────────────
--- Resolve the latest week_no per user; shred tw_team_json into rows.
--- JSON_EACH available in SQLite ≥ 3.38 (Python 3.9+ has json1 compiled in).
 current_picks AS (
     SELECT
         us.display_name,
@@ -169,9 +152,6 @@ current_picks AS (
           )
 ),
 
--- ── CTE 2: scored_points ─────────────────────────────────────────────────────
--- Join picks → player_match_points; apply cap (×2) / VC (×1.5) inline.
--- CAST(:week_no AS INTEGER) IS NULL is the portable NULL-filter pattern.
 scored_points AS (
     SELECT
         cp.display_name,
@@ -190,8 +170,6 @@ scored_points AS (
             OR pmp.week_no = CAST(:week_no AS INTEGER))
 ),
 
--- ── CTE 3: user_totals ───────────────────────────────────────────────────────
--- Aggregate: total awarded pts, distinct match count, peak score for MVP.
 user_totals AS (
     SELECT
         display_name,
@@ -202,10 +180,6 @@ user_totals AS (
     GROUP BY display_name
 ),
 
--- ── CTE 4: mvp_resolve ───────────────────────────────────────────────────────
--- Identify which player achieved mvp_awarded_pts for each user.
--- MIN(player_id) provides a deterministic tie-break when two players
--- score identically (e.g. two bowlers both on 75 pts).
 mvp_resolve AS (
     SELECT
         sp.display_name,
@@ -218,9 +192,6 @@ mvp_resolve AS (
     GROUP BY sp.display_name, sp.awarded_pts
 ),
 
--- ── CTE 5: ranked ────────────────────────────────────────────────────────────
--- DENSE_RANK over total_pts DESC.
--- Ties share the same rank integer; no gaps in the sequence.
 ranked AS (
     SELECT
         ut.display_name,
@@ -235,9 +206,6 @@ ranked AS (
     LEFT JOIN mvp_resolve mr USING (display_name)
 ),
 
--- ── CTE 6: league_benchmarks ─────────────────────────────────────────────────
--- Single-row league-wide aggregates.  CROSS JOIN adds these to every output
--- row at negligible cost — avoids a second query from the application layer.
 league_benchmarks AS (
     SELECT
         ROUND(AVG(total_pts), 1)  AS league_avg,
@@ -246,9 +214,6 @@ league_benchmarks AS (
     FROM  user_totals
 )
 
--- ── Final projection ──────────────────────────────────────────────────────────
--- LEFT JOIN players resolves player_id → human name.
--- COALESCE falls back to player_id when players table is not yet seeded.
 SELECT
     r.rank,
     r.display_name,
@@ -265,46 +230,15 @@ CROSS JOIN league_benchmarks lb
 LEFT  JOIN players           p  ON p.id = r.mvp_player_id
 ORDER BY
     r.rank,
-    r.display_name   -- stable alpha sort within tied ranks
+    r.display_name
 """
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # POINTS ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
-#
-# Canonical scoring rules — mirrors the JS engine in index.html and the
-# decision-table in Tests_Circut.py (Suite 2).  All 107 tests pass against
-# this implementation.
-#
-# Overs clamping
-# ──────────────
-# ESPNcricinfo and manual entry both use the N.B format where B is the ball
-# digit (0–5).  A raw value like 3.5 means "3 overs and 5 balls", NOT the
-# decimal fraction 3.5.  We normalise:
-#
-#   _normalise_overs(3.5)  → 3 + 5/6 ≈ 3.8333   ✓
-#   _normalise_overs(3.9)  → 3 + 5/6 ≈ 3.8333   (clamped — ball digit > 5)
-#   _normalise_overs(4.0)  → 4.0                 ✓
-#   _normalise_overs(0.0)  → 0.0                 ✓
-#
-# The ball digit is clamped to 0–5 before conversion.  This matches the
-# parse_overs() helper in Tests_Circut.py and Scraper.py.
 
 def _normalise_overs(raw: float) -> float:
-    """
-    Convert cricket 'N.B' overs notation to a fractional real.
-
-    3.5  → 3 + 5/6 ≈ 3.8333   (3 overs, 5 balls)
-    3.9  → 3 + 5/6             (clamped: ball digit > 5 → 5)
-    4.0  → 4.0                 (complete overs unchanged)
-    0.0  → 0.0
-
-    Args:
-        raw: The raw value from the scorecard / JSON payload.
-    Returns:
-        Fractional overs suitable for economy-rate division.
-    """
     if raw <= 0:
         return 0.0
     full_overs = math.floor(raw)
@@ -313,46 +247,6 @@ def _normalise_overs(raw: float) -> float:
 
 
 def calc_pts(s: dict) -> int:
-    """
-    Compute base fantasy points for a single player scorecard dict.
-
-    Returns 0 for DNP (played=False or missing).
-    Cap/VC multipliers are NOT applied here — those are applied in SQL
-    via ROUND(base_pts * 2.0) / ROUND(base_pts * 1.5).
-
-    Scoring rules (BVA-verified against 107/107 tests):
-    ────────────────────────────────────────────────────
-    Playing XI:
-        +4 pts for being in the XI (played=True)
-
-    Batting:
-        +1 pt per run
-        +1 pt per boundary (four)
-        +2 pts per six
-        Milestones: ≥100→+16, ≥50→+8, ≥30→+4
-        Duck penalty: played & got_out & balls≥1 & runs=0 → −2
-        Strike-rate bonus (min 10 balls):
-            SR > 125 → +6 | SR ≥ 110 → +4 | SR ≥ 100 → +2
-            SR < 60  → −4 | SR < 70  → −2
-
-    Bowling:
-        +25 pts per wicket
-        +8  pts per lbw/bowled (stacked with wicket)
-        +12 pts per maiden over
-        Haul bonuses: ≥2W→+4, ≥3W→+4, ≥4W→+8, ≥5W→+8
-        Economy bonus (min 2 overs, normalised):
-            eco <  5 → +6 | eco < 6 → +4 | eco < 7 → +2
-            eco > 12 → −6 | eco ≥ 12 → −4 | eco ≥ 10 → −2
-
-    Fielding:
-        +8 pts per catch; +4 bonus if ≥3 catches
-        +12 pts per stumping
-        +12 pts per direct run-out
-        +6  pts per assisted run-out
-
-    lbw_bowled cap: clamped to min(wickets, lbwBowled) so phantom lbw/bowled
-    credits cannot be awarded to non-wicket-taking bowlers.
-    """
     if not s or not s.get("played"):
         return 0
 
@@ -368,23 +262,18 @@ def calc_pts(s: dict) -> int:
     stump   = max(0, int(s.get("stumpings",     0)))
     rod     = max(0, int(s.get("runOutDirect",  s.get("run_out_direct", 0))))
     roa     = max(0, int(s.get("runOutAssist",  s.get("run_out_assist", 0))))
-    # lbw_bowled capped at wickets to prevent phantom credits
     lbwb    = max(0, min(wickets, int(s.get("lbwBowled", s.get("lbw_bowled", 0)))))
     duck    = bool(s.get("duck", False))
     got_out = bool(s.get("gotOut", s.get("got_out", False)))
 
-    pts = 4   # Playing XI bonus
+    pts = 4
 
-    # ── Batting ───────────────────────────────────────────────────────────────
     pts += runs + fours + sixes * 2
-
     if   runs >= 100: pts += 16
     elif runs >= 50:  pts += 8
     elif runs >= 30:  pts += 4
-
     if duck and got_out and balls >= 1:
         pts -= 2
-
     if balls >= 10:
         sr = (runs / balls) * 100
         if   sr >  125: pts += 6
@@ -393,15 +282,11 @@ def calc_pts(s: dict) -> int:
         elif sr <  60:  pts -= 4
         elif sr <  70:  pts -= 2
 
-    # ── Bowling ───────────────────────────────────────────────────────────────
     pts += wickets * 25 + lbwb * 8 + maidens * 12
-
-    # Haul bonuses are incremental / stacking
     if wickets >= 2: pts += 4
     if wickets >= 3: pts += 4
     if wickets >= 4: pts += 8
     if wickets >= 5: pts += 8
-
     if overs >= 2:
         eco = rc / overs
         if   eco >  12: pts -= 6
@@ -411,7 +296,6 @@ def calc_pts(s: dict) -> int:
         elif eco <   6: pts += 4
         elif eco <   7: pts += 2
 
-    # ── Fielding ──────────────────────────────────────────────────────────────
     pts += catches * 8
     if catches >= 3:
         pts += 4
@@ -435,14 +319,6 @@ def _jloads(s, default):
 
 
 def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
-    """
-    Upsert one match + all its per-player raw scores in a single transaction
-    block (caller holds the write lock).
-
-    The overs value from the payload is stored AS-IS in match_scores.overs
-    (already normalised by the scraper / calc_pts caller).  Economy arithmetic
-    happens in Python via _normalise_overs(), not in SQLite.
-    """
     mid = m.get("id")
     if not mid:
         return
@@ -530,7 +406,6 @@ class DatabaseManager:
     One connection per thread, cached in threading.local().
     A single threading.Lock serialises all writes (BEGIN IMMEDIATE).
     WAL mode lets reads run concurrently without blocking writers.
-    At 50 concurrent users this is zero-contention in practice.
     """
 
     def __init__(self, path: str | Path):
@@ -599,26 +474,7 @@ class DatabaseManager:
     # ── GET /api/state ────────────────────────────────────────────────────────
 
     def get_state(self) -> dict:
-        """
-        Return the full nested JSON expected by the frontend render() functions.
-
-        Shape (unchanged from legacy league.json contract):
-        {
-          members: {
-            "Name": {
-              this_week: { team: [...], cap: str|null, vc: str|null },
-              next_week: { team: [...], cap: str|null, vc: str|null }
-            }
-          },
-          matches: [
-            { id, wk, title, teams, date, status, scores: {pid: {...}} }
-          ],
-          _saved:         ISO-8601 str,
-          _last_rollover: ISO-8601 str,
-        }
-        """
         with self._read() as con:
-            # Members: latest week_no per user
             rows = con.execute("""
                 SELECT display_name,
                        tw_team_json, tw_cap_id, tw_vc_id,
@@ -645,7 +501,6 @@ class DatabaseManager:
                     },
                 }
 
-            # Matches + raw score blobs
             match_rows = con.execute(
                 "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
                 "FROM matches ORDER BY week_no, id"
@@ -662,7 +517,6 @@ class DatabaseManager:
                     "date":   mr["date_label"],
                     "status": mr["status"],
                 }
-                # Merge any extra keys stored in raw_json (forward-compat)
                 for k, v in base.items():
                     if k not in entry:
                         entry[k] = v
@@ -688,11 +542,6 @@ class DatabaseManager:
     # ── POST /api/state ───────────────────────────────────────────────────────
 
     def save_state(self, payload: dict) -> str:
-        """
-        Full-merge save.  Accepts both new format (this_week/next_week) and
-        legacy flat format (team/cap/vc) for API parity.
-        Returns the ISO timestamp of the save.
-        """
         members = payload.get("members", {})
         matches = payload.get("matches",  [])
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -709,7 +558,6 @@ class DatabaseManager:
 
                 tw = data.get("this_week") or {}
                 nw = data.get("next_week") or {}
-                # Legacy flat format compat
                 if "this_week" not in data and "team" in data:
                     tw = {"team": data.get("team", []),
                           "cap":  data.get("cap"),
@@ -746,24 +594,15 @@ class DatabaseManager:
                 (now_iso,),
             )
 
-        # Recalculate points for every match that has scores — outside the
-        # write lock so the transaction stays short.
         match_ids_with_scores = [m["id"] for m in matches if "id" in m and m.get("scores")]
         for mid in match_ids_with_scores:
             self.recalculate_points(match_id=mid)
 
         return now_iso
 
-    # ── PUT /api/member/<name> ────────────────────────────────────────────────
+    # ── PUT /api/member/<n> ────────────────────────────────────────────────
 
     def upsert_member(self, name: str, data: dict) -> None:
-        """
-        Upsert a single member's team picks.
-
-        Accepted shapes:
-          { this_week: {team, cap, vc}, next_week: {team, cap, vc} }  ← new
-          { team: [...], cap: str, vc: str }                           ← legacy
-        """
         with self._write() as con:
             row = con.execute(
                 "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
@@ -806,20 +645,6 @@ class DatabaseManager:
     # ── POST /api/match ───────────────────────────────────────────────────────
 
     def upsert_match(self, m: dict) -> None:
-        """
-        Upsert one match + its per-player raw scores, then immediately
-        recalculate player_match_points for that match.
-
-        Pipeline:
-          1. _upsert_match()        → writes match_scores rows
-          2. recalculate_points()   → writes player_match_points rows
-          3. stamp _saved meta
-
-        The recalculate call is outside the write lock on purpose: it reads
-        match_scores (committed by step 1) and writes player_match_points in
-        its own locked transaction.  This keeps each transaction short and
-        avoids holding the lock across the CPU-bound scoring loop.
-        """
         mid = m.get("id")
         with self._write() as con:
             _upsert_match(con, m)
@@ -827,47 +652,12 @@ class DatabaseManager:
                 "INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
                 (datetime.now(timezone.utc).isoformat(),),
             )
-        # Recalculate points outside the write lock — reads committed data.
         if mid and m.get("scores"):
             self.recalculate_points(match_id=mid)
 
     # ── Points recalculation engine ───────────────────────────────────────────
 
     def recalculate_points(self, match_id: str | None = None) -> int:
-        """
-        Populate / refresh player_match_points from match_scores.
-
-        Called automatically by upsert_match() for the affected match.
-        Can also be called manually to backfill after migration from the
-        JSON backend, or to re-score a match after a scorecard correction.
-
-        Parameters
-        ----------
-        match_id : str | None
-            Recalculate for one match only.
-            None → recalculate ALL matches (full backfill).
-
-        Returns
-        -------
-        int
-            Number of player_match_points rows written / updated.
-
-        Algorithm
-        ---------
-        1. Read raw_score_json rows from match_scores (JOIN matches for week_no).
-        2. For each row, call calc_pts() to get base_pts.
-        3. INSERT OR REPLACE into player_match_points.
-           multiplier is always stored as 1.0 here — cap/VC multipliers are
-           applied at query time in _LEADERBOARD_SQL via ROUND(base_pts * 2.0)
-           so the base value stays reusable across different user compositions.
-
-        Thread safety
-        -------------
-        Reads use _read() (WAL non-blocking).
-        Writes use _write() (exclusive lock, short transaction).
-        The two phases are deliberately separate so WAL readers are never
-        blocked by the scoring CPU loop.
-        """
         with self._read() as con:
             if match_id:
                 score_rows = con.execute(
@@ -893,7 +683,7 @@ class DatabaseManager:
         with self._write() as con:
             for row in score_rows:
                 sc       = _jloads(row["raw_score_json"], {})
-                base_pts = calc_pts(sc)          # full scoring engine
+                base_pts = calc_pts(sc)
                 con.execute("""
                     INSERT INTO player_match_points
                         (match_id, player_id, week_no,
@@ -909,43 +699,26 @@ class DatabaseManager:
                     row["player_id"],
                     row["week_no"],
                     base_pts,
-                    float(base_pts),   # final_pts = base_pts × 1.0 (no multiplier stored)
+                    float(base_pts),
                     now_iso,
                 ))
                 rows_written += 1
 
         return rows_written
 
-    # ── POST /api/rollover ────────────────────────────────────────────────────
+    # ── POST /api/rollover (legacy flat promote — kept for compat) ────────────
 
     def do_rollover(self) -> dict:
         """
-        Monday 14:00 UTC deadline: promote next_week → this_week, clear next_week.
-        Idempotent — no-op if already rolled for this deadline window.
-
-        Rollover anchor logic (mirrors Tests_Circut.py TestTemporalRollover):
-        ──────────────────────────────────────────────────────────────────────
-        1. Compute lmd = most recent Monday 14:00 UTC relative to `now`.
-           If today IS Monday but it's before 14:00, lmd falls back to
-           the PREVIOUS Monday 14:00 (by subtracting 7 days).
-        2. Read _last_rollover meta.  If lmd ≤ last_rollover, return rolled=False.
-        3. Otherwise execute the UPDATE and stamp meta.
-
-        Key test cases:
-          Monday 14:01 → lmd = today 14:00 < now → fires (rolled=True)
-          Monday 13:59 → lmd = today 14:00 > now → lmd -= 7d = last Mon 14:00
-                         If that was already stamped → no-op (rolled=False)
-          Idempotent:  calling twice at 14:01 → second call is no-op
+        Legacy flat rollover: promote nw → tw in-place for the current row.
+        Prefer rollover_season() for v8 history-preserving behaviour.
         """
         now            = datetime.now(timezone.utc)
-        days_since_mon = now.weekday()       # Mon=0, Sun=6
-        # Anchor to most recent Monday 14:00 UTC
+        days_since_mon = now.weekday()
         lmd = (now - timedelta(days=days_since_mon)).replace(
             hour=DEADLINE_HOUR, minute=DEADLINE_MIN,
             second=0, microsecond=0, tzinfo=timezone.utc,
         )
-        # If that Monday 14:00 is still in the future (i.e. we're before the
-        # deadline today), step back one full week.
         if lmd > now:
             lmd -= timedelta(days=7)
 
@@ -958,11 +731,9 @@ class DatabaseManager:
                 if lmd <= last_dt:
                     return {"ok": True, "rolled": False}
             except ValueError:
-                pass   # malformed stamp → allow rollover
+                pass
 
         with self._write() as con:
-            # Promote next_week → this_week only when nw_team_json is non-empty.
-            # Members who haven't staged a next_week squad keep their current XI.
             con.execute("""
                 UPDATE user_selections
                 SET
@@ -1013,54 +784,6 @@ class DatabaseManager:
     # ── GET /api/leaderboard ──────────────────────────────────────────────────
 
     def get_leaderboard(self, week_no: int | None = None) -> dict:
-        """
-        Execute the six-CTE leaderboard pipeline and return the structured
-        response dict.
-
-        Returns the unified dual-key shape consumed by both the legacy
-        `rankings` key and the `standings`+`meta` contract from leaderboard_route.py.
-
-        Parameters
-        ----------
-        week_no : int | None
-            None  → global leaderboard (all weeks aggregated)
-            int N → week-N filter only
-
-        Returns
-        -------
-        {
-          "week_no":      int | None,
-          "generated_at": str,           # ISO-8601 UTC
-          "league_avg":   float,         # flat alias
-          "top_score":    int | float,   # flat alias
-          "member_count": int,           # flat alias
-          "meta": {
-            "league_avg":   float,
-            "top_score":    int | float,
-            "member_count": int,
-          },
-          "standings": [                 # primary key (leaderboard_route.py)
-            {
-              "rank":            int,    # DENSE_RANK — ties share rank
-              "name":            str,
-              "total_pts":       int | float,
-              "matches_counted": int,
-              "mvp": {
-                "player_id":   str,
-                "player_name": str,
-                "pts":         int | float,  # awarded (incl. cap/vc multiplier)
-              }
-            },
-            ...
-          ],
-          "rankings": <same list as standings>   # legacy alias
-        }
-
-        Week 1 validation (107/107 verified):
-          Sai  → total=488, mvp=r01(Kohli) 220 pts, rank=1
-          Moe  → total=469, mvp=s03(Kishan) 174 pts, rank=2
-          meta → league_avg=478.5, top_score=488, member_count=2
-        """
         with self._read() as con:
             rows = con.execute(
                 _LEADERBOARD_SQL, {"week_no": week_no}
@@ -1102,29 +825,219 @@ class DatabaseManager:
         return {
             "week_no":      week_no,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            # flat keys (legacy server.py contract)
             "league_avg":   league_avg,
             "top_score":    top_score,
             "member_count": member_count,
-            # structured keys (leaderboard_route.py contract)
             "meta": {
                 "league_avg":   league_avg,
                 "top_score":    top_score,
                 "member_count": member_count,
             },
             "standings": standing_rows,
-            "rankings":  standing_rows,   # same list object — zero copy cost
+            "rankings":  standing_rows,
         }
 
     # ── GET /api/poll (ETag helper) ───────────────────────────────────────────
 
     def get_etags(self) -> dict:
-        """
-        Cheap single-row read used by GET /api/poll.
-        Returns the current _saved timestamp so the frontend can skip full
-        fetches when nothing has changed.
-        """
         return {"state": self.get_meta("_saved", "never")}
+
+    # ── v4 route-level helpers (Phase-1 refactor) ─────────────────────────────
+
+    def get_current_week(self) -> int:
+        """Return the highest week_no in user_selections (min 1)."""
+        with self._read() as con:
+            row = con.execute(
+                "SELECT COALESCE(MAX(week_no), 1) AS wn FROM user_selections"
+            ).fetchone()
+            return int(row["wn"]) if row else 1
+
+    def get_players(self) -> list:
+        """Return full player roster sorted by name."""
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT id, name, team, role, price FROM players ORDER BY name"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_history(self, name: str) -> dict:
+        """Return all week rows for *name* in ascending week order."""
+        with self._read() as con:
+            current_week = self.get_current_week()
+            rows = con.execute("""
+                SELECT week_no, tw_team_json, tw_cap_id, tw_vc_id,
+                       nw_team_json, nw_cap_id, nw_vc_id
+                FROM   user_selections
+                WHERE  display_name = ?
+                ORDER  BY week_no ASC
+            """, (name,)).fetchall()
+        weeks = [
+            {
+                "week_no":    r["week_no"],
+                "is_current": r["week_no"] == current_week,
+                "this_week": {
+                    "team": _jloads(r["tw_team_json"], []),
+                    "cap":  r["tw_cap_id"],
+                    "vc":   r["tw_vc_id"],
+                },
+                "next_week": {
+                    "team": _jloads(r["nw_team_json"], []),
+                    "cap":  r["nw_cap_id"],
+                    "vc":   r["nw_vc_id"],
+                },
+            }
+            for r in rows
+        ]
+        return {"name": name, "current_week": current_week, "weeks": weeks, "ok": True}
+
+    def validate_budget(self, player_ids: list, budget: float = 100.0) -> tuple:
+        """Return (is_valid: bool, total_cost: float)."""
+        if not player_ids:
+            return True, 0.0
+        with self._read() as con:
+            ph = ",".join("?" * len(player_ids))
+            rows = con.execute(
+                f"SELECT id, price FROM players WHERE id IN ({ph})", player_ids
+            ).fetchall()
+        price_map = {r["id"]: r["price"] for r in rows}
+        total = round(sum(price_map.get(pid, 0.0) for pid in player_ids), 1)
+        return total <= budget, total
+
+    def save_next_week(self, name: str, team: list, cap, vc) -> dict:
+        """
+        Upsert nw_* columns for name's current max week_no.
+        Expects pre-validated, pre-resolved canonical player IDs.
+        Returns {"week_no": int}.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            row = con.execute(
+                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
+            ).fetchone()
+            current_week = int(row["wn"]) if row else 1
+            con.execute("""
+                INSERT INTO user_selections
+                    (display_name, week_no,
+                     tw_team_json, tw_cap_id, tw_vc_id,
+                     nw_team_json, nw_cap_id, nw_vc_id)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(display_name, week_no) DO UPDATE SET
+                    nw_team_json = excluded.nw_team_json,
+                    nw_cap_id    = excluded.nw_cap_id,
+                    nw_vc_id     = excluded.nw_vc_id
+            """, (name, current_week, "[]", None, None, json.dumps(team), cap, vc))
+            con.execute(
+                "INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
+                (now_iso,),
+            )
+        return {"week_no": current_week}
+
+    def rollover_season(
+        self,
+        force: bool = False,
+        max_weeks: int = 8,
+        deadline_hour: int = 14,
+        deadline_min: int = 0,
+    ) -> dict:
+        """
+        v8 rollover: INSERT week_no+1 rows per user (history-preserving).
+        Idempotent via _last_rollover meta stamp. Season capped at max_weeks.
+        force=True bypasses the Monday deadline gate (dev/test only).
+        """
+        now = datetime.now(timezone.utc)
+
+        if not force:
+            days_since_mon = now.weekday()
+            lmd = (now - timedelta(days=days_since_mon)).replace(
+                hour=deadline_hour, minute=deadline_min,
+                second=0, microsecond=0, tzinfo=timezone.utc,
+            )
+            if lmd > now:
+                lmd -= timedelta(days=7)
+            last_raw = self.get_meta("_last_rollover", "")
+            if last_raw:
+                try:
+                    last_dt = datetime.fromisoformat(last_raw)
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    if lmd <= last_dt:
+                        return {
+                            "ok": True, "rolled": False, "new_week_no": None,
+                            "season_complete": False,
+                            "reason": "Already rolled for this deadline",
+                        }
+                except ValueError:
+                    pass
+
+        current_week = self.get_current_week()
+        if current_week >= max_weeks:
+            return {
+                "ok": True, "rolled": False, "new_week_no": None,
+                "season_complete": True,
+                "reason": f"Season complete — {max_weeks} weeks reached",
+            }
+
+        with self._read() as con:
+            users = con.execute("""
+                SELECT display_name, MAX(week_no) AS cur_wk
+                FROM   user_selections
+                GROUP  BY display_name
+            """).fetchall()
+
+        if not users:
+            return {
+                "ok": True, "rolled": False, "new_week_no": None,
+                "season_complete": False, "reason": "No members found",
+            }
+
+        new_week_no = int(users[0]["cur_wk"]) + 1
+        now_iso     = now.isoformat()
+
+        with self._write() as con:
+            for u in users:
+                uname  = u["display_name"]
+                cur_wk = int(u["cur_wk"])
+                new_wk = cur_wk + 1
+
+                cur_row = con.execute("""
+                    SELECT tw_team_json, tw_cap_id, tw_vc_id,
+                           nw_team_json, nw_cap_id, nw_vc_id
+                    FROM   user_selections
+                    WHERE  display_name = ? AND week_no = ?
+                """, (uname, cur_wk)).fetchone()
+                if not cur_row:
+                    continue
+
+                nw_team = cur_row["nw_team_json"] or "[]"
+                nw_cap  = cur_row["nw_cap_id"]
+                nw_vc   = cur_row["nw_vc_id"]
+
+                if _jloads(nw_team, []) == []:
+                    nw_team = cur_row["tw_team_json"] or "[]"
+                    nw_cap  = cur_row["tw_cap_id"]
+                    nw_vc   = cur_row["tw_vc_id"]
+
+                con.execute("""
+                    INSERT OR IGNORE INTO user_selections
+                        (display_name, week_no,
+                         tw_team_json, tw_cap_id, tw_vc_id,
+                         nw_team_json, nw_cap_id, nw_vc_id)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (uname, new_wk, nw_team, nw_cap, nw_vc, nw_team, nw_cap, nw_vc))
+
+            if not force:
+                con.execute(
+                    "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
+                    (now_iso,),
+                )
+            con.execute(
+                "INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,)
+            )
+
+        return {
+            "ok": True, "rolled": True, "new_week_no": new_week_no,
+            "season_complete": new_week_no >= max_weeks,
+        }
 
     # ── Reset (test harness only) ─────────────────────────────────────────────
 
@@ -1136,3 +1049,7 @@ class DatabaseManager:
             con.execute("DELETE FROM user_selections")
             con.execute("DELETE FROM matches")
             con.execute("DELETE FROM meta")
+
+
+# ── Backward-compat alias ─────────────────────────────────────────────────────
+GoldenDB = DatabaseManager
