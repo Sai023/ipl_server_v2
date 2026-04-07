@@ -11,7 +11,8 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    # ARCHITECT FIX: Pinned to 22.04 for maximum browser compatibility
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
       contents: write
@@ -40,16 +41,16 @@ jobs:
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          # ARCHITECT FIX: Static key avoids the 'hashFiles' matching error
           key: ${{ runner.os }}-playwright-v1
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      - name: 5. Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: python -m playwright install --with-deps chromium
+      - name: 5. Install Playwright Chromium & System Deps
+        run: |
+          # We force the install of system dependencies specifically for 22.04
+          python -m playwright install --with-deps chromium
 
-      - name: 6. Run Scraper
+      - name: 6. Run Daily Scraper
         run: |
           mkdir -p data/matches
           python scraper.py
@@ -58,10 +59,13 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # Stage the 'Golden' Warehouse and Match JSONs
           git add data/fantasy.db data/matches/*.json 2>/dev/null || true
+          
           if ! git diff --staged --quiet; then
-            git commit -m "data: sync $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "data: internal sync $(date +'%Y-%m-%d %H:%M')"
             git push origin main
           else
-            echo "No data changes detected."
+            echo "No data changes detected. Skipping push."
           fi
