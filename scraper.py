@@ -13,16 +13,16 @@ MATCHES_DIR = Path("data/matches")
 def clean_id(raw_id) -> int:
     """
     Architectural Fail-safe: Extracts digits from any string format.
+    Uses trailing-anchor regex to prevent year-digit contamination.
     Handles 'ipl26_m01' -> 1, '1527685' -> 12, etc.
     """
     if not raw_id:
         return 0
-    raw_id_str = str(raw_id)
-    # Strip all non-numeric characters
-    clean_str = re.sub(r'\D', '', raw_id_str)
-    
+    m = re.search(r'(\d+)$', str(raw_id))
+    if not m:
+        return 0
     try:
-        val = int(clean_str)
+        val = int(m.group(1))
         # Apply ESPN offset only for large numeric IDs
         if val > 1000000:
             return val - 1527673
@@ -48,7 +48,7 @@ async def _scrape_scorecard(page, url: str) -> dict | None:
             }
         """)
     except Exception as exc:
-        print(f"  ✗ Scrape error ({url}): {exc}")
+        print(f"  \u2717 Scrape error ({url}): {exc}")
         return None
 
 async def main():
@@ -78,11 +78,11 @@ async def main():
         for match in matches:
             try:
                 raw_id = match.get("id")
-                # ARCHITECTURAL FIX: Use the standalone clean_id function
+                # ARCHITECTURAL FIX: trailing-anchor regex prevents year-digit bleed
                 match_num = clean_id(raw_id)
 
                 if match_num <= 0:
-                    print(f"  ⚠ Skipping unresolvable ID: {raw_id!r}")
+                    print(f"  \u26a0 Skipping unresolvable ID: {raw_id!r}")
                     skipped += 1
                     continue
 
@@ -93,7 +93,7 @@ async def main():
                     with open(json_path) as f:
                         cached = json.load(f)
                     db.upsert_match(cached)
-                    print(f"  ✓ Ingested cached match {match_num}")
+                    print(f"  \u2713 Ingested cached match {match_num}")
                     count += 1
                     continue
 
@@ -106,7 +106,7 @@ async def main():
                     skipped += 1
                     continue
 
-                print(f"  → Scraping match {match_num}: {url}")
+                print(f"  \u2192 Scraping match {match_num}: {url}")
                 raw = await _scrape_scorecard(page, url)
 
                 match_data = {
@@ -128,7 +128,7 @@ async def main():
                 await asyncio.sleep(1)
 
             except Exception as exc:
-                print(f"  ✗ Error for match {match.get('id')}: {exc}")
+                print(f"  \u2717 Error for match {match.get('id')}: {exc}")
                 skipped += 1
 
         await browser.close()
