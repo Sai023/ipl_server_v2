@@ -5,21 +5,20 @@ import re
 import sqlite3
 import os
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError
-from db_manager import GoldenDB
+from db_manager import DatabaseManager, _upsert_match
 
-# --- ARCHITECTURAL CONTAINER FIX ---
-# Inside a GitHub Action container, relative paths like 'data/fantasy.db' can fail.
-# This forces the script to look relative to its own physical location.
+# --- ARCHITECTURAL CONFIGURATION ---
 BASE_DIR    = Path(__file__).resolve().parent
 DB_PATH     = BASE_DIR / "data" / "fantasy.db"
 MATCHES_DIR = BASE_DIR / "data" / "matches"
 MAX_RETRIES = 3
 
 def clean_id(raw_id) -> int:
-    """Extracts match number and handles ESPN ID offsets."""
+    """Handles both sequential 'm01' and large ESPN numeric IDs."""
     if not raw_id: return 0
     m = re.search(r'(\d+)$', str(raw_id))
     if not m: return 0
@@ -28,201 +27,151 @@ def clean_id(raw_id) -> int:
         return val - 1527673 if val > 1000000 else val
     except ValueError: return 0
 
-async def parse_detailed_scorecard(page):
+def process_fantasy_stats(raw_innings):
     """
-    Injected JavaScript to extract granular player data.
-    Captures Batting, Bowling, Fielding, and Fall of Wickets.
+    Architectural Bridge: Maps raw HTML table cells to the specific
+    dictionary keys required by _upsert_match in db_manager.py.
     """
-    return await page.evaluate("""
-        () => {
-            const results = {
-                innings: [],
-                metadata: {
-                    scraped_at: new Date().toISOString(),
-                    match_notes: []
-                }
-            };
+    player_stats = {}
 
-            // Select all tables with the specific ESPN data class
-            const tables = document.querySelectorAll('table.ds-table');
-            
-            tables.forEach((tbl) => {
-                const rows = [];
-                const header = tbl.querySelector('thead tr');
+    for table in raw_innings:
+        rows = table.get('data', [])
+        table_type = table.get('type', 'general')
+
+        if table_type == 'batting':
+            for row in rows:
+                # Batting tables usually have: Player, Dismissal, R, B, M, 4s, 6s, SR
+                if len(row) < 7 or "total" in row[0].lower() or "extras" in row[0].lower(): 
+                    continue
                 
-                // Identify table type for fantasy calculation
-                let type = 'general';
-                if (header) {
-                    const txt = header.innerText;
-                    if (txt.includes('R') && txt.includes('B')) type = 'batting';
-                    else if (txt.includes('O') && txt.includes('M')) type = 'bowling';
+                name = row[0].replace('†', '').replace('(c)', '').strip()
+                pid = name.lower().replace(' ', '_')
+                
+                player_stats[pid] = {
+                    "played": True,
+                    "runs": int(row[2]) if row[2].isdigit() else 0,
+                    "balls": int(row[3]) if row[3].isdigit() else 0,
+                    "fours": int(row[5]) if row[5].isdigit() else 0,
+                    "sixes": int(row[6]) if row[6].isdigit() else 0,
+                    "got_out": 0 if "not out" in row[1].lower() else 1,
+                    "duck": 1 if row[2] == "0" and "not out" not in row[1].lower() else 0
                 }
 
-                tbl.querySelectorAll('tbody tr').forEach(tr => {
-                    // Skip hidden rows but keep info-rich cells
-                    if (tr.classList.contains('ds-hidden')) return;
-                    
-                    const cells = [...tr.querySelectorAll('td')].map(td => td.innerText.trim());
-                    // Capture everything with at least name and status/runs
-                    if (cells.length >= 2) rows.push(cells);
-                });
+        elif table_type == 'bowling':
+            for row in rows:
+                # Bowling tables usually have: Bowler, O, M, R, W, Econ, 0s, 4s, 6s, WD, NB
+                if len(row) < 5: continue
+                
+                name = row[0].replace('†', '').replace('(c)', '').strip()
+                pid = name.lower().replace(' ', '_')
+                
+                stats = player_stats.get(pid, {"played": True, "runs":0, "balls":0, "fours":0, "sixes":0})
+                stats.update({
+                    "overs": float(row[1]) if '.' in row[1] else float(row[1]),
+                    "maidens": int(row[2]) if row[2].isdigit() else 0,
+                    "runs_conceded": int(row[3]) if row[3].isdigit() else 0,
+                    "wickets": int(row[4]) if row[4].isdigit() else 0,
+                })
+                player_stats[pid] = stats
 
-                if (rows.length > 0) {
-                    results.innings.push({ type, data: rows });
-                }
-            });
+    return player_stats
 
-            // Capture Match Summary (Toss, Venue, Result)
-            document.querySelectorAll('.ds-p-4 .ds-text-tight-m').forEach(note => {
-                results.metadata.match_notes.push(note.innerText.trim());
-            });
-
-            return results;
-        }
-    """)
-
-async def scrape_match_with_retry(page, url, match_num):
-    """Guard against Container/Network timeouts with exponential backoff."""
-    # Force 'full-scorecard' view to get detailed player stats
+async def scrape_match(page, url, match_num):
+    """Container-hardened extraction targeting specific ESPN table classes."""
     target_url = url.replace("match-report", "full-scorecard")
-    
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"  → [{attempt+1}/{MAX_RETRIES}] Accessing Match {match_num}...")
             await page.goto(target_url, wait_until="domcontentloaded", timeout=45_000)
-            
-            # Wait for data tables to appear in DOM
             await page.wait_for_selector("table.ds-table", timeout=15_000)
             
-            # Brief pause for dynamic content hydration
-            await asyncio.sleep(2)
-            
-            data = await parse_detailed_scorecard(page)
-            if data and len(data['innings']) > 0:
-                return data
-                
-        except TimeoutError:
-            print(f"  ⚠ Timeout on attempt {attempt+1}. Retrying...")
-            await asyncio.sleep(5 * (attempt + 1))
+            return await page.evaluate("""
+                () => {
+                    const results = { innings: [] };
+                    document.querySelectorAll('table.ds-table').forEach(tbl => {
+                        const rows = [];
+                        const header = tbl.querySelector('thead tr')?.innerText || "";
+                        let type = 'other';
+                        if (header.includes('R') && header.includes('B')) type = 'batting';
+                        else if (header.includes('O') && header.includes('M')) type = 'bowling';
+                        
+                        tbl.querySelectorAll('tbody tr').forEach(tr => {
+                            const cells = [...tr.querySelectorAll('td')].map(td => td.innerText.trim());
+                            if (cells.length >= 2) rows.push(cells);
+                        });
+                        results.innings.push({ type, data: rows });
+                    });
+                    return results;
+                }
+            """)
         except Exception as e:
-            print(f"  ❌ Error on Match {match_num}: {e}")
-            break
+            print(f"  ⚠ Attempt {attempt+1} failed for Match {match_num}: {e}")
+            await asyncio.sleep(2)
     return None
 
 async def main():
-    """Main Scraper Orchestrator for IPL 2026."""
-    print(f"\n{'='*60}")
-    print(f"IPL 2026 CONTAINERIZED SCRAPER ENGINE")
-    print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}\n")
-    
-    # Ensure local directory exists inside the container volume
+    print(f"\n{'='*60}\nIPL 2026 SUPER SCRAPER ENGINE v3.0\n{'='*60}")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     
     if not DB_PATH.exists():
-        print(f"FATAL: Database not found at {DB_PATH.absolute()}")
-        sys.exit(1)
-
-    db = GoldenDB(DB_PATH)
-
-    # 1. Database & Schema Verification
-    try:
-        with db._read() as con:
-            con.row_factory = sqlite3.Row
-            count_res = con.execute("SELECT COUNT(*) FROM matches").fetchone()
-            total_matches = count_res[0] if count_res else 0
-            
-            print(f"DB STATUS: Connected.")
-            print(f"DB STATUS: {total_matches} records found.")
-
-            # Load targets: prioritizes completed but un-scraped matches
-            rows = con.execute("""
-                SELECT id, week_no, title, teams_json, date_label, scorecard_url, status
-                FROM   matches
-                WHERE  LOWER(status) IN ('completed', 'upcoming')
-                ORDER  BY id ASC
-            """).fetchall()
-            target_list = [dict(r) for r in rows]
-    except Exception as db_err:
-        print(f"DATABASE ERROR: {db_err}")
+        print(f"FATAL: Database not found at {DB_PATH}")
         return
 
-    if not target_list:
-        print("LOG: No matches meet criteria for scraping.")
+    db = DatabaseManager(DB_PATH)
+
+    with db._read() as con:
+        # Fetch only completed matches that still need detailed scores
+        rows = con.execute("SELECT * FROM matches WHERE LOWER(status) = 'completed'").fetchall()
+        targets = [dict(r) for r in rows]
+
+    if not targets:
+        print("INFO: No completed matches found for processing.")
         return
 
-    processed = 0
-    
     async with async_playwright() as pw:
-        # CRITICAL CONTAINER FLAGS: These prevent Chromium from crashing in Docker
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox", 
-                "--disable-setuid-sandbox", 
-                "--disable-dev-shm-usage", # Essential for containers
-                "--disable-gpu"
-            ]
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
+        # Launch with flags for GitHub Action Container stability
+        browser = await pw.chromium.launch(headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"])
+        page = await browser.new_page()
 
-        for match in target_list:
-            match_id = match.get("id")
-            match_num = clean_id(match_id)
+        for m in targets:
+            m_num = clean_id(m['id'])
+            json_path = MATCHES_DIR / f"match_{m_num:02d}.json"
             
-            # Logic Guard: Only process 'completed' matches
-            if str(match.get("status")).lower() != "completed":
-                continue
-
-            json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
-            
-            # Smart Cache: Skip if file is already detailed (>5KB)
+            # Skip if match data is already detailed (>5KB)
             if json_path.exists() and json_path.stat().st_size > 5000:
-                print(f"  ✓ Match {match_num}: Cached.")
+                print(f"  ✓ Match {m_num} is already fully synced.")
                 continue
-
-            print(f"INGESTING: {match.get('title')}...")
             
-            payload = await scrape_match_with_retry(page, match.get('scorecard_url'), match_num)
+            print(f"SYNCING: Match {m_num} - {m['title']}")
+            raw_data = await scrape_match(page, m['scorecard_url'], m_num)
             
-            if payload:
-                # Build production-ready JSON object
-                match_data = {
-                    "metadata": {
-                        "id": match_id,
-                        "match_no": match_num,
-                        "week": match.get("week_no"),
-                        "teams": json.loads(match.get("teams_json") or "[]"),
-                        "date": match.get("date_label"),
-                        "info": payload['metadata']
-                    },
-                    "scorecard": payload['innings'],
-                    "status": "completed"
+            if raw_data:
+                # Transform raw HTML tables into structured player dictionaries
+                scores_dict = process_fantasy_stats(raw_data['innings'])
+                
+                match_payload = {
+                    "id": m['id'],
+                    "wk": m['week_no'],
+                    "title": m['title'],
+                    "teams": json.loads(m['teams_json'] or "[]"),
+                    "date": m['date_label'],
+                    "status": "completed",
+                    "scores": scores_dict
                 }
 
-                # Save to filesystem
+                # 1. Write to JSON for frontend/audit
                 with open(json_path, "w", encoding='utf-8') as f:
-                    json.dump(match_data, f, indent=2, ensure_ascii=False)
+                    json.dump(match_payload, f, indent=2, ensure_ascii=False)
                 
-                # Sync back to DB for other app modules
-                db.upsert_match(match_data)
-                
-                processed += 1
-                print(f"  ✅ SUCCESS: Match {match_num} synced.")
-                await asyncio.sleep(1.5)
-            else:
-                print(f"  ❌ FAILED: Skipping Match {match_num} after retries.")
+                # 2. Sync to Database (using db_manager's write lock)
+                try:
+                    with db._write() as write_con:
+                        _upsert_match(write_con, match_payload)
+                    print(f"  ✅ SUCCESS: Match {m_num} data persisted to DB.")
+                except Exception as e:
+                    print(f"  ❌ DB ERROR: Match {m_num} could not be saved: {e}")
 
         await browser.close()
-
-    print(f"\nSUMMARY: {processed} matches successfully updated.")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}\nWORKFLOW SYNC COMPLETE\n{'='*60}\n")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nShutdown signal received.")
+    asyncio.run(main())
