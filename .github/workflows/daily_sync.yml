@@ -5,37 +5,66 @@ on:
     - cron: '0 0 * * *'  # Daily at midnight UTC
   workflow_dispatch:     # Allow manual triggering
 
+# Prevent concurrent runs from corrupting the SQLite DB
+concurrency:
+  group: sync-group
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install playwright
+        run: |
+          pip install playwright
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Install Playwright browsers
+      - name: Cache Playwright Browsers
+        id: cache-playwright
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
+
+      - name: Install Playwright Chromium
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: python -m playwright install --with-deps chromium
 
-      - name: Run daily scraper
-        run: python scraper.py
-        # GoldenDB (db_manager.py) initialises the schema automatically on
-        # first run — no separate DB setup script is required.
+      - name: Run Daily Scraper
+        # Ensure the data/matches directory exists before scraping
+        run: |
+          mkdir -p data/matches
+          python scraper.py
 
-      - name: Commit and push updates
+      - name: Commit and Push Updates
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/matches/ data/fantasy.db 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Daily sync: $(date +'%Y-%m-%d')"
-          git push
+          
+          # Stage the SQLite DB and all match JSON files
+          git add data/fantasy.db
+          git add data/matches/*.json 2>/dev/null || true
+          
+          # Atomic commit logic: only push if data actually changed
+          if ! git diff --staged --quiet; then
+            git commit -m "data: internal sync $(date +%Y-%m-%d)"
+            git push origin main
+          else
+            echo "No new data changes detected. Skipping push."
+          fi
