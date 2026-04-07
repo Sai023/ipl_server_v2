@@ -6,6 +6,7 @@ Robust ID handling, status transitions, and data validation
 import json
 import sqlite3
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 import asyncio
@@ -24,7 +25,6 @@ def get_clean_id(raw_id):
     raw_str = str(raw_id).strip()
     
     # Extract numeric portion
-    # Pattern: Extract last group of digits after any prefix/separator
     match = re.search(r'(\d+)$', raw_str)
     if not match:
         return None
@@ -112,12 +112,6 @@ async def process_match(conn, match, page):
     
     json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
     
-    # State transition: upcoming → completed (if date passed)
-    if match['status'] == 'upcoming':
-        # Check if match date has passed
-        # For now, skip auto-transition (needs date parsing)
-        pass
-    
     # State: completed → scrape → completed_scraped_data
     if match['status'] == 'completed':
         
@@ -171,14 +165,13 @@ async def main():
     """Main scraper loop with state machine"""
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     
+    # Check if database exists
+    if not DB_PATH.exists():
+        print("Error: Database not found at data/fantasy.db")
+        sys.exit(0)
+    
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    
-    # Add completed_scraped_data status if not exists
-    try:
-        conn.execute("ALTER TABLE matches DROP CONSTRAINT matches_status_check")
-    except:
-        pass
     
     # Get all completed matches (not yet scraped)
     matches = conn.execute("""
@@ -187,6 +180,11 @@ async def main():
         WHERE status IN ('completed', 'completed_scraped_data')
         ORDER BY id
     """).fetchall()
+    
+    if len(matches) == 0:
+        print("No matches to scrape.")
+        conn.close()
+        sys.exit(0)
     
     print(f"Found {len(matches)} matches to process")
     

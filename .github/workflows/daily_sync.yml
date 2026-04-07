@@ -5,6 +5,9 @@ on:
     - cron: '0 0 * * *'  # Daily at midnight UTC
   workflow_dispatch:  # Allow manual triggering
 
+permissions:
+  contents: write  # Required for git push
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -20,7 +23,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install playwright
+          pip install playwright requests beautifulsoup4 pandas
           playwright install chromium
       
       - name: Run unified scraper
