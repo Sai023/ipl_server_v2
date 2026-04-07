@@ -1,45 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v9
+IPL Fantasy 2026 — Flask Server                             Golden File v10
 ===========================================================================
 All persistence delegated to DatabaseManager / GoldenDB (db_manager.py).
 This file owns: routing, rate-limiting, tunnel management, startup,
 season-history seeding, rolling-week rollover, and the intelligent
 player-matching / fuzzy-resolution engine.
 
-v9 changes (Phase-1 refactor):
-  • Removed standalone _get_current_week() and _validate_budget() helpers.
-  • api_current_week  → db.get_current_week()
-  • api_history       → db.get_history(n)
-  • api_save_next_week → db.validate_budget() + db.save_next_week()
-  • api_rollover      → db.rollover_season()
-  • api_players       → db.get_players()
-  • _db_con() retained for resolver functions only.
-
-PLAYER MATCHING ENGINE  (v8 — "Sensible Decision" resolver)
-────────────────────────────────────────────────────────────
-Resolution priority (highest → lowest):
-  1. Exact player ID match             (e.g. "r01")
-  2. Exact full-name + team match      (e.g. "Virat Kohli" + "RCB")
-  3. Exact full-name (no team filter)
-  4. Semantic shorthand                (e.g. "VK" → "Virat Kohli")
-  5. Token-set fuzzy name              (e.g. "V. Kohli" → "Virat Kohli")
-  6. Last-name / suffix fallback       (e.g. "Pandya" → best candidate)
-
-Routes (v9):
-  GET  /api/history/<n>          → all week rows for a user
-  GET  /api/current-week         → current active week_no
-  POST /api/save-next-week/<n>   → save nw_* columns (resolves names → IDs; validates budget)
-  POST /api/rollover             → insert new week row (idempotent, ?force=1)
-  POST /api/seed-history         → one-time seed of W0 + W1
-  POST /api/resolve-player       → resolve name/shorthand → canonical player row
-  GET  /api/players              → full players roster
-  GET  /api/ping
-  GET  /api/state                → full league state (ETag-aware)
-  POST /api/state                → full merge save (legacy)
-  PUT  /api/member/<n>           → upsert picks (legacy)
-  POST /api/match                → upsert one match + scores
-  GET  /api/leaderboard          → ranked standings
-  GET  /api/poll                 → lightweight ETag check
+v10 changes (Phase-2 polish):
+  • /api/rollover passes _resolver closure into db.rollover_season()
+    so carry-forward IDs are canonicalised by the full fuzzy engine.
 """
 
 import collections
@@ -588,8 +557,6 @@ def serve_static(filename):
     return send_from_directory(STATIC_DIR, filename)
 
 
-# ── /api/state  (legacy full-state, ETag-aware) ───────────────────────────────
-
 @app.route("/api/state", methods=["GET"])
 def api_get_state():
     try:
@@ -621,8 +588,6 @@ def api_save_state():
         return jsonify({"error": str(e), "code": 500}), 500
 
 
-# ── /api/current-week ─────────────────────────────────────────────────────────
-
 @app.route("/api/current-week", methods=["GET"])
 def api_current_week():
     try:
@@ -631,8 +596,6 @@ def api_current_week():
         _log(f"GET /api/current-week failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
-
-# ── /api/resolve-player  ──────────────────────────────────────────────────────
 
 @app.route("/api/resolve-player", methods=["POST"])
 def api_resolve_player():
@@ -643,17 +606,13 @@ def api_resolve_player():
         d     = request.get_json(force=True, silent=True) or {}
         query = (d.get("query") or "").strip()
         team  = (d.get("team")  or "").strip() or None
-
         if not query:
             return jsonify({"error": "query is required", "code": 400}), 400
-
         con   = _db_con()
         match = resolve_player_id(con, query, team_hint=team)
         con.close()
-
         if not match:
             return jsonify({"ok": False, "error": "No match found", "input": query}), 404
-
         tier = match.pop("_match_tier", None)
         return jsonify({
             "ok":         True,
@@ -666,8 +625,6 @@ def api_resolve_player():
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
-# ── /api/history/<n> ──────────────────────────────────────────────────────────
-
 @app.route("/api/history/<n>", methods=["GET"])
 def api_history(n):
     try:
@@ -679,34 +636,23 @@ def api_history(n):
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
-# ── /api/save-next-week/<n> ───────────────────────────────────────────────────
-
 @app.route("/api/save-next-week/<n>", methods=["POST"])
 def api_save_next_week(n):
-    """
-    POST /api/save-next-week/<n>
-    Resolver pass runs first (names → IDs via _db_con), then
-    budget validation and upsert delegate to GoldenDB.
-    """
     rate_err = _check_rate(_write_limiter)
     if rate_err:
         return rate_err
     try:
         if not n or len(n) > 30:
             return jsonify({"error": "invalid name", "code": 400}), 400
-
         d = request.get_json(force=True, silent=True)
         if not isinstance(d, dict):
             return jsonify({"error": "expected JSON object", "code": 400}), 400
-
         team = d.get("team", [])
         cap  = d.get("cap")
         vc   = d.get("vc")
-
         if not isinstance(team, list):
             return jsonify({"error": "team must be a list", "code": 400}), 400
 
-        # ── Resolver pass (names → canonical IDs) — uses raw connection ──────
         resolution_log = []
         if team:
             con = _db_con()
@@ -723,14 +669,12 @@ def api_save_next_week(n):
                     vc = vc_m["id"]
             con.close()
 
-        # ── Count validation ─────────────────────────────────────────────────
         if team and len(team) != XI_SIZE:
             return jsonify({
                 "error": f"Squad must have exactly {XI_SIZE} players (got {len(team)})",
                 "code": 422,
             }), 422
 
-        # ── Budget validation via GoldenDB ───────────────────────────────────
         if team:
             is_valid, total_cost = db.validate_budget(team, BUDGET_TOTAL)
             if not is_valid:
@@ -743,7 +687,6 @@ def api_save_next_week(n):
         else:
             total_cost = 0.0
 
-        # ── Persist via GoldenDB ─────────────────────────────────────────────
         result = db.save_next_week(n, team, cap, vc)
         return jsonify({
             "ok":             True,
@@ -757,8 +700,6 @@ def api_save_next_week(n):
         _log(f"POST /api/save-next-week/{n} failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
-
-# ── /api/member/<n>  (legacy PUT) ─────────────────────────────────────────────
 
 @app.route("/api/member/<n>", methods=["PUT"])
 def api_member(n):
@@ -778,8 +719,6 @@ def api_member(n):
         return jsonify({"error": str(e), "code": 500}), 500
 
 
-# ── /api/match ─────────────────────────────────────────────────────────────────
-
 @app.route("/api/match", methods=["POST"])
 def api_match():
     rate_err = _check_rate(_write_limiter)
@@ -796,29 +735,35 @@ def api_match():
         return jsonify({"error": str(e), "code": 500}), 500
 
 
-# ── /api/rollover  (v8 history-preserving via GoldenDB) ───────────────────────
-
 @app.route("/api/rollover", methods=["POST"])
 def api_rollover():
     """
     POST /api/rollover[?force=1]
-    Delegates to db.rollover_season() — see GoldenDB.rollover_season() docstring.
+    Delegates to db.rollover_season() with a resolver_callback that wraps
+    the full fuzzy-resolution engine so carry-forward IDs are canonical.
     """
     force = request.args.get("force", "").strip() in ("1", "true", "yes")
     try:
+        def _resolver(ids: list) -> list:
+            con = _db_con()
+            try:
+                resolved, _ = resolve_id_list(con, ids)
+            finally:
+                con.close()
+            return resolved
+
         result = db.rollover_season(
             force=force,
             max_weeks=MAX_WEEKS,
             deadline_hour=DEADLINE_HOUR,
             deadline_min=DEADLINE_MIN,
+            resolver_callback=_resolver,
         )
         return jsonify(result)
     except Exception as e:
         _log(f"POST /api/rollover failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
-
-# ── /api/seed-history ─────────────────────────────────────────────────────────
 
 @app.route("/api/seed-history", methods=["POST"])
 def api_seed_history():
@@ -833,8 +778,6 @@ def api_seed_history():
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
-# ── /api/players ──────────────────────────────────────────────────────────────
-
 @app.route("/api/players", methods=["GET"])
 def api_players():
     try:
@@ -846,8 +789,6 @@ def api_players():
         _log(f"GET /api/players failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
-
-# ── /api/ping ──────────────────────────────────────────────────────────────────
 
 @app.route("/api/ping")
 def api_ping():
@@ -864,8 +805,6 @@ def api_ping():
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
-# ── /api/leaderboard ───────────────────────────────────────────────────────────
-
 @app.route("/api/leaderboard", methods=["GET"])
 def api_leaderboard():
     try:
@@ -878,8 +817,6 @@ def api_leaderboard():
         return jsonify({"error": str(e), "code": 500}), 500
 
 
-# ── /api/poll ──────────────────────────────────────────────────────────────────
-
 @app.route("/api/poll", methods=["GET"])
 def api_poll():
     try:
@@ -889,8 +826,6 @@ def api_poll():
         _log(f"GET /api/poll failed: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
-
-# ── /manifest.json + /offline ──────────────────────────────────────────────────
 
 @app.route("/manifest.json")
 def manifest():

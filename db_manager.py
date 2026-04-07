@@ -1,31 +1,16 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v4
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5
 ===========================================================================
 Single source of truth for all SQLite interaction.
 
 Import in server.py:
     from db_manager import DatabaseManager, GoldenDB, calc_pts
 
-Key invariants (107/107 test-verified):
-  • Overs stored as fractional real: 3.5 = 3 overs 5 balls → normalised to
-    3 + 5/6 ≈ 3.8333 before economy-rate arithmetic.  Ball digit clamped 0–5.
-  • Monday 14:00 UTC is the rollover deadline anchor.  At 13:59 the engine
-    computes lmd = next Monday 14:00 > now → subtracts 7 days → lmd = last
-    Monday 14:00.  A prior meta stamp from that same deadline makes the call
-    a no-op (idempotent).  Fires at 14:01 on a fresh fixture (no prior stamp).
-  • Cap ×2 / VC ×1.5 applied in SQL via ROUND() — matches JS engine exactly.
-  • MVP = player with highest awarded_pts per user; MIN(player_id) breaks ties.
-  • DENSE_RANK: tied total_pts share the same rank, no gaps.
-  • league_avg = ROUND(AVG, 1) across all members in the filtered result set.
-
-v4 additions (Phase-1 refactor):
-  • get_current_week()  — moved from server.py helper
-  • get_players()       — moved from server.py route
-  • get_history(name)   — moved from server.py route
-  • validate_budget()   — moved from server.py helper
-  • save_next_week()    — moved from server.py route (pre-resolved IDs)
-  • rollover_season()   — v8 history-preserving INSERT-new-row rollover
-  • GoldenDB alias      — backward-compat name used by scraper.py
+v5 additions (Phase-2 polish):
+  • rollover_season() accepts resolver_callback=None
+    callable(list[str]) -> list[str] — applied to carry-forward team IDs
+    so server.py can inject the full fuzzy-resolver without db_manager
+    depending on application logic.
 """
 
 import json
@@ -842,7 +827,7 @@ class DatabaseManager:
     def get_etags(self) -> dict:
         return {"state": self.get_meta("_saved", "never")}
 
-    # ── v4 route-level helpers (Phase-1 refactor) ─────────────────────────────
+    # ── Route-level helpers (Phase-1 refactor) ────────────────────────────────
 
     def get_current_week(self) -> int:
         """Return the highest week_no in user_selections (min 1)."""
@@ -938,11 +923,18 @@ class DatabaseManager:
         max_weeks: int = 8,
         deadline_hour: int = 14,
         deadline_min: int = 0,
+        resolver_callback=None,
     ) -> dict:
         """
         v8 rollover: INSERT week_no+1 rows per user (history-preserving).
         Idempotent via _last_rollover meta stamp. Season capped at max_weeks.
         force=True bypasses the Monday deadline gate (dev/test only).
+
+        resolver_callback: optional callable(list[str]) -> list[str]
+            When supplied, each user's carry-forward team IDs are passed
+            through this function before the new row is written.  The server
+            injects resolve_id_list() here so canonical IDs are guaranteed
+            without db_manager importing any application logic.
         """
         now = datetime.now(timezone.utc)
 
@@ -1016,6 +1008,14 @@ class DatabaseManager:
                     nw_team = cur_row["tw_team_json"] or "[]"
                     nw_cap  = cur_row["tw_cap_id"]
                     nw_vc   = cur_row["tw_vc_id"]
+
+                # ── Resolver pass: canonicalise IDs via server-injected callback
+                if resolver_callback is not None:
+                    try:
+                        resolved = resolver_callback(_jloads(nw_team, []))
+                        nw_team  = json.dumps(resolved)
+                    except Exception:
+                        pass   # silently keep original on resolver failure
 
                 con.execute("""
                     INSERT OR IGNORE INTO user_selections

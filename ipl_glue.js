@@ -1,89 +1,53 @@
 /**
- * static/ipl_glue.js — Frontend Integration Layer          Golden File v6
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7
  * =========================================================================
- * Drop this script tag AFTER the app bundle in templates/index.html:
- *
- *   <script src="/static/ipl_glue.js"></script>
+ * CHANGES vs v6:
+ *   • IplConfig gains current_week (hydrated on init + after every rollover)
+ *   • IplApi.rollover() dispatches "ipl:week-changed" with { week_no, max_weeks }
+ *     after a successful roll, so any UI panel can update without page refresh.
+ *   • IplApi.rollover() dispatches "ipl:season-complete" when the season cap
+ *     is reached (season_complete === true).
+ *   • _init() calls IplApi.getCurrentWeek() to prime IplConfig.current_week.
  *
  * Wire events:
  *   window.addEventListener("ipl:state-updated",       e => render(e.detail));
  *   window.addEventListener("ipl:leaderboard-updated", e => renderLb(e.detail));
  *   window.addEventListener("ipl:players-updated",     e => setPlayers(e.detail));
+ *   window.addEventListener("ipl:rollover-triggered",  e => onRollover(e.detail));
+ *   window.addEventListener("ipl:week-changed",        e => onWeekChange(e.detail));  // NEW v7
+ *   window.addEventListener("ipl:season-complete",     e => onSeasonEnd(e.detail));   // NEW v7
  *   window.addEventListener("ipl:error",               e => console.error(e.detail));
- *
- * After writes, dispatch "ipl:saved" to bust the ETag cache:
- *   await window.IplApi.saveNextWeek(name, picks);
- *   window.dispatchEvent(new CustomEvent("ipl:saved"));
- *
- * ── What this file does ────────────────────────────────────────────────────
- *
- * 1. LEADERBOARD NORMALISATION
- *    normaliseLeaderboard() handles all server response shapes.
- *
- * 2. 60-SECOND ETag POLLING
- *    GET /api/poll → { state_etag }. Full fetches fire only on ETag change.
- *    Tab hidden → polling paused. Tab focused → immediate cycle resumes.
- *
- * 3. MAINTENANCE MODE OVERLAY
- *    Any 5xx / network failure schedules overlay after MAINTENANCE_DELAY ms.
- *    On recovery the overlay is removed automatically.
- *
- * 4. window.IplApi
- *    Thin async wrappers over every API endpoint. Includes:
- *      getHistory(name)               → GET  /api/history/<n>
- *      saveNextWeek(name, picks)      → POST /api/save-next-week/<n>
- *      getPlayers()                   → GET  /api/players
- *      getCurrentWeek()               → GET  /api/current-week
- *      rollover(force)                → POST /api/rollover[?force=1]
- *      seedHistory()                  → POST /api/seed-history
- *      resolvePlayer(query, team)     → POST /api/resolve-player  ← NEW v6
- *
- * 5. SEASON / BUDGET CONSTANTS
- *    window.IplConfig.budget    — 100.0 CR (from /api/ping)
- *    window.IplConfig.xi_size   — 11
- *    window.IplConfig.max_weeks — 8
- *
- * 6. MONDAY 14:00 AUTO-ROLLOVER  ← NEW v6
- *    Schedules an automatic /api/rollover call for the next Monday 14:00 UTC.
- *    Fires "ipl:rollover-triggered" event on completion.
- *    Re-schedules itself after each cycle.
  *
  * ── Exported globals ───────────────────────────────────────────────────────
  *   window.IplApi               — API wrapper object
  *   window.IplPolling           — { start(), stop() }
- *   window.IplConfig            — { budget, xi_size, max_weeks }
+ *   window.IplConfig            — { budget, xi_size, max_weeks, current_week }
  *   window.IplRollover          — { scheduleNext(), cancelPending() }
  *   window.normaliseLeaderboard — pure function (exposed for unit tests)
- *
- * CHANGES vs v5:
- *   • resolvePlayer(query, team) → POST /api/resolve-player
- *   • Monday 14:00 UTC auto-rollover scheduler (IplRollover)
- *   • _pollCycle also re-checks current-week after rollover events
- *   • IplApi.rollover() dispatches "ipl:rollover-triggered" on success
  */
 
 (function (window) {
   "use strict";
 
   // ── Config ────────────────────────────────────────────────────────────────
-  var POLL_INTERVAL_MS  = 60000;   // 60 seconds
-  var MAINTENANCE_DELAY = 1500;    // ms before overlay appears
-  var ROLLOVER_HOUR_UTC = 14;      // Monday 14:00 UTC
+  var POLL_INTERVAL_MS  = 60000;
+  var MAINTENANCE_DELAY = 1500;
+  var ROLLOVER_HOUR_UTC = 14;
   var ROLLOVER_MIN_UTC  = 0;
 
-
   // ── Module state ──────────────────────────────────────────────────────────
-  var _lastStateEtag    = null;
-  var _overlayTimer     = null;
-  var _overlayVisible   = false;
-  var _pollTimer        = null;
-  var _rolloverTimer    = null;
+  var _lastStateEtag  = null;
+  var _overlayTimer   = null;
+  var _overlayVisible = false;
+  var _pollTimer      = null;
+  var _rolloverTimer  = null;
 
-  // ── Season/budget config (hydrated from /api/ping) ────────────────────────
+  // ── Season/budget config (hydrated from /api/ping + /api/current-week) ───
   var IplConfig = {
-    budget:    100.0,
-    xi_size:   11,
-    max_weeks: 8,
+    budget:       100.0,
+    xi_size:      11,
+    max_weeks:    8,
+    current_week: 1,
   };
 
 
@@ -224,34 +188,16 @@
   // MONDAY 14:00 UTC AUTO-ROLLOVER SCHEDULER
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Returns the milliseconds until the next Monday 14:00:00 UTC.
-   * If we are past Monday 14:00 UTC this week, targets next week's Monday.
-   */
   function _msUntilNextRollover() {
-    var now   = new Date();
-    var dayMs = 24 * 60 * 60 * 1000;
-
-    // 0=Sun 1=Mon … 6=Sat (UTC)
-    var utcDay   = now.getUTCDay();       // 0-6
-    var utcH     = now.getUTCHours();
-    var utcM     = now.getUTCMinutes();
-    var utcS     = now.getUTCSeconds();
-    var utcMs    = now.getUTCMilliseconds();
-
-    // Days until next Monday
+    var now  = new Date();
+    var utcDay = now.getUTCDay();
     var daysUntilMon = (utcDay === 1) ? 0 : (8 - utcDay) % 7;
-
-    // Build the candidate Monday 14:00 UTC
     var candidate = new Date(now);
     candidate.setUTCDate(now.getUTCDate() + daysUntilMon);
     candidate.setUTCHours(ROLLOVER_HOUR_UTC, ROLLOVER_MIN_UTC, 0, 0);
-
-    // If candidate is in the past (or within 5 s), push to next Monday
     if (candidate.getTime() - now.getTime() <= 5000) {
       candidate.setUTCDate(candidate.getUTCDate() + 7);
     }
-
     return candidate.getTime() - now.getTime();
   }
 
@@ -261,8 +207,6 @@
       .then(function (data) {
         if (data && data.rolled) {
           console.info("[IplRollover] Rollover complete — new week: " + data.new_week_no);
-          window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
-          // Bust ETag so the UI refreshes
           _lastStateEtag = null;
           _pollCycle();
         } else {
@@ -273,31 +217,20 @@
         console.warn("[IplRollover] Rollover failed:", err.message || err);
       })
       .finally(function () {
-        // Always schedule the next cycle regardless of outcome
         _scheduleNextRollover();
       });
   }
 
   function _scheduleNextRollover() {
-    if (_rolloverTimer) {
-      clearTimeout(_rolloverTimer);
-      _rolloverTimer = null;
-    }
-    var ms = _msUntilNextRollover();
-    // Cap at 7 days to handle setTimeout integer overflow
+    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
+    var ms     = _msUntilNextRollover();
     var capped = Math.min(ms, 7 * 24 * 60 * 60 * 1000);
-    console.info(
-      "[IplRollover] Next rollover scheduled in " +
-      Math.round(capped / 60000) + " min"
-    );
+    console.info("[IplRollover] Next rollover scheduled in " + Math.round(capped / 60000) + " min");
     _rolloverTimer = setTimeout(_executeRollover, capped);
   }
 
   function _cancelRolloverTimer() {
-    if (_rolloverTimer) {
-      clearTimeout(_rolloverTimer);
-      _rolloverTimer = null;
-    }
+    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
   }
 
   var IplRollover = {
@@ -312,7 +245,6 @@
 
   var IplApi = {
 
-    /** GET /api/state — full legacy league state. ETag-aware. */
     getState: function () {
       var headers = { "Accept": "application/json" };
       if (_lastStateEtag) headers["If-None-Match"] = _lastStateEtag;
@@ -329,41 +261,23 @@
       });
     },
 
-    /** GET /api/leaderboard[?week=N] */
     getLeaderboard: function (weekNo) {
       var url = (weekNo != null) ? ("/api/leaderboard?week=" + weekNo) : "/api/leaderboard";
       return _fetchJson(url).then(normaliseLeaderboard);
     },
 
-    /** GET /api/players → { players, by_id, by_name, ok } */
     getPlayers: function () {
       return _fetchJson("/api/players");
     },
 
-    /** GET /api/current-week → { week_no, max_weeks, ok } */
     getCurrentWeek: function () {
       return _fetchJson("/api/current-week");
     },
 
-    /**
-     * GET /api/history/<n>
-     * Returns { name, current_week, weeks:[{week_no, is_current, this_week, next_week}], ok }
-     */
     getHistory: function (name) {
       return _fetchJson("/api/history/" + encodeURIComponent(name));
     },
 
-    /**
-     * POST /api/save-next-week/<n>
-     * Saves ONLY the nw_* columns. Never touches the locked this_week.
-     * Server validates XI_SIZE=11 and budget ≤ 100.0 CR.
-     * Server v8 also resolves name strings → canonical IDs before saving.
-     * Rejects with 422 if budget exceeded or wrong player count.
-     *
-     * @param {string} name
-     * @param {{ team: string[], cap: string|null, vc: string|null }} picks
-     * @returns Promise<{ ok, week_no, total_cost, resolution_log }|null>
-     */
     saveNextWeek: function (name, picks) {
       return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
         method: "POST",
@@ -372,21 +286,6 @@
       });
     },
 
-    /**
-     * POST /api/resolve-player  (NEW — v6)
-     * Resolves a player name, shorthand, or ID to the canonical Players record.
-     *
-     * Tier 1: exact ID match       ("r01")
-     * Tier 2: exact name + team    ("Virat Kohli" + "RCB")
-     * Tier 3: exact name           ("Phil Salt")
-     * Tier 4: semantic shorthand   ("VK" → "Virat Kohli")
-     * Tier 5: fuzzy token-set      ("V. Kohli" → "Virat Kohli")
-     * Tier 6: last-name suffix     ("Pandya" → best candidate)
-     *
-     * @param {string}      query  Player name, ID, or shorthand
-     * @param {string|null} team   Optional team code hint (e.g. "MI", "RCB")
-     * @returns Promise<{ ok, input, match_tier, resolved:{id,name,team,role,price} }|null>
-     */
     resolvePlayer: function (query, team) {
       return _fetchJson("/api/resolve-player", {
         method: "POST",
@@ -395,7 +294,6 @@
       });
     },
 
-    /** GET /api/ping — also hydrates IplConfig */
     ping: function () {
       return _fetchJson("/api/ping").then(function (d) {
         if (d) {
@@ -407,7 +305,6 @@
       });
     },
 
-    /** POST /api/state — legacy full merge save */
     saveState: function (payload) {
       return _fetchJson("/api/state", {
         method: "POST",
@@ -416,7 +313,6 @@
       });
     },
 
-    /** PUT /api/member/<n> — legacy upsert */
     saveMember: function (name, data) {
       return _fetchJson("/api/member/" + encodeURIComponent(name), {
         method: "PUT",
@@ -425,7 +321,6 @@
       });
     },
 
-    /** POST /api/match */
     saveMatch: function (matchObj) {
       return _fetchJson("/api/match", {
         method: "POST",
@@ -436,24 +331,46 @@
 
     /**
      * POST /api/rollover[?force=1]
-     * @param {boolean} force  true → bypass Monday deadline gate (dev/testing)
-     * Returns { ok, rolled, new_week_no, season_complete, reason? }
-     * Dispatches "ipl:rollover-triggered" when rolled === true.
+     *
+     * On success (rolled === true):
+     *   1. Fetches /api/current-week and updates IplConfig.current_week.
+     *   2. Dispatches "ipl:week-changed"   { week_no, max_weeks }
+     *   3. Dispatches "ipl:rollover-triggered" { ...server response }
+     *   4. Busts ETag so next poll fetches fresh state + leaderboard.
+     *
+     * On season_complete === true:
+     *   Dispatches "ipl:season-complete" in addition to the above.
      */
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
       return _fetchJson(url, { method: "POST" }).then(function (data) {
-        if (data && data.season_complete) {
+        if (!data) return data;
+
+        if (data.season_complete) {
           console.warn("[IplApi] Season complete — all " + IplConfig.max_weeks + " weeks rolled.");
+          window.dispatchEvent(new CustomEvent("ipl:season-complete", { detail: data }));
         }
-        if (data && data.rolled) {
+
+        if (data.rolled) {
+          // Re-fetch current week from server and update IplConfig
+          _fetchJson("/api/current-week").then(function (wk) {
+            if (wk && wk.week_no != null) {
+              IplConfig.current_week = wk.week_no;
+              window.dispatchEvent(new CustomEvent("ipl:week-changed", {
+                detail: { week_no: wk.week_no, max_weeks: wk.max_weeks }
+              }));
+            }
+          }).catch(function () {});
+
+          // Bust ETag → next poll cycle will pull fresh state + leaderboard
+          _lastStateEtag = null;
           window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
         }
+
         return data;
       });
     },
 
-    /** POST /api/seed-history — idempotent W0/W1 seed */
     seedHistory: function () {
       return _fetchJson("/api/seed-history", { method: "POST" });
     },
@@ -513,9 +430,14 @@
     // Hydrate IplConfig from server
     IplApi.ping().catch(function () {});
 
-    startPolling();
+    // Prime current_week synchronously for components that read IplConfig early
+    IplApi.getCurrentWeek().then(function (wk) {
+      if (wk && wk.week_no != null) {
+        IplConfig.current_week = wk.week_no;
+      }
+    }).catch(function () {});
 
-    // Start the Monday 14:00 auto-rollover scheduler
+    startPolling();
     _scheduleNextRollover();
 
     document.addEventListener("visibilitychange", function () {
@@ -523,7 +445,6 @@
         stopPolling();
       } else {
         startPolling();
-        // Immediately check if a rollover happened while tab was hidden
         _pollCycle();
       }
     });
@@ -532,13 +453,11 @@
       _lastStateEtag = null;
     });
 
-    // Re-poll after any rollover to pick up new week state
     window.addEventListener("ipl:rollover-triggered", function () {
       _lastStateEtag = null;
       _pollCycle();
     });
 
-    // Signal to the app script (index.html) that IplApi is now available.
     window.dispatchEvent(new CustomEvent("ipl:ready"));
   }
 
