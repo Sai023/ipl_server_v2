@@ -24,6 +24,7 @@ v2 fixes:
 """
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -32,25 +33,28 @@ from db_manager import GoldenDB
 
 DB_PATH     = Path("data/fantasy.db")
 MATCHES_DIR = Path("data/matches")
-
-
-def _clean_id(raw_id) -> str | None:
-    """
-    Normalise any ESPN / internal match ID to a plain integer string.
-
-    Handled formats
-    ---------------
-    '1527685'      -> '12'    large ESPN numeric ID (subtract 1527673 base)
-    'ipl2026_12'   -> '12'    underscore-prefixed numeric suffix
-    'ipl26_m01'    -> '1'     underscore-prefixed alpha-numeric (strip alpha)
-    '12'           -> '12'    plain numeric passthrough
-    None / ''      -> None
-    """
-    if raw_id is None:
-        return None
-    s = str(raw_id).strip()
-    if not s:
-        return None
+    def _clean_id(self, raw_id) -> int:
+        """
+        Normalizes any ESPN / Internal match ID to a plain integer.
+        Uses Regex to strip all non-numeric characters for production resilience.
+        """
+        
+        if not raw_id:
+            return 0
+            
+        raw_id_str = str(raw_id)
+        
+        # Strip all non-digits (e.g., 'ipl26_m01' -> '01', '1527674' -> '1527674')
+        clean_str = re.sub(r'\D', '', raw_id_str)
+        
+        try:
+            val = int(clean_str)
+            # Apply ESPN offset only for large numeric IDs
+            if val > 1000000:
+                return val - 1527673
+            return val
+        except ValueError:
+            return 0
 
     # Strip prefix before last underscore (e.g. 'ipl2026_12' -> '12')
     if "_" in s:
@@ -122,7 +126,7 @@ async def main():
         for match in matches:
             try:
                 raw_id    = match.get("id")
-                match_num = _clean_id(raw_id)
+               match_num = self._clean_id(raw_id)
 
                 if match_num is None:
                     print(f"  ⚠ Skipping unresolvable ID: {raw_id!r}")
