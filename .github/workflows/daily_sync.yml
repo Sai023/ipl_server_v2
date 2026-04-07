@@ -31,6 +31,7 @@ jobs:
 
       - name: 4. Atomic Data Sync
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add data/fantasy.db data/matches/*.json 2>/dev/null || true
