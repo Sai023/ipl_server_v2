@@ -11,31 +11,33 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
         run: |
           pip install playwright requests beautifulsoup4 pandas
-          playwright install chromium
-      
+
+      - name: Install Playwright browsers and system deps
+        run: python -m playwright install --with-deps chromium
+
       - name: Run unified scraper
         run: python Scraper.py
-      
+
       - name: Update database
         run: python Golden_State_DB_v2.py
-      
+
       - name: Commit and push updates
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/matches/*.json data/fantasy.db
+          git add **/*.json data/fantasy.db
           git diff --staged --quiet || git commit -m "Daily sync: Update match data $(date +'%Y-%m-%d')"
           git push
