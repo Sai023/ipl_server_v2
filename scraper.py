@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import sqlite3
 from pathlib import Path
 from playwright.async_api import async_playwright
 from db_manager import GoldenDB
@@ -13,8 +14,6 @@ MATCHES_DIR = Path("data/matches")
 def clean_id(raw_id) -> int:
     """
     Architectural Fail-safe: Extracts digits from any string format.
-    Uses trailing-anchor regex to prevent year-digit contamination.
-    Handles 'ipl26_m01' -> 1, '1527685' -> 12, etc.
     """
     if not raw_id:
         return 0
@@ -23,7 +22,6 @@ def clean_id(raw_id) -> int:
         return 0
     try:
         val = int(m.group(1))
-        # Apply ESPN offset only for large numeric IDs
         if val > 1000000:
             return val - 1527673
         return val
@@ -53,32 +51,45 @@ async def _scrape_scorecard(page, url: str) -> dict | None:
 
 async def main():
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # --- ARCHITECTURAL DIAGNOSTICS ---
+    if not DB_PATH.exists():
+        print(f"CRITICAL ERROR: Database not found at {DB_PATH.absolute()}")
+        return
+
     db = GoldenDB(DB_PATH)
 
-    # ── Cold-start hydration: rebuild DB from JSON archives if empty ──────
-    try:
-        with db._read() as con:
-            n = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        if n == 0 and MATCHES_DIR.exists() and any(MATCHES_DIR.glob("*.json")):
-            print("  [scraper] Cold DB — hydrating from JSON archives...")
-            db.hydrate_from_json(MATCHES_DIR)
-    except Exception as e:
-        print(f"  [scraper] Hydration check failed: {e}")
-
+    # 1. Debug: What is actually in the DB?
     with db._read() as con:
+        con.row_factory = sqlite3.Row
+        total_rows = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        sample = con.execute("SELECT id, status FROM matches LIMIT 1").fetchone()
+        
+        print(f"--- SYSTEM DIAGNOSIS ---")
+        print(f"DATABASE PATH: {DB_PATH.absolute()}")
+        print(f"TOTAL MATCHES IN DB: {total_rows}")
+        if sample:
+            print(f"SAMPLE MATCH: ID={sample['id']}, STATUS='{sample['status']}'")
+        else:
+            print("WARNING: 'matches' table is EMPTY.")
+        print(f"------------------------")
+
+    # 2. Bulletproof Query (Case Insensitive + Explicit Columns)
+    with db._read() as con:
+        con.row_factory = sqlite3.Row
         rows = con.execute("""
-            SELECT id, week_no, title, teams_json, date_label,
-                   scorecard_url, status
+            SELECT id, week_no, title, teams_json, date_label, scorecard_url, status
             FROM   matches
-            WHERE  status IN ('completed', 'upcoming')
+            WHERE  LOWER(status) IN ('completed', 'upcoming')
             ORDER  BY id
         """).fetchall()
         matches = [dict(r) for r in rows]
 
     if not matches:
-        print("No matches to process.")
+        print("No matches to process after applying filters.")
         return
 
+    print(f"Found {len(matches)} matches to evaluate...")
     count, skipped = 0, 0
 
     async with async_playwright() as pw:
@@ -88,7 +99,6 @@ async def main():
         for match in matches:
             try:
                 raw_id = match.get("id")
-                # ARCHITECTURAL FIX: trailing-anchor regex prevents year-digit bleed
                 match_num = clean_id(raw_id)
 
                 if match_num <= 0:
@@ -107,12 +117,15 @@ async def main():
                     count += 1
                     continue
 
-                # 2. Scrape if completed
-                if match.get("status") != "completed":
+                # 2. Only scrape if status is 'completed' (case-insensitive check)
+                current_status = str(match.get("status", "")).lower()
+                if current_status != "completed":
+                    skipped += 1
                     continue
 
                 url = match.get("scorecard_url") or ""
                 if not url:
+                    print(f"  \u26a0 No URL for match {match_num}")
                     skipped += 1
                     continue
 
