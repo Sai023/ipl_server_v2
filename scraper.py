@@ -1,51 +1,130 @@
-name: IPL 2026 Daily Sync
+#!/usr/bin/env python3
+import asyncio
+import json
+import re
+import sqlite3
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+from playwright.async_api import async_playwright, TimeoutError
+from db_manager import DatabaseManager, _upsert_match
+import Seed_Matches  # Ensure Seed_Matches.py is in your root folder
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
+# --- ARCHITECTURAL PATHING ---
+BASE_DIR    = Path(__file__).resolve().parent
+DB_PATH     = BASE_DIR / "data" / "fantasy.db"
+MATCHES_DIR = BASE_DIR / "data" / "matches"
+MAX_RETRIES = 3
 
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    container:
-      image: ://microsoft.com
-      options: --shm-size=2gb
+def clean_id(raw_id) -> int:
+    if not raw_id: return 0
+    m = re.search(r'(\d+)$', str(raw_id))
+    if not m: return 0
+    try:
+        val = int(m.group(1))
+        return val - 1527673 if val > 1000000 else val
+    except ValueError: return 0
 
-    permissions:
-      contents: write
+def process_fantasy_stats(raw_innings):
+    """Maps raw web tables to the db_manager dictionary format."""
+    player_stats = {}
+    for table in raw_innings:
+        rows = table.get('data', [])
+        table_type = table.get('type', 'general')
+        if table_type == 'batting':
+            for row in rows:
+                if len(row) < 7 or "total" in row[0].lower(): continue
+                name = row[0].replace('†', '').replace('(c)', '').strip()
+                pid = name.lower().replace(' ', '_')
+                player_stats[pid] = {
+                    "played": True, "runs": int(row[2]) if row[2].isdigit() else 0,
+                    "balls": int(row[3]) if row[3].isdigit() else 0,
+                    "fours": int(row[5]) if row[5].isdigit() else 0,
+                    "sixes": int(row[6]) if row[6].isdigit() else 0,
+                    "got_out": 0 if "not out" in row[1].lower() else 1
+                }
+        elif table_type == 'bowling':
+            for row in rows:
+                if len(row) < 5: continue
+                name = row[0].replace('†', '').replace('(c)', '').strip()
+                pid = name.lower().replace(' ', '_')
+                stats = player_stats.get(pid, {"played": True})
+                stats.update({
+                    "overs": float(row[1]) if '.' in row[1] else float(row[1]),
+                    "wickets": int(row[4]) if row[4].isdigit() else 0,
+                    "runs_conceded": int(row[3]) if row[3].isdigit() else 0
+                })
+                player_stats[pid] = stats
+    return player_stats
 
-    steps:
-      - name: 1. Checkout repository
-        uses: actions/checkout@v4
+async def scrape_match(page, url, match_num):
+    target_url = url.replace("match-report", "full-scorecard")
+    for attempt in range(MAX_RETRIES):
+        try:
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=45_000)
+            await page.wait_for_selector("table.ds-table", timeout=15_000)
+            return await page.evaluate("""
+                () => {
+                    const results = { innings: [] };
+                    document.querySelectorAll('table.ds-table').forEach(tbl => {
+                        const rows = [];
+                        const header = tbl.querySelector('thead tr')?.innerText || "";
+                        let type = header.includes('R') ? 'batting' : (header.includes('O') ? 'bowling' : 'other');
+                        tbl.querySelectorAll('tbody tr').forEach(tr => {
+                            const cells = [...tr.querySelectorAll('td')].map(td => td.innerText.trim());
+                            if (cells.length >= 2) rows.push(cells);
+                        });
+                        results.innings.push({ type, data: rows });
+                    });
+                    return results;
+                }
+            """)
+        except Exception:
+            await asyncio.sleep(2)
+    return None
 
-      - name: 2. Fix Directory Permissions
-        run: chown -R $(id -u):$(id -g) $GITHUB_WORKSPACE
+async def main():
+    print(f"\nIPL 2026 ENGINE: STARTING SYNC\n{'-'*30}")
+    MATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    db = DatabaseManager(DB_PATH)
 
-      - name: 3. Install Project Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install playwright flask
-          playwright install chromium --with-deps
+    # --- ARCHITECTURAL FAIL-SAFE ---
+    with db._read() as con:
+        count = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+    if count == 0:
+        print("Empty DB detected in container. Initializing Seed...")
+        Seed_Matches.seed()
+    # -------------------------------
 
-      - name: 4. Self-Healing: Seed Database
-        # This ensures the DB is NEVER empty, even if the git push was 'kak'
-        run: |
-          mkdir -p data/matches
-          python Seed_Matches.py
+    with db._read() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT * FROM matches WHERE LOWER(status) = 'completed'").fetchall()
+        targets = [dict(r) for r in rows]
 
-      - name: 5. Run Super Scraper
-        run: |
-          export PYTHONPATH=$PYTHONPATH:.
-          python scraper.py
+    if not targets:
+        print("Status Check: No completed matches found to scrape.")
+        return
 
-      - name: 6. Atomic Data Sync
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add data/fantasy.db data/matches/*.json 2>/dev/null || true
-          if ! git diff --staged --quiet; then
-            git commit -m "data: sync $(date +%Y-%m-%d)"
-            git push origin main
-          fi
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"])
+        page = await browser.new_page()
+        for m in targets:
+            m_num = clean_id(m['id'])
+            print(f"Processing Match {m_num}...")
+            raw_data = await scrape_match(page, m['scorecard_url'], m_num)
+            if raw_data:
+                match_payload = {
+                    "id": m['id'], "wk": m['week_no'], "title": m['title'],
+                    "teams": json.loads(m['teams_json']), "date": m['date_label'],
+                    "status": "completed", "scores": process_fantasy_stats(raw_data['innings'])
+                }
+                with open(MATCHES_DIR / f"match_{m_num:02d}.json", "w") as f:
+                    json.dump(match_payload, f, indent=2)
+                with db._write() as write_con:
+                    _upsert_match(write_con, match_payload)
+        await browser.close()
+    print("Sync Complete.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
