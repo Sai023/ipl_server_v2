@@ -1,28 +1,19 @@
 name: IPL 2026 Daily Sync
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch:
-
-concurrency:
-  group: ipl-sync-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   sync:
-    # ARCHITECT FIX: Pinned to 22.04 for maximum browser compatibility
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
     permissions:
       contents: write
-
     steps:
-      - name: 1. Checkout Repository
+      - name: 1. Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      
       - name: 2. Set up Python
         uses: actions/setup-python@v5
         with:
@@ -32,40 +23,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install playwright
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: 4. Playwright Browser Cache
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-v1
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: 5. Install Playwright Chromium & System Deps
+      - name: 4. Force Browser Dependency Update
+        # ARCHITECT FIX: 'apt-get update' fixes the "no installation candidate" error
         run: |
-          # We force the install of system dependencies specifically for 22.04
+          sudo apt-get update
           python -m playwright install --with-deps chromium
 
-      - name: 6. Run Daily Scraper
+      - name: 5. Run Daily Scraper
         run: |
           mkdir -p data/matches
           python scraper.py
 
-      - name: 7. Atomic Data Sync
+      - name: 6. Atomic Data Sync
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Stage the 'Golden' Warehouse and Match JSONs
           git add data/fantasy.db data/matches/*.json 2>/dev/null || true
-          
           if ! git diff --staged --quiet; then
-            git commit -m "data: internal sync $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "data: sync $(date +%Y-%m-%d)"
             git push origin main
-          else
-            echo "No data changes detected. Skipping push."
           fi
