@@ -22,7 +22,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install playwright flask
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # ARCHITECTURAL FIX: Install browser binaries inside the container
+          playwright install chromium --with-deps
 
       - name: 3. Run Daily Scraper
         run: |
