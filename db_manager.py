@@ -11,10 +11,12 @@ v5 additions (Phase-2 polish):
     callable(list[str]) -> list[str] — applied to carry-forward team IDs
     so server.py can inject the full fuzzy-resolver without db_manager
     depending on application logic.
+  • hydrate_from_json() for cold-start DB recovery from JSON archives.
 """
 
 import json
 import math
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -690,6 +692,44 @@ class DatabaseManager:
                 rows_written += 1
 
         return rows_written
+
+    # ── Cold-start hydration from JSON archives ──────────────────────────────
+
+    def hydrate_from_json(self, json_dir: str | Path = "data/matches") -> int:
+        """
+        Rebuild DB from archived match JSON files (cold-start recovery).
+        Sorts files numerically by match number in filename.
+        Wraps entire ingestion in a single transaction for speed.
+        Triggers recalculate_points() at the end.
+        """
+        json_dir = Path(json_dir)
+        if not json_dir.exists():
+            return 0
+
+        files = sorted(
+            json_dir.glob("*.json"),
+            key=lambda f: int(m.group(1)) if (m := re.search(r"(\d+)", f.stem)) else 0
+        )
+        if not files:
+            return 0
+
+        count = 0
+        with self._write() as con:
+            for fp in files:
+                try:
+                    with open(fp) as fh:
+                        match_data = json.load(fh)
+                    if "id" in match_data:
+                        _upsert_match(con, match_data)
+                        count += 1
+                except Exception as e:
+                    print(f"  [hydrate] skip {fp.name}: {e}")
+
+        if count:
+            self.recalculate_points()
+            print(f"  [hydrate] Ingested {count} matches from {json_dir}")
+
+        return count
 
     # ── POST /api/rollover (legacy flat promote — kept for compat) ────────────
 

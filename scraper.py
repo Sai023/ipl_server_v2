@@ -55,6 +55,16 @@ async def main():
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = GoldenDB(DB_PATH)
 
+    # ── Cold-start hydration: rebuild DB from JSON archives if empty ──────
+    try:
+        with db._read() as con:
+            n = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        if n == 0 and MATCHES_DIR.exists() and any(MATCHES_DIR.glob("*.json")):
+            print("  [scraper] Cold DB — hydrating from JSON archives...")
+            db.hydrate_from_json(MATCHES_DIR)
+    except Exception as e:
+        print(f"  [scraper] Hydration check failed: {e}")
+
     with db._read() as con:
         rows = con.execute("""
             SELECT id, week_no, title, teams_json, date_label,
