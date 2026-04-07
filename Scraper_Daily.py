@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-IPL 2026 Daily Scraper - Update-Aware
+IPL 2026 Daily Scraper - Update-Aware (Fixed ID handling)
 Automatically detects and scrapes completed matches
 """
 import json
@@ -12,6 +12,24 @@ from playwright.async_api import async_playwright
 
 DB_PATH = Path("data/fantasy.db")
 MATCHES_DIR = Path("data/matches")
+
+def extract_match_number(match_id):
+    """Extract numeric match number from ID (handles both numeric and prefixed IDs)"""
+    match_id_str = str(match_id)
+    
+    # Strip prefix if present (e.g., 'ipl2026_12' -> '12')
+    if '_' in match_id_str:
+        match_id_str = match_id_str.split('_')[-1]
+    
+    # Try to extract numeric ID
+    try:
+        # If it's a full numeric ID like '1527674', calculate match number
+        numeric_id = int(match_id_str)
+        if numeric_id > 1527673:
+            return numeric_id - 1527673
+        return numeric_id
+    except ValueError:
+        return None
 
 async def scrape_match_data(page, url):
     """Scrape match scorecard and extract player stats"""
@@ -40,9 +58,6 @@ async def main():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     
-    # Find matches that should be completed (date passed) or already completed
-    today = datetime.now().strftime('%Y-%m-%d')
-    
     matches = con.execute("""
         SELECT id, week_no, title, teams_json, date_label, scorecard_url, status
         FROM matches 
@@ -58,7 +73,11 @@ async def main():
         page = await browser.new_page()
         
         for match in matches:
-            match_num = int(match['id']) - 1527673
+            match_num = extract_match_number(match['id'])
+            
+            if match_num is None:
+                continue
+            
             json_path = MATCHES_DIR / f"match_{match_num:02d}.json"
             
             # Skip if file exists and is not empty
