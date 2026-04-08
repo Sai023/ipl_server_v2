@@ -26,19 +26,27 @@ jobs:
           playwright install chromium --with-deps
 
       - name: 3. Run Daily Scraper
-        # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
         run: |
+          # ARCHITECTURAL FIX: Ensure directory exists and permissions are open for the container user
           mkdir -p data/matches
+          chmod -R 777 data
+          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
           export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
       - name: 4. Atomic Data Sync
         run: |
+          # Tell Git this directory is safe for the action user to prevent 'dubious ownership' errors
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/fantasy.db data/matches/*.json 2>/dev/null || true
+          
+          # Add the database and all generated JSON files
+          git add data/
+          
           if ! git diff --staged --quiet; then
-            git commit -m "data: sync $(date +%Y-%m-%d)"
+            git commit -m "data: auto-sync $(date +%Y-%m-%d)"
             git push origin main
+          else
+            echo "No changes detected. Skipping commit."
           fi
