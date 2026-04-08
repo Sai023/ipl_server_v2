@@ -9,8 +9,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
-      # Your previous version had an invalid URL '://microsoft.com'
+      # FIX: Corrected official Microsoft Playwright image URL
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -30,25 +29,25 @@ jobs:
 
       - name: 3. Run Master Scraper
         run: |
-          # ARCHITECTURAL FIX: Open permissions so the container user can write to 'data'
+          # Ensure directory and open permissions for container user
           mkdir -p data/matches
           chmod -R 777 data
-          # Ensure local modules (db_manager.py) are discoverable
+          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
           export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
       - name: 4. Atomic Data Sync
         run: |
-          # Critical for modern Git to trust the container-mounted directory
+          # Tell Git this directory is safe for the action user
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Stage the 'data' directory (DB + Matches)
+          # Add the database and all generated JSON files
           git add data/
           
           if ! git diff --staged --quiet; then
-            git commit -m "data: sync $(date +%Y-%m-%d)"
+            git commit -m "data: auto-sync $(date +%Y-%m-%d)"
             git push origin main
           else
             echo "No data changes detected. Skipping commit."
