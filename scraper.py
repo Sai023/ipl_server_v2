@@ -10,28 +10,30 @@ from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError
 from db_manager import DatabaseManager, _upsert_match
 
-# --- ARCHITECTURAL CONFIGURATION ---
+# --- ARCHITECTURAL PATHING FOR CONTAINERS ---
 BASE_DIR    = Path(__file__).resolve().parent
-DB_PATH     = BASE_DIR / "data" / "fantasy.db"
-MATCHES_DIR = BASE_DIR / "data" / "matches"
+DB_DIR      = BASE_DIR / "data"
+DB_PATH     = DB_DIR / "fantasy.db"
+MATCHES_DIR = DB_DIR / "matches"
 MAX_RETRIES = 3
 
-def emergency_seed(db):
-    """Fail-safe: Seeds the DB if empty. Injected directly to prevent import errors."""
-    print("!!! EMERGENCY SEED TRIGGERED !!!")
-    base_url = "https://espncricinfo.com"
+def force_seed(db):
+    """Bypasses external files to ensure 70 matches exist in the container environment."""
+    print("!!! SELF-HEALING: SEEDING DATABASE !!!")
     start_id = 1527674
+    # Standardized URL pattern for IPL 2026
+    base_url = "https://espncricinfo.com"
     
     with db._write() as con:
+        # We force matches 1-12 to 'completed' to trigger the immediate data harvest
         for i in range(1, 71):
-            match_id_val = start_id + (i - 1)
-            # We seed 1-12 as 'completed' so the scraper immediately has targets
+            m_id_val = start_id + (i - 1)
             status = "completed" if i <= 12 else "upcoming"
             con.execute("""
                 INSERT OR REPLACE INTO matches (id, week_no, title, status, scorecard_url, teams_json)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (f"ipl26_m{i:02d}", ((i-1)//7)+1, f"Match {i}", status, 
-                  f"{base_url}/match-{match_id_val}/full-scorecard", "[]"))
+                  f"{base_url}/match-{m_id_val}/full-scorecard", "[]"))
     print("!!! SEED COMPLETE: 70 MATCHES READY !!!")
 
 def clean_id(raw_id) -> int:
@@ -45,7 +47,7 @@ def clean_id(raw_id) -> int:
     except ValueError: return 0
 
 def process_fantasy_stats(raw_innings):
-    """Maps raw web tables to granular dictionary for match_scores table."""
+    """Maps raw HTML tables into granular dictionaries for the match_scores table."""
     player_stats = {}
     for table in raw_innings:
         rows = table.get('data', [])
@@ -89,8 +91,12 @@ def process_fantasy_stats(raw_innings):
     return player_stats
 
 async def scrape_match(page, url, match_num):
-    """Browser logic with full-scorecard redirection and retry loop."""
+    """Full-scorecard extraction with retry logic and DOM waiting."""
+    # Ensure URL points to the detailed scorecard
     target_url = url.replace("match-report", "full-scorecard")
+    if "full-scorecard" not in target_url:
+        target_url = f"{target_url}/full-scorecard"
+
     for attempt in range(MAX_RETRIES):
         try:
             await page.goto(target_url, wait_until="domcontentloaded", timeout=45_000)
@@ -117,7 +123,9 @@ async def scrape_match(page, url, match_num):
 
 async def main():
     print(f"\n--- IPL 2026 ULTRA ENGINE STARTING ---")
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    
     db = DatabaseManager(DB_PATH)
 
     # 1. Verification & Auto-Seed
@@ -126,26 +134,30 @@ async def main():
         count = res[0] if res else 0
     
     if count == 0:
-        emergency_seed(db)
+        force_seed(db)
 
     # 2. Extract Targets
     with db._read() as con:
         con.row_factory = sqlite3.Row
         targets = [dict(r) for r in con.execute("SELECT * FROM matches WHERE LOWER(status) = 'completed'").fetchall()]
 
+    print(f"HARVESTING {len(targets)} MATCHES...")
     if not targets:
-        print("DIAGNOSTIC: No 'completed' matches found. Exiting.")
+        print("DIAGNOSTIC: No matches in 'completed' state found.")
         return
 
-    print(f"HARVESTING {len(targets)} MATCHES...")
     async with async_playwright() as pw:
+        # Launch flags specifically for GitHub Ubuntu Runners / Docker Containers
         browser = await pw.chromium.launch(headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"])
         page = await browser.new_page()
         
         for m in targets:
             m_num = clean_id(m['id'])
             json_path = MATCHES_DIR / f"match_{m_num:02d}.json"
-            if json_path.exists() and json_path.stat().st_size > 5000: continue
+            
+            # Skip if we already have detailed data
+            if json_path.exists() and json_path.stat().st_size > 5000:
+                continue
             
             print(f"Syncing Match {m_num}: {m['title']}")
             raw = await scrape_match(page, m['scorecard_url'], m_num)
@@ -157,11 +169,14 @@ async def main():
                     "date": m['date_label'], "status": "completed", 
                     "scores": process_fantasy_stats(raw['innings']) 
                 }
+                # Save JSON for audit
                 with open(json_path, "w", encoding='utf-8') as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
                 
+                # Use db_manager's write lock to sync back to SQLite
                 with db._write() as w_con:
                     _upsert_match(w_con, payload)
+                    print(f"  ✅ SUCCESS: Match {m_num} persisted.")
         
         await browser.close()
     print("--- SYNC COMPLETE ---")
