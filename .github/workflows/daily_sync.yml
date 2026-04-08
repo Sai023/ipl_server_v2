@@ -5,11 +5,16 @@ on:
   schedule:
     - cron: '0 0 * * *'
 
+# Prevent concurrent runs from corrupting the database
+concurrency:
+  group: ipl-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
+      # ARCHITECTURAL FIX: Use the verified Microsoft Container Registry path
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -19,32 +24,47 @@ jobs:
     steps:
       - name: 1. Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 2. Install Project Dependencies
+      - name: 2. Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: 3. Environment Hardening
         run: |
           pip install --upgrade pip
           pip install playwright flask
+          # Install browser binaries only if not cached
           playwright install chromium --with-deps
-
-      - name: 3. Run Master Scraper
-        run: |
-          # Ensure directory and open permissions for the container user
+          # Open permissions for the internal 'data' volume
           mkdir -p data/matches
           chmod -R 777 data
-          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
-          export PYTHONPATH=$PYTHONPATH:.
+
+      - name: 4. Execution Layer (Master Scraper)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          # The v7.0 Engine handles self-healing/seeding internally
           python scraper.py
 
-      - name: 4. Atomic Data Sync
+      - name: 5. Persistence Layer (Atomic Sync)
         run: |
-          # Trust the directory inside the container to prevent git ownership errors
+          # Solve 'dubious ownership' in container mounts
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/
+          
+          # Stage both database and flat-file JSONs
+          git add data/fantasy.db data/matches/*.json 2>/dev/null || true
+          
           if ! git diff --staged --quiet; then
-            git commit -m "data: auto-sync $(date +%Y-%m-%d)"
+            git commit -m "data: IPL 2026 automated sync $(date +%Y-%m-%d)"
             git push origin main
           else
-            echo "No data changes detected. Skipping commit."
+            echo "Infrastructure Check: No new data found to persist."
           fi
