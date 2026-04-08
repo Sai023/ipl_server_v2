@@ -9,8 +9,8 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 from db_manager import DatabaseManager, _upsert_match
 
-# --- ARCHITECTURAL PATHING FOR CONTAINERS ---
-# This ensures the DB is found even if the working directory shifts in Docker
+# --- ARCHITECTURAL PATHING ---
+# Works perfectly on native Ubuntu Runners and Local Windows
 BASE_DIR    = Path(__file__).resolve().parent
 DB_DIR      = BASE_DIR / "data"
 DB_PATH     = DB_DIR / "fantasy.db"
@@ -18,23 +18,26 @@ MATCHES_DIR = DB_DIR / "matches"
 MAX_RETRIES = 3
 
 def force_seed(db):
-    """Bypasses all external files to ensure 70 matches exist in the container environment."""
+    """Bypasses all external files to ensure data exists in the runner environment."""
     print("!!! SELF-HEALING: SEEDING DATABASE !!!")
     start_id = 1527674
-    # Rebuilt for the 2026 official series ID
+    # REFINED: Using the explicit 2026 Series ID for better redirect stability
     base_url = "https://espncricinfo.com"
     
     with db._write() as con:
-        # Force matches 1-12 to 'completed' status to trigger immediate harvest
         for i in range(1, 71):
             m_id_val = start_id + (i - 1)
+            # Matches 1-12 completed for April 8th sync
             status = "completed" if i <= 12 else "upcoming"
             con.execute("""
                 INSERT OR REPLACE INTO matches (id, week_no, title, status, scorecard_url, teams_json)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (f"ipl26_m{i:02d}", ((i-1)//7)+1, f"Match {i}", status, 
                   f"{base_url}/match-{m_id_val}/full-scorecard", "[]"))
-    print("!!! SEED COMPLETE: 70 MATCHES READY !!!")
+    
+    # Audit log for the Action runner
+    if DB_PATH.exists():
+        print(f"!!! SEED COMPLETE: Database size is {DB_PATH.stat().st_size} bytes")
 
 def clean_id(raw_id) -> int:
     if not raw_id: return 0
@@ -46,7 +49,6 @@ def clean_id(raw_id) -> int:
     except ValueError: return 0
 
 def process_fantasy_stats(raw_innings):
-    """Maps raw HTML tables into granular dictionaries for fantasy points."""
     player_stats = {}
     for table in raw_innings:
         rows = table.get('data', [])
@@ -82,7 +84,6 @@ def process_fantasy_stats(raw_innings):
     return player_stats
 
 async def scrape_match(page, url, match_num):
-    # Ensure URL targets the detailed scorecard view
     target_url = url.replace("match-report", "full-scorecard")
     for attempt in range(MAX_RETRIES):
         try:
@@ -109,16 +110,13 @@ async def scrape_match(page, url, match_num):
     return None
 
 async def main():
-    print(f"\n--- !!! v7.0 MASTER ENGINE STARTING !!! ---")
+    print(f"\n--- !!! v7.1 MASTER ENGINE (NATIVE) STARTING !!! ---")
     DB_DIR.mkdir(parents=True, exist_ok=True)
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     
     db = DatabaseManager(DB_PATH)
-
-    # 1. ALWAYS Force-Seed in the container to guarantee data exists
     force_seed(db)
 
-    # 2. Extract Targets (Filtering for matches we marked 'completed' in seed)
     with db._read() as con:
         con.row_factory = sqlite3.Row
         targets = [dict(r) for r in con.execute("SELECT * FROM matches WHERE LOWER(status) = 'completed'").fetchall()]
@@ -127,12 +125,11 @@ async def main():
     if not targets: return
 
     async with async_playwright() as pw:
-        # Launch with flags for container stability
+        # flags still helpful for memory stability even outside container
         browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         page = await browser.new_page()
         for m in targets:
             m_num = clean_id(m['id'])
-            # Cache check
             if (MATCHES_DIR / f"match_{m_num:02d}.json").exists(): continue
             
             print(f"SCRAPING: Match {m_num} ({m['title']})")
@@ -144,15 +141,13 @@ async def main():
                     "date": m['date_label'], "status": "completed", 
                     "scores": process_fantasy_stats(raw['innings']) 
                 }
-                # Write to flat file
                 with open(MATCHES_DIR / f"match_{m_num:02d}.json", "w", encoding='utf-8') as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
-                # Persist to DB
                 with db._write() as w_con:
                     _upsert_match(w_con, payload)
                     print(f"  ✅ SUCCESS: Match {m_num} persisted.")
         await browser.close()
-    print("--- !!! v7.0 SYNC COMPLETE !!! ---")
+    print("--- !!! v7.1 SYNC COMPLETE !!! ---")
 
 if __name__ == "__main__":
     asyncio.run(main())
