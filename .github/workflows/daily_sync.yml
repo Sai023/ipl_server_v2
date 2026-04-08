@@ -9,6 +9,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
+      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -21,32 +22,33 @@ jobs:
 
       - name: 2. Install Project Dependencies
         run: |
+          # Upgrading pip prevents 'Legacy Install' failures in containers
           pip install --upgrade pip
           pip install playwright flask
           playwright install chromium --with-deps
 
-      - name: 3. Run Daily Scraper
+      - name: 3. Run Master Scraper
         run: |
-          # ARCHITECTURAL FIX: Ensure directory exists and permissions are open for the container user
+          # ARCHITECTURAL FIX: Open permissions so the container user can write to 'data'
           mkdir -p data/matches
           chmod -R 777 data
-          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
+          # Ensure local modules (db_manager.py) are discoverable
           export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
       - name: 4. Atomic Data Sync
         run: |
-          # Tell Git this directory is safe for the action user to prevent 'dubious ownership' errors
+          # Critical for modern Git to trust the container-mounted directory
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Add the database and all generated JSON files
+          # Stage the 'data' directory (DB + Matches)
           git add data/
           
           if ! git diff --staged --quiet; then
-            git commit -m "data: auto-sync $(date +%Y-%m-%d)"
+            git commit -m "data: sync $(date +%Y-%m-%d)"
             git push origin main
           else
-            echo "No changes detected. Skipping commit."
+            echo "No data changes detected. Skipping commit."
           fi
