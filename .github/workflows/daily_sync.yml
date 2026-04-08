@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
+      # Your previous version had an invalid URL '://microsoft.com'
       image: ://microsoft.com
       options: --shm-size=2gb
 
