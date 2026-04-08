@@ -9,7 +9,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # FIX: Removed the invalid '://' and used the correct MCR registry path
+      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -38,9 +38,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
           git add data/
-          
           if ! git diff --staged --quiet; then
             git commit -m "data: auto-sync $(date +%Y-%m-%d)"
             git push origin main
