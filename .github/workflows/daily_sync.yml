@@ -28,15 +28,15 @@ jobs:
           cache: 'pip'
 
       - name: 3. Install Core Dependencies
+        # These are the native installation steps that solved the "Red Screen" crash
         run: |
           pip install --upgrade pip
           pip install playwright flask
-          # Install playwright browsers AND the system-level Linux dependencies
+          # This command installs the browser AND the required Linux system libraries
           python -m playwright install chromium --with-deps
 
       - name: 4. Execution Layer (Master Scraper)
         env:
-          # Ensure local modules are resolved correctly
           PYTHONPATH: ${{ github.workspace }}
         run: |
           mkdir -p data/matches
@@ -44,15 +44,17 @@ jobs:
 
       - name: 5. Persistence Layer (Atomic Sync)
         run: |
-          # Configure Git to use the standard Action identity
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          git add data/
+          # ARCHITECTURAL FIX: Use -f to bypass any .gitignore rules
+          # This ensures JSONs and the DB actually land in your repo
+          git add -f data/matches/*.json 2>/dev/null || true
+          git add -f data/fantasy.db 2>/dev/null || true
           
-          if ! git diff --staged --quiet; then
-            git commit -m "data: automated sync $(date +%Y-%m-%d)"
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "data: sync $(date +%Y-%m-%d)"
             git push origin main
           else
-            echo "Diagnostic: No new data changes detected to push."
+            echo "Infrastructure Check: No changes detected."
           fi
