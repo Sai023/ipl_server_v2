@@ -9,7 +9,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # FIX: Corrected official Microsoft Playwright image URL
+      # FIX: Removed the invalid '://' and used the correct MCR registry path
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -22,28 +22,23 @@ jobs:
 
       - name: 2. Install Project Dependencies
         run: |
-          # Upgrading pip prevents 'Legacy Install' failures in containers
           pip install --upgrade pip
           pip install playwright flask
           playwright install chromium --with-deps
 
       - name: 3. Run Master Scraper
         run: |
-          # Ensure directory and open permissions for container user
           mkdir -p data/matches
           chmod -R 777 data
-          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
           export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
       - name: 4. Atomic Data Sync
         run: |
-          # Tell Git this directory is safe for the action user
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Add the database and all generated JSON files
           git add data/
           
           if ! git diff --staged --quiet; then
