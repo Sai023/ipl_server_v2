@@ -9,7 +9,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
+      # ARCHITECTURAL FIX: Use the official Microsoft Playwright registry path
+      # The previous '://microsoft.com' was an invalid format
       image: ://microsoft.com
       options: --shm-size=2gb
 
@@ -28,13 +29,16 @@ jobs:
 
       - name: 3. Run Master Scraper
         run: |
+          # Ensure directory and open permissions for the container user
           mkdir -p data/matches
           chmod -R 777 data
+          # Setting PYTHONPATH ensures Seed_Matches.py and db_manager.py are found
           export PYTHONPATH=$PYTHONPATH:.
           python scraper.py
 
       - name: 4. Atomic Data Sync
         run: |
+          # Trust the directory inside the container to prevent git ownership errors
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
