@@ -9,8 +9,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     container:
-      # ARCHITECTURAL FIX: Use the official Microsoft Playwright registry path
-      # The previous '://microsoft.com' was an invalid format
+      # ARCHITECTURAL FIX: Use the official Microsoft Playwright image
       image: ://microsoft.com
       options: --shm-size=2gb
 
