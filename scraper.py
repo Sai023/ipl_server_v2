@@ -5,28 +5,26 @@ import re
 import sqlite3
 import os
 import sys
+import random
 from pathlib import Path
 from playwright.async_api import async_playwright, TimeoutError
 from db_manager import DatabaseManager, _upsert_match
 
-# --- ARCHITECTURAL ALIGNMENT (SCREENSHOT VERIFIED) ---
+# --- ARCHITECTURAL ALIGNMENT ---
 BASE_DIR    = Path(__file__).resolve().parent
-# Verified: DB is INSIDE the data folder per breadcrumb in screenshot
 DB_PATH     = BASE_DIR / "data" / "fantasy.db" 
 MATCHES_DIR = BASE_DIR / "data" / "matches"
 MAX_RETRIES = 3
 
 def force_seed(db):
-    """FAIL-SAFE: Ensures the 70-match schedule exists in the correct Cloud DB file."""
+    """FAIL-SAFE: Ensures the 70-match schedule exists."""
     print("!!! SELF-HEALING: INITIALIZING DATABASE SEED !!!")
     start_id = 1527674
-    # Refined: Explicit Series path prevents aggressive ESPN redirects that kill scrapers
     base_url = "https://espncricinfo.com"
     
     with db._write() as con:
         for i in range(1, 71):
             m_id_val = start_id + (i - 1)
-            # Force matches 1-12 to 'completed' for immediate processing
             status = "completed" if i <= 12 else "upcoming"
             con.execute("""
                 INSERT OR REPLACE INTO matches (id, week_no, title, status, scorecard_url, teams_json)
@@ -36,14 +34,12 @@ def force_seed(db):
     print(f"!!! SEED COMPLETE: Database sync successful.")
 
 def clean_id(raw_id) -> int:
-    """Handles both sequential 'm01' and large ESPN numeric IDs."""
     m = re.search(r'(\d+)$', str(raw_id))
     if not m: return 0
     val = int(m.group(1))
     return val - 1527673 if val > 1000000 else val
 
 def process_fantasy_stats(raw_innings):
-    """Maps raw HTML tables to granular player dicts for the match_scores table."""
     player_stats = {}
     for table in raw_innings:
         rows = table.get('data', [])
@@ -54,7 +50,6 @@ def process_fantasy_stats(raw_innings):
                 if len(row) < 7 or "total" in row[0].lower(): continue
                 name = row[0].replace('†', '').replace('(c)', '').strip()
                 pid = name.lower().replace(' ', '_')
-                # Index map: [0]Name, [2]Runs, [3]Balls, [5]4s, [6]6s
                 player_stats[pid] = {
                     "played": True,
                     "runs": int(row[2]) if row[2].isdigit() else 0,
@@ -70,7 +65,6 @@ def process_fantasy_stats(raw_innings):
                 name = row[0].replace('†', '').replace('(c)', '').strip()
                 pid = name.lower().replace(' ', '_')
                 stats = player_stats.get(pid, {"played": True, "runs":0, "balls":0, "fours":0, "sixes":0})
-                # Index map: [1]Overs, [2]Maidens, [3]RunsConc, [4]Wickets
                 stats.update({
                     "overs": float(row[1]) if '.' in row[1] else float(row[1]),
                     "maidens": int(row[2]) if row[2].isdigit() else 0,
@@ -81,11 +75,15 @@ def process_fantasy_stats(raw_innings):
     return player_stats
 
 async def scrape_match(page, url):
-    """Full-scorecard crawler with DOM protection and retry logic."""
+    """Full-scorecard crawler with Stealth and Retry logic."""
     for attempt in range(MAX_RETRIES):
         try:
+            # Jitter: Random delay to mimic human browsing
+            await asyncio.sleep(random.uniform(2.5, 5.0))
+            
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             await page.wait_for_selector("table.ds-table", timeout=15000)
+            
             return await page.evaluate("""
                 () => {
                     const results = { innings: [] };
@@ -102,16 +100,17 @@ async def scrape_match(page, url):
                     return results;
                 }
             """)
-        except:
-            await asyncio.sleep(2)
+        except Exception as e:
+            print(f"  ⚠️ Attempt {attempt+1} failed. Retrying...")
+            await asyncio.sleep(5)
     return None
 
 async def main():
-    print(f"\n--- IPL 2026 MASTER ENGINE v8.2 STARTING ---")
+    print(f"\n--- IPL 2026 MASTER ENGINE v8.5 (STEALTH) STARTING ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     
     db = DatabaseManager(DB_PATH)
-    force_seed(db) # Guaranteed population every run
+    force_seed(db)
 
     with db._read() as con:
         con.row_factory = sqlite3.Row
@@ -120,8 +119,28 @@ async def main():
     print(f"IDENTIFIED: {len(targets)} matches for processing.")
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-        page = await browser.new_page()
+        # Container-optimized flags + No-Sandbox
+        browser = await pw.chromium.launch(
+            headless=True, 
+            args=[
+                "--no-sandbox", 
+                "--disable-dev-shm-usage", 
+                "--disable-gpu", 
+                "--disable-software-rasterizer"
+            ]
+        )
+        
+        # New Context with Realistic User-Agent
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
+        
+        page = await context.new_page()
+        
+        # MASK WEBDRIVER: Prevents ESPN from identifying the browser as a bot
+        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
         for m in targets:
             m_num = clean_id(m['id'])
             json_path = MATCHES_DIR / f"match_{m_num:02d}.json"
@@ -129,11 +148,12 @@ async def main():
             
             print(f"SCRAPING: Match {m_num} - {m['title']}")
             raw = await scrape_match(page, m['scorecard_url'])
+            
             if raw:
                 payload = { 
                     "id": m['id'], "wk": m['week_no'], "title": m['title'], 
                     "teams": json.loads(m['teams_json'] or "[]"), 
-                    "date": m['date_label'], "status": "completed", 
+                    "date": m.get('date_label', '2026-04-08'), "status": "completed", 
                     "scores": process_fantasy_stats(raw['innings']) 
                 }
                 with open(json_path, "w", encoding='utf-8') as f:
@@ -141,6 +161,9 @@ async def main():
                 with db._write() as w_con:
                     _upsert_match(w_con, payload)
                     print(f"  ✅ PERSISTED: Match {m_num}")
+            else:
+                print(f"  ❌ FAILED: Match {m_num} (Possible Block)")
+
         await browser.close()
     print("--- SYNC COMPLETE ---")
 
