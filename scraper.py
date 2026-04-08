@@ -9,7 +9,8 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 from db_manager import DatabaseManager, _upsert_match
 
-# --- ABSOLUTE PATHING FOR CONTAINERS ---
+# --- ARCHITECTURAL PATHING FOR CONTAINERS ---
+# This ensures the DB is found even if the working directory shifts in Docker
 BASE_DIR    = Path(__file__).resolve().parent
 DB_DIR      = BASE_DIR / "data"
 DB_PATH     = DB_DIR / "fantasy.db"
@@ -17,13 +18,14 @@ MATCHES_DIR = DB_DIR / "matches"
 MAX_RETRIES = 3
 
 def force_seed(db):
-    """Bypasses all external files to ensure data exists in the container."""
+    """Bypasses all external files to ensure 70 matches exist in the container environment."""
     print("!!! SELF-HEALING: SEEDING DATABASE !!!")
     start_id = 1527674
+    # Rebuilt for the 2026 official series ID
     base_url = "https://espncricinfo.com"
     
     with db._write() as con:
-        # We force matches 1-12 to 'completed' to trigger the harvest
+        # Force matches 1-12 to 'completed' status to trigger immediate harvest
         for i in range(1, 71):
             m_id_val = start_id + (i - 1)
             status = "completed" if i <= 12 else "upcoming"
@@ -80,6 +82,7 @@ def process_fantasy_stats(raw_innings):
     return player_stats
 
 async def scrape_match(page, url, match_num):
+    # Ensure URL targets the detailed scorecard view
     target_url = url.replace("match-report", "full-scorecard")
     for attempt in range(MAX_RETRIES):
         try:
@@ -115,7 +118,7 @@ async def main():
     # 1. ALWAYS Force-Seed in the container to guarantee data exists
     force_seed(db)
 
-    # 2. Extract Targets
+    # 2. Extract Targets (Filtering for matches we marked 'completed' in seed)
     with db._read() as con:
         con.row_factory = sqlite3.Row
         targets = [dict(r) for r in con.execute("SELECT * FROM matches WHERE LOWER(status) = 'completed'").fetchall()]
@@ -124,10 +127,12 @@ async def main():
     if not targets: return
 
     async with async_playwright() as pw:
+        # Launch with flags for container stability
         browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         page = await browser.new_page()
         for m in targets:
             m_num = clean_id(m['id'])
+            # Cache check
             if (MATCHES_DIR / f"match_{m_num:02d}.json").exists(): continue
             
             print(f"SCRAPING: Match {m_num} ({m['title']})")
@@ -139,8 +144,10 @@ async def main():
                     "date": m['date_label'], "status": "completed", 
                     "scores": process_fantasy_stats(raw['innings']) 
                 }
+                # Write to flat file
                 with open(MATCHES_DIR / f"match_{m_num:02d}.json", "w", encoding='utf-8') as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
+                # Persist to DB
                 with db._write() as w_con:
                     _upsert_match(w_con, payload)
                     print(f"  ✅ SUCCESS: Match {m_num} persisted.")
