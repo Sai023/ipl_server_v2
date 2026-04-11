@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""
+IPL Fantasy 2026 — Player Roster Seeder
+========================================
+Populates the `players` table with ~220 IPL 2026 squad players.
+
+ID convention:  {team_prefix}{number:02d}
+  c  = CSK     d  = DC      g  = GT      k  = KKR
+  l  = LSG     m  = MI      p  = PBKS    r  = RCB
+  rr = RR      s  = SRH
+
+Roles: BAT, BOWL, AR (all-rounder), WK (wicketkeeper)
+
+Usage:
+    python Seed_Players.py                # seed all players
+    python Seed_Players.py --reset        # wipe + re-seed
+"""
+
+import argparse
+import sqlite3
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH  = BASE_DIR / "data" / "fantasy.db"
+
+# ── (id, name, team, price, role) ────────────────────────────────────────────
+# Prices in CR. Roles: BAT, BOWL, AR, WK
+
+PLAYERS = [
+    # ══ CSK — Chennai Super Kings ══
+    ("c01", "Ruturaj Gaikwad",       "CSK",  14.0, "BAT"),
+    ("c02", "Devon Conway",          "CSK",  10.0, "BAT"),
+    ("c03", "Shivam Dube",           "CSK",  10.5, "AR"),
+    ("c04", "Ravindra Jadeja",       "CSK",  14.0, "AR"),
+    ("c05", "MS Dhoni",              "CSK",   4.0, "WK"),
+    ("c06", "Matheesha Pathirana",   "CSK",  11.0, "BOWL"),
+    ("c07", "Tushar Deshpande",      "CSK",   6.5, "BOWL"),
+    ("c08", "Maheesh Theekshana",    "CSK",   8.0, "BOWL"),
+    ("c09", "Deepak Chahar",         "CSK",   9.0, "BOWL"),
+    ("c10", "Moeen Ali",             "CSK",   8.0, "AR"),
+    ("c11", "Ajinkya Rahane",        "CSK",   5.0, "BAT"),
+    ("c12", "Rachin Ravindra",       "CSK",  11.0, "AR"),
+    ("c13", "Daryl Mitchell",        "CSK",   9.0, "AR"),
+    ("c14", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
+    ("c15", "Shaik Rasheed",         "CSK",   4.0, "BAT"),
+    ("c16", "Aravind Swaminathan",   "CSK",   3.0, "WK"),
+    ("c17", "Nishant Sindhu",        "CSK",   3.0, "AR"),
+    ("c18", "Sameer Rizvi",          "CSK",   5.0, "BAT"),
+    ("c19", "Mustafizur Rahman",     "CSK",   8.0, "BOWL"),
+    ("c20", "Anuj Rawat",            "CSK",   3.5, "WK"),
+    ("c21", "Vijay Shankar",         "CSK",   4.0, "AR"),
+    ("c22", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
+
+    # ══ DC — Delhi Capitals ══
+    ("d01", "Rishabh Pant",          "DC",   16.0, "WK"),
+    ("d02", "David Warner",          "DC",   10.0, "BAT"),
+    ("d03", "Axar Patel",            "DC",   12.0, "AR"),
+    ("d04", "Kuldeep Yadav",         "DC",   11.0, "BOWL"),
+    ("d05", "Anrich Nortje",         "DC",   10.0, "BOWL"),
+    ("d06", "Mitchell Marsh",        "DC",    9.0, "AR"),
+    ("d07", "Prithvi Shaw",          "DC",    5.0, "BAT"),
+    ("d08", "Abishek Porel",         "DC",    6.0, "WK"),
+    ("d09", "Tristan Stubbs",        "DC",    7.0, "BAT"),
+    ("d10", "Ishant Sharma",         "DC",    4.0, "BOWL"),
+    ("d11", "Khaleel Ahmed",         "DC",    5.0, "BOWL"),
+    ("d12", "Jake Fraser-McGurk",    "DC",    9.0, "BAT"),
+    ("d13", "Mukesh Kumar",          "DC",    5.5, "BOWL"),
+    ("d14", "Kumar Kushagra",        "DC",    3.5, "WK"),
+    ("d15", "Lalit Yadav",           "DC",    3.5, "AR"),
+    ("d16", "Shai Hope",             "DC",    7.0, "WK"),
+    ("d17", "Ricky Bhui",            "DC",    3.0, "BAT"),
+    ("d18", "Sumit Kumar",           "DC",    3.0, "BOWL"),
+    ("d19", "Vipraj Nigam",          "DC",    3.0, "AR"),
+    ("d20", "Harry Brook",           "DC",   12.0, "BAT"),
+    ("d21", "Faf du Plessis",        "DC",    5.0, "BAT"),
+    ("d22", "Lungi Ngidi",           "DC",    6.5, "BOWL"),
+
+    # ══ GT — Gujarat Titans ══
+    ("g01", "Shubman Gill",          "GT",   14.0, "BAT"),
+    ("g02", "Sai Sudharsan",         "GT",    9.0, "BAT"),
+    ("g03", "Rashid Khan",           "GT",   15.0, "BOWL"),
+    ("g04", "Mohit Sharma",          "GT",    5.0, "BOWL"),
+    ("g05", "Noor Ahmad",            "GT",    7.0, "BOWL"),
+    ("g06", "Wriddhiman Saha",       "GT",    4.0, "WK"),
+    ("g07", "Rahul Tewatia",         "GT",    8.0, "AR"),
+    ("g08", "David Miller",          "GT",    8.0, "BAT"),
+    ("g09", "Azmatullah Omarzai",    "GT",    7.0, "AR"),
+    ("g10", "Darshan Nalkande",      "GT",    3.5, "BOWL"),
+    ("g11", "Jos Buttler",           "GT",   11.0, "WK"),
+    ("g12", "B Sai Kishore",         "GT",    4.0, "BOWL"),
+    ("g13", "Spencer Johnson",       "GT",    6.0, "BOWL"),
+    ("g14", "Kane Williamson",       "GT",    5.0, "BAT"),
+    ("g15", "Matthew Wade",          "GT",    4.0, "WK"),
+    ("g16", "Jayant Yadav",          "GT",    3.5, "AR"),
+    ("g17", "R Sai Kishore",         "GT",    5.0, "BOWL"),
+    ("g18", "Umesh Yadav",           "GT",    4.0, "BOWL"),
+    ("g19", "Abhinav Manohar",       "GT",    4.0, "BAT"),
+    ("g20", "Josh Little",           "GT",    6.0, "BOWL"),
+    ("g21", "Shahrukh Khan",         "GT",    5.0, "BAT"),
+    ("g22", "Sai Sudarshan",         "GT",    3.5, "BAT"),
+
+    # ══ KKR — Kolkata Knight Riders ══
+    ("k01", "Sunil Narine",          "KKR",  12.0, "AR"),
+    ("k02", "Andre Russell",         "KKR",  12.0, "AR"),
+    ("k03", "Rinku Singh",           "KKR",  10.0, "BAT"),
+    ("k04", "Varun Chakravarthy",    "KKR",  10.0, "BOWL"),
+    ("k05", "Phil Salt",             "KKR",  11.0, "WK"),
+    ("k06", "Mitchell Starc",        "KKR",  14.0, "BOWL"),
+    ("k07", "Venkatesh Iyer",        "KKR",   8.0, "AR"),
+    ("k08", "Nitish Rana",           "KKR",   6.0, "BAT"),
+    ("k09", "Harshit Rana",          "KKR",   7.0, "BOWL"),
+    ("k10", "Ramandeep Singh",       "KKR",   4.0, "AR"),
+    ("k11", "Angkrish Raghuvanshi",  "KKR",   5.0, "BAT"),
+    ("k12", "Manish Pandey",         "KKR",   4.0, "BAT"),
+    ("k13", "Vaibhav Arora",         "KKR",   4.0, "BOWL"),
+    ("k14", "Gus Atkinson",          "KKR",   8.0, "BOWL"),
+    ("k15", "Suyash Sharma",         "KKR",   3.0, "BOWL"),
+    ("k16", "Quinton de Kock",       "KKR",  11.0, "WK"),
+    ("k17", "Chetan Sakariya",       "KKR",   4.0, "BOWL"),
+    ("k18", "Dushmantha Chameera",   "KKR",   3.5, "BOWL"),
+    ("k19", "Anukul Roy",            "KKR",   3.0, "AR"),
+    ("k20", "Shreyas Iyer",          "KKR",  12.0, "BAT"),
+    ("k21", "Ajith Agarkar",         "KKR",   3.0, "BOWL"),
+    ("k22", "Lockie Ferguson",       "KKR",   9.0, "BOWL"),
+
+    # ══ LSG — Lucknow Super Giants ══
+    ("l01", "KL Rahul",              "LSG",  14.0, "WK"),
+    ("l02", "Nicholas Pooran",       "LSG",  11.0, "WK"),
+    ("l03", "Marcus Stoinis",        "LSG",  10.0, "AR"),
+    ("l04", "Ravi Bishnoi",          "LSG",   8.0, "BOWL"),
+    ("l05", "Mohsin Khan",           "LSG",   5.0, "BOWL"),
+    ("l06", "Ayush Badoni",          "LSG",   6.0, "BAT"),
+    ("l07", "Quinton de Kock",       "LSG",  11.0, "WK"),
+    ("l08", "Krunal Pandya",         "LSG",   7.0, "AR"),
+    ("l09", "Deepak Hooda",          "LSG",   5.0, "AR"),
+    ("l10", "Matt Henry",            "LSG",   6.0, "BOWL"),
+    ("l11", "Naveen-ul-Haq",         "LSG",   7.0, "BOWL"),
+    ("l12", "Kyle Mayers",           "LSG",   5.0, "AR"),
+    ("l13", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
+    ("l14", "Yash Thakur",           "LSG",   3.5, "BOWL"),
+    ("l15", "Prerak Mankad",         "LSG",   3.0, "AR"),
+    ("l16", "Devdutt Padikkal",      "LSG",   7.0, "BAT"),
+    ("l17", "Mayank Yadav",          "LSG",   8.0, "BOWL"),
+    ("l18", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
+    ("l19", "David Willey",          "LSG",   4.0, "AR"),
+    ("l20", "Yudhvir Charak",        "LSG",   3.0, "BOWL"),
+    ("l21", "Rishabh Pant",          "LSG",  14.0, "WK"),
+    ("l22", "Mitchell Marsh",        "LSG",   9.0, "AR"),
+
+    # ══ MI — Mumbai Indians ══
+    ("m01", "Rohit Sharma",          "MI",   14.0, "BAT"),
+    ("m02", "Suryakumar Yadav",      "MI",   14.0, "BAT"),
+    ("m03", "Jasprit Bumrah",        "MI",   16.0, "BOWL"),
+    ("m04", "Hardik Pandya",         "MI",   14.0, "AR"),
+    ("m05", "Ishan Kishan",          "MI",   10.0, "WK"),
+    ("m06", "Tim David",             "MI",    8.0, "BAT"),
+    ("m07", "Tilak Varma",           "MI",   10.0, "BAT"),
+    ("m08", "Naman Dhir",            "MI",    5.0, "BAT"),
+    ("m09", "Dewald Brevis",         "MI",    7.0, "BAT"),
+    ("m10", "Trent Boult",           "MI",   10.0, "BOWL"),
+    ("m11", "Piyush Chawla",         "MI",    4.0, "BOWL"),
+    ("m12", "Ryan Rickelton",        "MI",    6.0, "WK"),
+    ("m13", "Akash Madhwal",         "MI",    4.0, "BOWL"),
+    ("m14", "Kumar Kartikeya",       "MI",    4.0, "BOWL"),
+    ("m15", "Nuwan Thushara",        "MI",    4.0, "BOWL"),
+    ("m16", "Gerald Coetzee",        "MI",    7.0, "BOWL"),
+    ("m17", "Nehal Wadhera",         "MI",    5.0, "BAT"),
+    ("m18", "Arjun Tendulkar",       "MI",    3.0, "AR"),
+    ("m19", "Romario Shepherd",      "MI",    6.0, "AR"),
+    ("m20", "Mohammad Nabi",         "MI",    4.0, "AR"),
+    ("m21", "Will Jacks",            "MI",    8.0, "AR"),
+    ("m22", "Ashton Turner",         "MI",    4.0, "BAT"),
+
+    # ══ PBKS — Punjab Kings ══
+    ("p01", "Sam Curran",            "PBKS",  11.0, "AR"),
+    ("p02", "Shikhar Dhawan",        "PBKS",   5.0, "BAT"),
+    ("p03", "Liam Livingstone",      "PBKS",  10.0, "AR"),
+    ("p04", "Kagiso Rabada",         "PBKS",  12.0, "BOWL"),
+    ("p05", "Jonny Bairstow",        "PBKS",   8.0, "WK"),
+    ("p06", "Arshdeep Singh",        "PBKS",  10.0, "BOWL"),
+    ("p07", "Jitesh Sharma",         "PBKS",   5.0, "WK"),
+    ("p08", "Rahul Chahar",          "PBKS",   5.0, "BOWL"),
+    ("p09", "Prabhsimran Singh",     "PBKS",   4.0, "WK"),
+    ("p10", "Harpreet Brar",         "PBKS",   4.0, "AR"),
+    ("p11", "Rilee Rossouw",         "PBKS",   6.0, "BAT"),
+    ("p12", "Nathan Ellis",          "PBKS",   5.0, "BOWL"),
+    ("p13", "Chris Woakes",          "PBKS",   4.0, "AR"),
+    ("p14", "Sikandar Raza",         "PBKS",   4.0, "AR"),
+    ("p15", "Ashutosh Sharma",       "PBKS",   5.0, "BAT"),
+    ("p16", "Shashank Singh",        "PBKS",   5.0, "BAT"),
+    ("p17", "Vishnu Vinod",          "PBKS",   3.0, "WK"),
+    ("p18", "Harshal Patel",         "PBKS",   7.0, "BOWL"),
+    ("p19", "Vidwath Kaverappa",     "PBKS",   3.0, "BOWL"),
+    ("p20", "Atharva Taide",         "PBKS",   3.0, "BAT"),
+    ("p21", "Marco Jansen",          "PBKS",   9.0, "AR"),
+    ("p22", "Shreyas Iyer",          "PBKS",  12.0, "BAT"),
+
+    # ══ RCB — Royal Challengers Bengaluru ══
+    ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),
+    ("r02", "Glenn Maxwell",         "RCB",  11.0, "AR"),
+    ("r03", "Mohammed Siraj",        "RCB",  10.0, "BOWL"),
+    ("r04", "Wanindu Hasaranga",     "RCB",  10.0, "AR"),
+    ("r05", "Cameron Green",         "RCB",  12.0, "AR"),
+    ("r06", "Dinesh Karthik",        "RCB",   5.0, "WK"),
+    ("r07", "Rajat Patidar",         "RCB",   9.0, "BAT"),
+    ("r08", "Will Jacks",            "RCB",   8.0, "AR"),
+    ("r09", "Yash Dayal",            "RCB",   6.0, "BOWL"),
+    ("r10", "Karn Sharma",           "RCB",   3.5, "BOWL"),
+    ("r11", "Reece Topley",          "RCB",   5.0, "BOWL"),
+    ("r12", "Suyash Prabhudessai",   "RCB",   3.5, "BAT"),
+    ("r13", "Manoj Bhandage",        "RCB",   3.0, "AR"),
+    ("r14", "Swapnil Singh",         "RCB",   3.0, "AR"),
+    ("r15", "Alzarri Joseph",        "RCB",   7.0, "BOWL"),
+    ("r16", "Tom Curran",            "RCB",   5.0, "AR"),
+    ("r17", "Rajan Kumar",           "RCB",   3.0, "BAT"),
+    ("r18", "Akash Deep",            "RCB",   5.0, "BOWL"),
+    ("r19", "Himanshu Sharma",       "RCB",   3.0, "BOWL"),
+    ("r20", "Shimron Hetmyer",       "RCB",   7.0, "BAT"),
+    ("r21", "Lockie Ferguson",       "RCB",   9.0, "BOWL"),
+    ("r22", "Travis Head",           "RCB",  12.0, "BAT"),
+
+    # ══ RR — Rajasthan Royals ══
+    ("rr01", "Sanju Samson",         "RR",   14.0, "WK"),
+    ("rr02", "Yashasvi Jaiswal",     "RR",   14.0, "BAT"),
+    ("rr03", "Jos Buttler",          "RR",   11.0, "WK"),
+    ("rr04", "Shimron Hetmyer",      "RR",    7.0, "BAT"),
+    ("rr05", "Trent Boult",          "RR",   10.0, "BOWL"),
+    ("rr06", "Yuzvendra Chahal",     "RR",    8.0, "BOWL"),
+    ("rr07", "R Ashwin",             "RR",    5.0, "BOWL"),
+    ("rr08", "Riyan Parag",          "RR",    9.0, "AR"),
+    ("rr09", "Dhruv Jurel",          "RR",    7.0, "WK"),
+    ("rr10", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
+    ("rr11", "Shimron Rutherford",   "RR",    5.0, "BAT"),
+    ("rr12", "Navdeep Saini",        "RR",    4.0, "BOWL"),
+    ("rr13", "Avesh Khan",           "RR",    6.0, "BOWL"),
+    ("rr14", "Rovman Powell",        "RR",    5.0, "BAT"),
+    ("rr15", "Vaibhav Suryavanshi",  "RR",    7.0, "BAT"),
+    ("rr16", "Nandre Burger",        "RR",    4.0, "BOWL"),
+    ("rr17", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
+    ("rr18", "Adam Zampa",           "RR",    5.0, "BOWL"),
+    ("rr19", "Donovan Ferreira",     "RR",    3.0, "AR"),
+    ("rr20", "Kunal Rathore",        "RR",    3.0, "BAT"),
+    ("rr21", "Abid Mushtaq",         "RR",    3.0, "BOWL"),
+    ("rr22", "Tanush Kotian",        "RR",    3.0, "AR"),
+
+    # ══ SRH — Sunrisers Hyderabad ══
+    ("s01", "Heinrich Klaasen",      "SRH",  14.0, "WK"),
+    ("s02", "Abhishek Sharma",       "SRH",  10.0, "AR"),
+    ("s03", "Pat Cummins",           "SRH",  14.0, "BOWL"),
+    ("s04", "Bhuvneshwar Kumar",     "SRH",   8.0, "BOWL"),
+    ("s05", "Travis Head",           "SRH",  12.0, "BAT"),
+    ("s06", "Aiden Markram",         "SRH",   8.0, "BAT"),
+    ("s07", "Rahul Tripathi",        "SRH",   5.0, "BAT"),
+    ("s08", "Washington Sundar",     "SRH",   6.0, "AR"),
+    ("s09", "T Natarajan",           "SRH",   5.0, "BOWL"),
+    ("s10", "Umran Malik",           "SRH",   5.0, "BOWL"),
+    ("s11", "Abdul Samad",           "SRH",   4.0, "BAT"),
+    ("s12", "Glenn Phillips",        "SRH",   7.0, "WK"),
+    ("s13", "Sanvir Singh",          "SRH",   3.0, "BAT"),
+    ("s14", "Jaydev Unadkat",        "SRH",   4.0, "BOWL"),
+    ("s15", "Mayank Agarwal",        "SRH",   4.0, "BAT"),
+    ("s16", "Wanindu Hasaranga",     "SRH",  10.0, "AR"),
+    ("s17", "Marco Jansen",          "SRH",   9.0, "AR"),
+    ("s18", "Anmolpreet Singh",      "SRH",   3.0, "BAT"),
+    ("s19", "Upendra Yadav",         "SRH",   3.0, "WK"),
+    ("s20", "Nitish Reddy",          "SRH",   7.0, "AR"),
+    ("s21", "Jayant Yadav",          "SRH",   3.5, "AR"),
+    ("s22", "Mohammed Shami",        "SRH",  10.0, "BOWL"),
+]
+
+
+def seed(reset: bool = False):
+    """Insert all players into the database."""
+    (BASE_DIR / "data").mkdir(exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    if reset:
+        print("  Clearing existing players...")
+        conn.execute("DELETE FROM player_match_points")
+        conn.execute("DELETE FROM match_scores")
+        conn.execute("DELETE FROM players")
+        conn.commit()
+
+    inserted = 0
+    skipped  = 0
+    for pid, name, team, price, role in PLAYERS:
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO players (id, name, team, price, role)
+                VALUES (?, ?, ?, ?, ?)
+            """, (pid, name, team, price, role))
+            inserted += 1
+        except sqlite3.IntegrityError as e:
+            print(f"  Skip {pid} ({name}): {e}")
+            skipped += 1
+
+    conn.commit()
+    total = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+    conn.close()
+
+    print(f"\n\u2705 Players seeded: {inserted} inserted, {skipped} skipped")
+    print(f"  Total players in DB: {total}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Seed IPL 2026 player roster")
+    parser.add_argument("--reset", action="store_true", help="Wipe and re-seed")
+    args = parser.parse_args()
+    print("\n--- IPL 2026 Player Roster Seeder ---")
+    seed(reset=args.reset)

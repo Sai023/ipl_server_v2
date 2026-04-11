@@ -1,176 +1,186 @@
 # IPL Fantasy League 2026
 
 A self-hosted fantasy cricket league for IPL 2026.  
-Pick your XI each week, earn points from real match performances, and compete with friends on a live leaderboard.
+Pick your XI each week, earn points from real matches, compete on a live leaderboard.
+
+---
+
+## Quick Start (Step by Step)
+
+### Prerequisites
+- **Python 3.11+** installed ([download](https://www.python.org/downloads/))
+- **Git** installed ([download](https://git-scm.com/downloads))
+
+### Step 1 — Clone the repository
+```bash
+git clone https://github.com/Sai023/ipl_server_v2.git
+cd ipl_server_v2
+```
+
+### Step 2 — Install dependencies
+```bash
+pip install -r requirements.txt
+```
+This installs `Flask` and `requests` only. No browser or Playwright needed.
+
+### Step 3 — Seed the player roster (first time only)
+```bash
+python Seed_Players.py
+```
+This populates ~220 IPL 2026 players into the database with IDs, names, teams, prices, and roles.
+
+### Step 4 — Seed the match schedule (first time only)
+```bash
+python Seed_Matches.py --completed 12
+```
+This creates 74 match slots. Replace `12` with however many matches have been completed.
+
+**Important:** Edit `Seed_Matches.py` and add real Cricbuzz match IDs to the `CB_MATCH_IDS` list as matches are scheduled. Find IDs from Cricbuzz URLs like `cricbuzz.com/live-cricket-scorecard/XXXXX`.
+
+### Step 5 — Fetch match data from Cricbuzz
+```bash
+python scraper.py
+```
+This fetches scorecards for all completed matches and calculates fantasy points. Takes ~10 seconds.
+
+### Step 6 — Start the server
+```bash
+python server.py
+```
+
+You'll see a banner like:
+```
++=========================================================+
+|  IPL FANTASY 2026                                       |
++=========================================================+
+|| Local:    http://localhost:5000                        ||
+|| Network:  http://192.168.1.X:5000  (same Wi-Fi)       ||
++=========================================================+
+```
+
+**Open the Local URL** in your browser: [http://localhost:5000](http://localhost:5000)
+
+### Step 7 (Optional) — Share with friends via public tunnel
+```bash
+python server.py --tunnel
+```
+This auto-detects Cloudflare, ngrok, or Pinggy and gives you a public URL to share.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌───────────────┐
-│  index.html │────▶│  server.py  │────▶│  fantasy.db   │
-│  ipl_glue.js│◀────│  (Flask)    │◀────│  (SQLite/WAL) │
-└─────────────┘     └──────┬──────┘     └───────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │ db_manager  │
-                    │   .py       │
-                    └─────────────┘
-
-┌──────────────┐     GitHub Actions (daily cron)
-│  scraper.py  │────▶  Cricbuzz JSON API
-│  (requests)  │────▶  data/matches/*.json
-└──────────────┘────▶  fantasy.db updates
+Seed_Players.py   ──▶  players table (~220 players)
+Seed_Matches.py   ──▶  matches table (74 match slots)
+scraper.py        ──▶  Cricbuzz JSON → match_scores → player_match_points
+server.py         ──▶  Flask API + UI  (reads all tables)
+ipl_glue.js       ──▶  Frontend polling + auto-rollover
 ```
 
-## Key Components
+## How Data Flows
 
-| File | Purpose |
-|---|---|
-| `server.py` | Flask API server — routes, fuzzy player matching, tunnel support |
-| `db_manager.py` | SQLite manager — schema, CRUD, points engine, rollover |
-| `scraper.py` | Cricbuzz JSON scraper — no browser needed, pure HTTP |
-| `Seed_Matches.py` | Seeds the match schedule from Cricbuzz series page |
-| `ipl_glue.js` | Frontend integration — polling, rollover scheduler, API wrapper |
-| `templates/index.html` | Main UI |
+1. **Players**: `Seed_Players.py` → `players` table (id, name, team, price, role)
+2. **Matches**: `Seed_Matches.py` → `matches` table (Cricbuzz URLs + status)
+3. **Scores**: `scraper.py` → Cricbuzz JSON → fuzzy-match names to player IDs → `match_scores`
+4. **Points**: `db_manager.calc_pts()` → `player_match_points` (base points per player per match)
+5. **Selections**: Users pick teams via UI → `user_selections` (this_week + next_week)
+6. **Leaderboard**: SQL joins selections × points with cap/VC multipliers
 
-## Quick Start (Local)
-
-```bash
-# 1. Clone
-git clone https://github.com/Sai023/ipl_server_v2.git
-cd ipl_server_v2
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Seed match schedule (first time only)
-python Seed_Matches.py --completed 12
-
-# 4. Run the scraper to fetch match data
-python scraper.py
-
-# 5. Start the server
-python server.py
-
-# 6. (Optional) Start with public tunnel for remote access
-python server.py --tunnel
-```
-
-Open `http://localhost:5000` in your browser.
-
-## How It Works
-
-### Data Pipeline
-
-1. **Seed**: `Seed_Matches.py` populates the `matches` table with Cricbuzz match IDs and URLs
-2. **Scrape**: `scraper.py` fetches scorecard JSON from Cricbuzz (no browser, no Playwright)
-3. **Process**: Batting, bowling, and fielding stats are parsed from the JSON and matched to players via fuzzy name resolution
-4. **Store**: Stats go into `match_scores`, fantasy points are calculated and stored in `player_match_points`
-5. **Serve**: `server.py` serves the UI and APIs
-
-### Fantasy Points Engine
-
-Defined in `db_manager.py → calc_pts()`. Key scoring:
-
-- **Batting**: 1pt/run, +1/four, +2/six, +4/+8/+16 for 30/50/100, SR bonuses
-- **Bowling**: 25pt/wicket, +8 LBW/bowled bonus, +12/maiden, economy bonuses
-- **Fielding**: 8pt/catch (+4 bonus for 3+), 12pt/stumping, 12pt/direct run-out
-- **Multipliers**: Captain = 2×, Vice-Captain = 1.5×
-- **Base**: 4 pts for playing
-
-### Weekly Rollover
+## Weekly Rollover
 
 Every **Monday at 14:00 UTC**:
 - `next_week` selections become `this_week`
-- A new week row is created (history-preserving)
+- A new week row is created (history preserved)
 - If no `next_week` was set, `this_week` carries forward
 - Season caps at 8 weeks
 
-Triggered automatically by `ipl_glue.js` in the browser, or manually via:
+Manual trigger:
 ```bash
 curl -X POST http://localhost:5000/api/rollover
-curl -X POST http://localhost:5000/api/rollover?force=1  # bypass deadline
+curl -X POST http://localhost:5000/api/rollover?force=1
 ```
 
-### Player Matching (Fuzzy Resolution)
+## Fantasy Points Scoring
+
+| Category | Rule | Points |
+|----------|------|--------|
+| Playing | Appearing in XI | +4 |
+| Batting | Per run | +1 |
+| Batting | Per four | +1 bonus |
+| Batting | Per six | +2 bonus |
+| Batting | 30 / 50 / 100 | +4 / +8 / +16 |
+| Batting | Duck (out for 0) | -2 |
+| Batting | SR > 125 (min 10 balls) | +6 |
+| Bowling | Per wicket | +25 |
+| Bowling | LBW / Bowled bonus | +8 |
+| Bowling | Maiden over | +12 |
+| Bowling | Economy < 5 (min 2 ov) | +6 |
+| Fielding | Catch | +8 |
+| Fielding | 3+ catches bonus | +4 |
+| Fielding | Stumping | +12 |
+| Fielding | Direct run-out | +12 |
+| Fielding | Run-out assist | +6 |
+| Multiplier | Captain | 2× |
+| Multiplier | Vice-Captain | 1.5× |
+
+## Player Matching (Fuzzy Resolution)
 
 The system resolves player inputs through 6 tiers:
 1. **Exact ID** — `r01`, `k16`
 2. **Exact name + team** — "Virat Kohli" + RCB
 3. **Exact name** — "Virat Kohli"
 4. **Semantic shorthand** — "vk" → Virat Kohli, "bumpy" → Jasprit Bumrah
-5. **Token-set fuzzy** — "V Kohli" matches "Virat Kohli" (≥40% threshold)
+5. **Token-set fuzzy** — "V Kohli" → Virat Kohli (≥40%)
 6. **Surname match** — "Kohli" → Virat Kohli
-
-The scraper uses the same fuzzy engine to match Cricbuzz player names to your `players` table.
 
 ## GitHub Actions (Automated Daily Sync)
 
-The `.github/workflows/daily_sync.yml` workflow runs daily at midnight UTC:
+The `.github/workflows/daily_sync.yml` runs daily at midnight UTC:
+1. Installs `requests` + `Flask` (no Playwright)
+2. Runs `scraper.py`
+3. Commits updated data
 
-1. Checks out the repo
-2. Installs Python + `requests` + `Flask` (no Playwright/Chromium)
-3. Runs `scraper.py` to fetch new match data from Cricbuzz
-4. Commits updated `data/matches/*.json` and `data/fantasy.db`
+**Run time: ~15 seconds** (vs 3+ minutes with old Playwright scraper).
 
-**Run time: ~10-20 seconds** (vs 2-4 minutes with the old Playwright scraper).
-
-Trigger manually: Actions tab → "IPL 2026 Daily Sync" → Run workflow.
-
-## Database Schema
-
-6 tables in `data/fantasy.db` (SQLite, WAL mode):
-
-| Table | Purpose |
-|---|---|
-| `players` | Player registry (~200 players): id, name, team, price, role |
-| `matches` | Match schedule: id, week_no, title, status, scorecard_url |
-| `match_scores` | Per-player per-match raw stats (runs, wickets, catches...) |
-| `player_match_points` | Calculated fantasy points per player per match |
-| `user_selections` | Weekly team picks: this_week + next_week, captain/VC |
-| `meta` | Key-value config store |
-
-## API Endpoints
+## API Reference
 
 | Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/state` | Full app state (members, matches, scores) |
-| GET | `/api/players` | Player roster with fuzzy lookup indices |
-| GET | `/api/leaderboard` | Rankings with MVP, league avg |
-| GET | `/api/current-week` | Current week number |
-| GET | `/api/history/<name>` | Full week-by-week history for a user |
+|--------|----------|-------------|
 | GET | `/api/ping` | Health check + config |
-| POST | `/api/save-next-week/<name>` | Save next week team (fuzzy-resolves inputs) |
-| POST | `/api/rollover` | Trigger weekly rollover |
-| POST | `/api/resolve-player` | Test fuzzy player matching |
-| POST | `/api/state` | Bulk state save |
-| PUT | `/api/member/<name>` | Upsert a member's selections |
-
-## Configuration
-
-In `server.py`:
-- `BUDGET_TOTAL = 100.0` — Max team cost in CR
-- `XI_SIZE = 11` — Squad size
-- `MAX_WEEKS = 8` — Season length
-- `DEADLINE_HOUR = 14` — Rollover time (UTC)
+| GET | `/api/state` | Full app state |
+| GET | `/api/players` | Player roster |
+| GET | `/api/leaderboard` | Rankings |
+| GET | `/api/current-week` | Current week number |
+| GET | `/api/history/<name>` | User's week history |
+| POST | `/api/save-next-week/<name>` | Save next week team |
+| POST | `/api/rollover` | Trigger rollover |
+| POST | `/api/resolve-player` | Test fuzzy matching |
 
 ## Updating Match IDs
 
-When new Cricbuzz match IDs become available:
+As IPL 2026 matches are scheduled on Cricbuzz:
+1. Open `Seed_Matches.py`
+2. Add entries to `CB_MATCH_IDS`: `(match_no, "cricbuzz_id", "Title")`
+3. Run `python Seed_Matches.py --completed N`
+4. Run `python scraper.py`
 
-1. Edit the `CB_MATCH_IDS` list in `Seed_Matches.py`
-2. Run `python Seed_Matches.py --completed N` (where N = completed matches)
-3. Run `python scraper.py` to fetch scorecard data
+## Configuration
 
-Or if the Cricbuzz series page is live:
-```bash
-python Seed_Matches.py --series-id XXXX --completed N
-```
+| Setting | File | Default |
+|---------|------|---------|
+| Budget | `server.py` | 100.0 CR |
+| Squad size | `server.py` | 11 |
+| Season length | `server.py` | 8 weeks |
+| Rollover time | `server.py` | Monday 14:00 UTC |
+| DB path | `server.py` | `data/fantasy.db` |
 
-## Tech Stack
+## Troubleshooting
 
-- **Backend**: Python 3.11, Flask, SQLite (WAL mode)
-- **Scraper**: `requests` library → Cricbuzz JSON (no browser)
-- **Frontend**: Vanilla HTML/JS, `ipl_glue.js` integration layer
-- **CI/CD**: GitHub Actions (daily cron)
-- **Tunnel**: Optional Cloudflare/ngrok/Pinggy for public access
+| Problem | Fix |
+|---------|-----|
+| "0 players loaded" | Run `python Seed_Players.py` first |
+| "0 completed matches" | Run `python Seed_Matches.py --completed N` |
+| "no valid Cricbuzz ID" | Update `CB_MATCH_IDS` in `Seed_Matches.py` |
+| Leaderboard shows 0 | Check that player IDs match between selections and match_scores |
+| Server won't start | Check `data/fantasy.db` exists and isn't locked |
