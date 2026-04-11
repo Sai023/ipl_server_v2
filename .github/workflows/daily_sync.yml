@@ -27,34 +27,29 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 3. Install Core Dependencies
-        # These are the native installation steps that solved the "Red Screen" crash
+      - name: 3. Install dependencies
         run: |
           pip install --upgrade pip
-          pip install playwright flask
-          # This command installs the browser AND the required Linux system libraries
-          python -m playwright install chromium --with-deps
+          pip install -r requirements.txt
 
-      - name: 4. Execution Layer (Master Scraper)
+      - name: 4. Run Cricbuzz scraper
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           mkdir -p data/matches
           python scraper.py
 
-      - name: 5. Persistence Layer (Atomic Sync)
+      - name: 5. Commit & push data
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # ARCHITECTURAL FIX: Use -f to bypass any .gitignore rules
-          # This ensures JSONs and the DB actually land in your repo
+
           git add -f data/matches/*.json 2>/dev/null || true
           git add -f data/fantasy.db 2>/dev/null || true
-          
+
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "data: sync $(date +%Y-%m-%d)"
             git push origin main
           else
-            echo "Infrastructure Check: No changes detected."
+            echo "No changes detected."
           fi
