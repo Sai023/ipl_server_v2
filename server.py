@@ -1,14 +1,12 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11
+IPL Fantasy 2026 — Flask Server                             Golden File v11.1
 ===========================================================================
-All persistence delegated to DatabaseManager / GoldenDB (db_manager.py).
-This file owns: routing, rate-limiting, tunnel management, startup,
-season-history seeding, rolling-week rollover, and the intelligent
-player-matching / fuzzy-resolution engine.
-
-v11 changes (Phase-2 fixes):
-  • DEF-001 FIX: _auto_seed_if_needed() now looks for Seed_Matches.py
-  • Cold-start hydration from JSON archives on empty DB.
+v11.1 fixes:
+  • _db_con(): timeout 10→30, added PRAGMA busy_timeout=30000
+    Prevents 'database is locked' when scraper.py and server.py run concurrently.
+  • _auto_seed_history_if_needed(): skip week_no < 1 entries.
+    Schema CHECK (week_no >= 1) made W0 entries abort the entire seed function,
+    preventing W1 entries for Sai & Moe from being written.
 """
 
 import collections
@@ -112,14 +110,6 @@ _SEMANTIC_MAP = {
 # SEASON HISTORY SEED DATA
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_SAI_W0_TEAM = ["k16","m12","r20","m09","d04","rr11","r01","k01","m03","s03","r04"]
-_SAI_W0_CAP  = "r01"
-_SAI_W0_VC   = "k16"
-
-_MOE_W0_TEAM = ["k16","m09","k11","r08","r09","m07","r02","m03","s03","r04","s04"]
-_MOE_W0_CAP  = "r04"
-_MOE_W0_VC   = "k16"
-
 _SAI_W1_TEAM = ["d12","rr08","g11","c05","g08","rr15","rr05","s22","rr03","p01","s03"]
 _SAI_W1_CAP  = "rr03"
 _SAI_W1_VC   = "rr15"
@@ -128,9 +118,9 @@ _MOE_W1_TEAM = ["m10","r15","k10","r09","m11","m20","rr05","rr11","m04","s03","d
 _MOE_W1_CAP  = "d01"
 _MOE_W1_VC   = "s03"
 
+# NOTE: week_no must be >= 1 (schema CHECK constraint).
+# Pre-season (week 0) entries removed to prevent startup error.
 _HISTORY_SEED = [
-    ("Sai", 0, _SAI_W0_TEAM, _SAI_W0_CAP, _SAI_W0_VC),
-    ("Moe", 0, _MOE_W0_TEAM, _MOE_W0_CAP, _MOE_W0_VC),
     ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
     ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
 ]
@@ -366,31 +356,32 @@ def _log(msg: str, level: str = "info"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _db_con():
-    """Raw sqlite3 connection used exclusively by resolver functions."""
-    con = sqlite3.connect(str(DB_PATH), timeout=10)
+    """
+    Raw sqlite3 connection for resolver functions only.
+    v11.1: timeout 30s + busy_timeout 30000ms prevents 'database is locked'
+    when server.py and scraper.py run concurrently.
+    """
+    con = sqlite3.connect(str(DB_PATH), timeout=30)   # v11.1: was 10
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode = WAL")
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA busy_timeout = 30000")         # v11.1: new
     return con
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTO-SEED MATCH DATA  (DEF-001 FIX: correct filename)
+# AUTO-SEED MATCH DATA
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _auto_seed_if_needed():
-    # DEF-001 FIX: Look for the actual seed script filenames
     seed_script = BASE_DIR / "Seed_Matches.py"
     if not seed_script.exists():
         seed_script = BASE_DIR / "seed_matches.py"
     if not seed_script.exists():
-        seed_script = BASE_DIR / "Seed_ipl2026.py"
-    if not seed_script.exists():
-        seed_script = BASE_DIR / "seed_ipl2026.py"
-    if not seed_script.exists():
         return
     try:
-        con = sqlite3.connect(str(DB_PATH), timeout=10)
+        con = sqlite3.connect(str(DB_PATH), timeout=30)
+        con.execute("PRAGMA busy_timeout = 30000")
         match_count = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
         con.close()
     except Exception:
@@ -406,14 +397,14 @@ def _auto_seed_if_needed():
 
 
 def _auto_seed_players_if_needed():
-    """DEF-002 FIX: Auto-seed players if table is empty."""
     seed_script = BASE_DIR / "Seed_Players.py"
     if not seed_script.exists():
         seed_script = BASE_DIR / "seed_players.py"
     if not seed_script.exists():
         return
     try:
-        con = sqlite3.connect(str(DB_PATH), timeout=10)
+        con = sqlite3.connect(str(DB_PATH), timeout=30)
+        con.execute("PRAGMA busy_timeout = 30000")
         player_count = con.execute("SELECT COUNT(*) FROM players").fetchone()[0]
         con.close()
     except Exception:
@@ -429,7 +420,7 @@ def _auto_seed_players_if_needed():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTO-SEED SEASON HISTORY  (W0 + W1 for Sai & Moe)
+# AUTO-SEED SEASON HISTORY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _auto_seed_history_if_needed():
@@ -448,50 +439,59 @@ def _auto_seed_history_if_needed():
         replaced = []
 
         for name, week_no, team, cap, vc in _HISTORY_SEED:
-            existing = con.execute(
-                "SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",
-                (name, week_no),
-            ).fetchone()
+            # v11.1: schema CHECK (week_no >= 1) — skip any pre-season entries
+            if week_no < 1:
+                continue
 
-            if existing:
-                if _looks_like_ids(existing["tw_team_json"]):
-                    continue
-                else:
-                    resolved_team, rlog = resolve_id_list(con, team)
-                    unresolved = [e for e in rlog if e["action"] == "unresolved"]
-                    if unresolved:
-                        print(f"  [startup] Warn: unresolved in {name}/W{week_no}: {unresolved}")
-                    con.execute(
-                        "DELETE FROM user_selections WHERE display_name=? AND week_no=?",
-                        (name, week_no),
-                    )
-                    team = resolved_team
-                    if cap and not _ID_RE.match(str(cap)):
-                        m = resolve_player_id(con, cap)
-                        if m:
-                            cap = m["id"]
-                    if vc and not _ID_RE.match(str(vc)):
-                        m = resolve_player_id(con, vc)
-                        if m:
-                            vc = m["id"]
-                    replaced.append(f"{name}/W{week_no}")
+            try:
+                existing = con.execute(
+                    "SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",
+                    (name, week_no),
+                ).fetchone()
 
-            con.execute("""
-                INSERT INTO user_selections
-                    (display_name, week_no,
-                     tw_team_json, tw_cap_id, tw_vc_id,
-                     nw_team_json, nw_cap_id, nw_vc_id)
-                VALUES (?,?,?,?,?,?,?,?)
-                ON CONFLICT(display_name, week_no) DO UPDATE SET
-                    tw_team_json = excluded.tw_team_json,
-                    tw_cap_id    = excluded.tw_cap_id,
-                    tw_vc_id     = excluded.tw_vc_id
-            """, (
-                name, week_no,
-                _json.dumps(team), cap, vc,
-                _json.dumps(team), cap, vc,
-            ))
-            seeded.append(f"{name}/W{week_no}")
+                if existing:
+                    if _looks_like_ids(existing["tw_team_json"]):
+                        continue
+                    else:
+                        resolved_team, rlog = resolve_id_list(con, team)
+                        unresolved = [e for e in rlog if e["action"] == "unresolved"]
+                        if unresolved:
+                            print(f"  [startup] Warn: unresolved in {name}/W{week_no}: {unresolved}")
+                        con.execute(
+                            "DELETE FROM user_selections WHERE display_name=? AND week_no=?",
+                            (name, week_no),
+                        )
+                        team = resolved_team
+                        if cap and not _ID_RE.match(str(cap)):
+                            m = resolve_player_id(con, cap)
+                            if m:
+                                cap = m["id"]
+                        if vc and not _ID_RE.match(str(vc)):
+                            m = resolve_player_id(con, vc)
+                            if m:
+                                vc = m["id"]
+                        replaced.append(f"{name}/W{week_no}")
+
+                con.execute("""
+                    INSERT INTO user_selections
+                        (display_name, week_no,
+                         tw_team_json, tw_cap_id, tw_vc_id,
+                         nw_team_json, nw_cap_id, nw_vc_id)
+                    VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(display_name, week_no) DO UPDATE SET
+                        tw_team_json = excluded.tw_team_json,
+                        tw_cap_id    = excluded.tw_cap_id,
+                        tw_vc_id     = excluded.tw_vc_id
+                """, (
+                    name, week_no,
+                    _json.dumps(team), cap, vc,
+                    _json.dumps(team), cap, vc,
+                ))
+                seeded.append(f"{name}/W{week_no}")
+
+            except sqlite3.Error as e:
+                print(f"  [startup] Skip seed {name}/W{week_no}: {e}")
+                continue
 
         if replaced:
             print(f"  [startup] Replaced stale seeds: {', '.join(replaced)}")
