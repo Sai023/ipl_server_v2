@@ -1,11 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.2
+IPL Fantasy 2026 — Flask Server                             Golden File v11.3
 ===========================================================================
-v11.2 additions:
-  NEW /api/player-points/<name>    — per-player points breakdown per match
-  NEW /api/update-match-url        — admin: set/update a match Cricbuzz URL
-  NEW /api/matches-status          — all matches with current scorecard URLs
-  (db-locked / week_no fixes from v11.1 retained)
+v11.3:
+  Seed W1, W2, W3 selections so all 17 completed matches score:
+    Week 1: M1-M2  (before Mar 30 14:00 IST rollover)
+    Week 2: M3-M11 (Mar 30 14:00 – Apr 6 14:00 IST)
+    Week 3: M12-M17 (Apr 6 14:00 onwards, current week until Apr 13)
+  New endpoint: POST /api/recalculate-points  (admin convenience trigger)
+  Tunnel: warn user when using ephemeral SSH tunnels (localhost.run/pinggy)
+  (all v11.2 endpoints retained)
 """
 
 import collections
@@ -68,12 +71,25 @@ _SEMANTIC_MAP = {
     "samson":"sanju samson","tharva":"atharva taide",
 }
 
-# ── History seed (week_no >= 1 only) ────────────────────────────────────────
+# ── History seed ────────────────────────────────────────────────────────
+# Calendar-based week boundaries (Monday 14:00 IST rollover):
+#   W1: Mar 28-29 (M1=SRH/RCB, M2=KKR/MI) — 2 matches
+#   W2: Mar 30 14:00 – Apr 6 14:00 (M3-M11) — 9 matches
+#   W3: Apr 6 14:00 – Apr 13 14:00 (M12-M17+) — current week
+# Same team carried forward each rollover (no change made by users yet).
 _SAI_W1_TEAM = ["d12","rr08","g11","c05","g08","rr15","rr05","s22","rr03","p01","s03"]
 _MOE_W1_TEAM = ["m10","r15","k10","r09","m11","m20","rr05","rr11","m04","s03","d01"]
+
 _HISTORY_SEED = [
+    # Week 1 — M1 (SRH vs RCB) + M2 (KKR vs MI)
     ("Sai", 1, _SAI_W1_TEAM, "rr03", "rr15"),
     ("Moe", 1, _MOE_W1_TEAM, "d01",  "s03"),
+    # Week 2 rollover — Mar 30 14:00 IST. Same team carried forward.
+    ("Sai", 2, _SAI_W1_TEAM, "rr03", "rr15"),
+    ("Moe", 2, _MOE_W1_TEAM, "d01",  "s03"),
+    # Week 3 rollover — Apr 6 14:00 IST. Same team, locked until Apr 13.
+    ("Sai", 3, _SAI_W1_TEAM, "rr03", "rr15"),
+    ("Moe", 3, _MOE_W1_TEAM, "d01",  "s03"),
 ]
 
 
@@ -157,7 +173,6 @@ def resolve_id_list(con, id_or_name_list, display_name=None, week_no=None):
         try:
             con.execute("UPDATE user_selections SET nw_team_json=? WHERE display_name=? AND week_no=?",
                         (_json.dumps(resolved),display_name,week_no))
-            _log(f"[resolver] Write-back patched {display_name}/W{week_no}")
         except Exception as e:
             _log(f"[resolver] Write-back failed: {e}","warning")
     return resolved, log
@@ -317,7 +332,7 @@ app.config["MAX_CONTENT_LENGTH"]=1*1024*1024
 def _handle_integrity(e):
     msg=str(e)
     if "UNIQUE" in msg.upper(): return jsonify({"error":f"Duplicate record: {msg}","code":400}),400
-    if "CHECK" in msg.upper() or "FOREIGN KEY" in msg.upper(): return jsonify({"error":f"Constraint violation: {msg}","code":400}),400
+    if "CHECK" in msg.upper() or "FOREIGN KEY" in msg.upper(): return jsonify({"error":f"Constraint: {msg}","code":400}),400
     return jsonify({"error":msg,"code":400}),400
 
 @app.errorhandler(sqlite3.OperationalError)
@@ -507,108 +522,80 @@ def api_poll():
     except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
-# ════ NEW v11.2 ENDPOINTS ────────────────────────────────────────────────────────
+# ════ NEW v11.2 / v11.3 ENDPOINTS
 
 @app.route("/api/player-points/<name>",methods=["GET"])
 def api_player_points(name):
-    """
-    Returns per-player fantasy points for all players in <name>'s current XI,
-    broken down per match and per week.
-    Response: { ok, name, week_no, total_pts, players: [ {id, name, team, role,
-                is_cap, is_vc, total_pts, matches: [ {match_id, title, week_no,
-                base_pts, multiplier, final_pts} ] } ] }
-    """
+    """Per-player fantasy points breakdown, aggregated across ALL selection weeks."""
     try:
-        if not name or len(name) > 30:
+        if not name or len(name)>30:
             return jsonify({"error":"invalid name","code":400}),400
 
-        week_filter = request.args.get("week","").strip()
-        week_no     = int(week_filter) if week_filter.isdigit() else None
-
         with db._read() as con:
-            con.row_factory = sqlite3.Row
+            con.row_factory=sqlite3.Row
+            # Collect all week selections for this user
+            sel_rows=con.execute("""
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id
+                FROM user_selections WHERE display_name=? ORDER BY week_no
+            """,(name,)).fetchall()
 
-            # Get user's current XI
-            row = con.execute("""
-                SELECT tw_team_json, tw_cap_id, tw_vc_id
-                FROM user_selections
-                WHERE display_name=?
-                ORDER BY week_no DESC LIMIT 1
-            """, (name,)).fetchone()
-
-            if not row:
+            if not sel_rows:
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
 
             import json as _j
-            team_ids = _j.loads(row["tw_team_json"] or "[]")
-            cap_id   = row["tw_cap_id"]
-            vc_id    = row["tw_vc_id"]
+            # Build {player_id: {name,team,role,is_cap,is_vc}} from latest week
+            latest=sel_rows[-1]
+            team_ids=_j.loads(latest["tw_team_json"] or "[]")
+            latest_cap=latest["tw_cap_id"]; latest_vc=latest["tw_vc_id"]
 
             if not team_ids:
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
 
-            # Player info
-            ph = ",".join("?"*len(team_ids))
-            player_rows = {r["id"]:dict(r) for r in
+            ph=",".join("?"*len(team_ids))
+            player_rows={r["id"]:dict(r) for r in
                 con.execute(f"SELECT id,name,team,role,price FROM players WHERE id IN ({ph})",
                             team_ids).fetchall()}
 
-            # Points per player per match
-            wn_filter = "AND pmp.week_no=?" if week_no else ""
-            args = team_ids + ([week_no] if week_no else [])
-            pts_rows = con.execute(f"""
-                SELECT pmp.player_id, pmp.match_id, pmp.week_no,
-                       pmp.base_pts, pmp.multiplier, pmp.final_pts,
-                       m.title, m.date_label
-                FROM player_match_points pmp
-                JOIN matches m ON m.id=pmp.match_id
-                WHERE pmp.player_id IN ({ph}) {wn_filter}
-                ORDER BY m.week_no, m.id
-            """, args).fetchall()
+            # For each selection week, get matching player_match_points
+            by_player=collections.defaultdict(list)
+            for sel in sel_rows:
+                wn=sel["week_no"]
+                ids=_j.loads(sel["tw_team_json"] or "[]")
+                cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]
+                if not ids: continue
+                iph=",".join("?"*len(ids))
+                pts=con.execute(f"""
+                    SELECT pmp.player_id,pmp.match_id,pmp.week_no,pmp.base_pts,
+                           m.title,m.date_label
+                    FROM player_match_points pmp
+                    JOIN matches m ON m.id=pmp.match_id
+                    WHERE pmp.player_id IN ({iph}) AND pmp.week_no=?
+                    ORDER BY m.week_no,m.id
+                """,ids+[wn]).fetchall()
+                for r in pts:
+                    mult=2.0 if r["player_id"]==cap else (1.5 if r["player_id"]==vc else 1.0)
+                    by_player[r["player_id"]].append({
+                        "match_id":r["match_id"],
+                        "title":r["title"] or r["match_id"],
+                        "week_no":r["week_no"],
+                        "base_pts":r["base_pts"],
+                        "multiplier":mult,
+                        "final_pts":round(r["base_pts"]*mult),
+                    })
 
-        # Group by player
-        from collections import defaultdict
-        by_player = defaultdict(list)
-        for r in pts_rows:
-            mult = float(r["multiplier"] or 1.0)
-            if r["player_id"] == cap_id:  mult = 2.0
-            elif r["player_id"] == vc_id: mult = 1.5
-            by_player[r["player_id"]].append({
-                "match_id":  r["match_id"],
-                "title":     r["title"] or r["match_id"],
-                "week_no":   r["week_no"],
-                "base_pts":  r["base_pts"],
-                "multiplier": mult,
-                "final_pts": round(r["base_pts"] * mult),
-            })
-
-        players_out = []
-        grand_total = 0
+        players_out=[]; grand_total=0
         for pid in team_ids:
-            info    = player_rows.get(pid, {"id":pid,"name":pid,"team":"","role":"","price":0})
-            matches = by_player.get(pid, [])
-            p_total = sum(m["final_pts"] for m in matches)
-            grand_total += p_total
+            info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0})
+            matches=by_player.get(pid,[])
+            p_total=sum(m["final_pts"] for m in matches)
+            grand_total+=p_total
             players_out.append({
-                "id":       pid,
-                "name":     info.get("name",pid),
-                "team":     info.get("team",""),
-                "role":     info.get("role",""),
-                "is_cap":   pid == cap_id,
-                "is_vc":    pid == vc_id,
-                "total_pts": p_total,
-                "matches":  matches,
+                "id":pid,"name":info.get("name",pid),"team":info.get("team",""),
+                "role":info.get("role",""),"is_cap":pid==latest_cap,"is_vc":pid==latest_vc,
+                "total_pts":p_total,"matches":matches,
             })
-
-        players_out.sort(key=lambda x: -x["total_pts"])
-
-        return jsonify({
-            "ok":        True,
-            "name":      name,
-            "week_no":   week_no,
-            "total_pts": grand_total,
-            "players":   players_out,
-        })
+        players_out.sort(key=lambda x:-x["total_pts"])
+        return jsonify({"ok":True,"name":name,"total_pts":grand_total,"players":players_out})
 
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
@@ -617,87 +604,64 @@ def api_player_points(name):
 
 @app.route("/api/matches-status",methods=["GET"])
 def api_matches_status():
-    """All matches with id, title, status, week_no, scorecard_url for admin panel."""
     try:
         with db._read() as con:
-            rows = con.execute(
+            rows=con.execute(
                 "SELECT id,week_no,title,status,scorecard_url FROM matches ORDER BY week_no,id"
             ).fetchall()
-        return jsonify({
-            "ok":      True,
-            "matches": [dict(r) for r in rows],
-        })
+        return jsonify({"ok":True,"matches":[dict(r) for r in rows]})
     except Exception as e:
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
 @app.route("/api/update-match-url",methods=["POST"])
 def api_update_match_url():
-    """
-    Update a match's Cricbuzz scorecard URL and trigger scrape.
-    Body: { match_id: str, url: str }   (url must contain a numeric CB match ID)
-    Also runs recalculate_points() after scrape so UI sees updated points immediately.
+    re_=_check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        d=request.get_json(force=True,silent=True) or {}
+        match_id=(d.get("match_id") or "").strip(); url=(d.get("url") or "").strip()
+        if not match_id or not url:
+            return jsonify({"error":"match_id and url required","code":400}),400
+        m=re.search(r'(\d{5,})',url)
+        if not m: return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
+        cb_id=m.group(1)
+        clean_url=f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
+        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
+        row=con.execute("SELECT id FROM matches WHERE id=?",(match_id,)).fetchone()
+        if not row:
+            con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
+        con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
+        con.commit(); con.close()
+        def _scrape_bg():
+            try:
+                mno_m=re.search(r'_m(\d+)',match_id,re.IGNORECASE)
+                if mno_m:
+                    jp=BASE_DIR/"data"/"matches"/f"match_{mno_m.group(1).zfill(2)}.json"
+                    if jp.exists(): jp.unlink()
+                subprocess.run([sys.executable,str(BASE_DIR/"scraper.py")],cwd=str(BASE_DIR),timeout=120)
+            except Exception as e: _log(f"[bg scrape] {e}","error")
+        threading.Thread(target=_scrape_bg,daemon=True).start()
+        return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
+                        "message":"URL saved. Scraping started in background — refresh in ~30 seconds."})
+    except Exception as e:
+        _log(f"POST /api/update-match-url: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@app.route("/api/recalculate-points",methods=["POST"])
+def api_recalculate_points():
+    """Admin convenience: re-run points calculation for all matches.
+    Call this after running Seed_Matches.py --force to sync week_no changes.
     """
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
-        d = request.get_json(force=True,silent=True) or {}
-        match_id  = (d.get("match_id") or "").strip()
-        url       = (d.get("url") or "").strip()
-        if not match_id or not url:
-            return jsonify({"error":"match_id and url required","code":400}),400
-
-        # Validate: extract numeric CB ID
-        m = re.search(r'(\d{5,})', url)
-        if not m:
-            return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
-        cb_id = m.group(1)
-
-        # Normalise URL
-        clean_url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-
-        # Persist URL to DB
-        con = sqlite3.connect(str(DB_PATH), timeout=30)
-        con.execute("PRAGMA busy_timeout=30000")
-        row = con.execute("SELECT id FROM matches WHERE id=?",(match_id,)).fetchone()
-        if not row:
-            con.close()
-            return jsonify({"error":f"match '{match_id}' not found","code":404}),404
-        con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url, match_id))
-        con.commit(); con.close()
-
-        # Run scraper for this single match in a background thread
-        def _scrape_bg():
-            try:
-                import importlib.util, sys as _sys
-                scraper_path = BASE_DIR / "scraper.py"
-                # Delete cached JSON so it re-scrapes
-                import re as _re
-                mno_m = _re.search(r'_m(\d+)', match_id, _re.IGNORECASE)
-                if mno_m:
-                    jp = BASE_DIR / "data" / "matches" / f"match_{mno_m.group(1).zfill(2)}.json"
-                    if jp.exists(): jp.unlink()
-                # Run as subprocess so it gets its own DB connection cleanly
-                subprocess.run(
-                    [sys.executable, str(scraper_path)],
-                    cwd=str(BASE_DIR), timeout=120
-                )
-            except Exception as e:
-                _log(f"[bg scrape] {e}","error")
-
-        t = threading.Thread(target=_scrape_bg, daemon=True)
-        t.start()
-
-        return jsonify({
-            "ok":        True,
-            "match_id":  match_id,
-            "cb_id":     cb_id,
-            "url":       clean_url,
-            "message":   "URL saved. Scraping started in background — refresh in ~30 seconds.",
-        })
-
+        n=db.recalculate_points()
+        return jsonify({"ok":True,"rows_updated":n,
+                        "message":f"Recalculated points for {n} player-match rows."})
     except Exception as e:
-        _log(f"POST /api/update-match-url: {e}","error")
+        _log(f"POST /api/recalculate-points: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
@@ -732,7 +696,8 @@ def get_lan_ip():
     except: return "127.0.0.1"
 
 class TunnelResult:
-    def __init__(self,provider,url,proc): self.provider=provider;self.url=url;self.proc=proc
+    def __init__(self,provider,url,proc,ephemeral=False):
+        self.provider=provider; self.url=url; self.proc=proc; self.ephemeral=ephemeral
     def stop(self):
         try:
             if self.proc: self.proc.terminate()
@@ -754,7 +719,7 @@ def try_cloudflare(port):
             m=re.search(r"https://[a-z0-9-]+\.trycloudflare\.com",line)
             if m: url=m.group(0); break
             if proc.poll() is not None: break
-        if url: return TunnelResult("Cloudflare",url,proc)
+        if url: return TunnelResult("Cloudflare",url,proc,ephemeral=False)
         proc.terminate()
     except Exception as e: print(f"    cloudflare error: {e}")
     return None
@@ -772,7 +737,7 @@ def try_ngrok(port):
             m=re.search(r"https://[a-z0-9-]+\.ngrok(-free)?\.app",line)
             if m: url=m.group(0); break
             if proc.poll() is not None: break
-        if url: return TunnelResult("ngrok",url,proc)
+        if url: return TunnelResult("ngrok",url,proc,ephemeral=False)
         proc.terminate()
     except Exception as e: print(f"    ngrok error: {e}")
     return None
@@ -780,7 +745,7 @@ def try_ngrok(port):
 def try_pinggy(port):
     exe=shutil.which("ssh")
     if not exe: return None
-    print("  -> Trying Pinggy...")
+    print("  -> Trying Pinggy (ephemeral SSH tunnel)...")
     try:
         proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
         url=None; dl=time.time()+20
@@ -790,7 +755,7 @@ def try_pinggy(port):
             m=re.search(r"https://[a-z0-9-]+\.a\.free\.pinggy\.link",line)
             if m: url=m.group(0); break
             if proc.poll() is not None: break
-        if url: return TunnelResult("Pinggy",url,proc)
+        if url: return TunnelResult("Pinggy",url,proc,ephemeral=True)
         proc.terminate()
     except Exception as e: print(f"    pinggy error: {e}")
     return None
@@ -798,7 +763,7 @@ def try_pinggy(port):
 def try_localhost_run(port):
     exe=shutil.which("ssh")
     if not exe: return None
-    print("  -> Trying localhost.run...")
+    print("  -> Trying localhost.run (ephemeral SSH tunnel)...")
     try:
         proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-R",f"80:localhost:{port}","nokey@localhost.run"])
         url=None; dl=time.time()+20
@@ -808,7 +773,7 @@ def try_localhost_run(port):
             m=re.search(r"https://[a-z0-9-]+\.lhr\.life",line)
             if m: url=m.group(0); break
             if proc.poll() is not None: break
-        if url: return TunnelResult("localhost.run",url,proc)
+        if url: return TunnelResult("localhost.run",url,proc,ephemeral=True)
         proc.terminate()
     except Exception as e: print(f"    localhost.run error: {e}")
     return None
@@ -818,6 +783,7 @@ def start_tunnel(port,provider="auto"):
     if provider=="ngrok": return try_ngrok(port)
     if provider=="pinggy": return try_pinggy(port)
     if provider=="localhostrun": return try_localhost_run(port)
+    # Auto: try persistent tunnels first, then ephemeral
     for fn in [try_cloudflare,try_ngrok,try_pinggy,try_localhost_run]:
         result=fn(port)
         if result: return result
@@ -826,7 +792,7 @@ def start_tunnel(port,provider="auto"):
 
 # ════ BANNER
 
-WIDE=58
+WIDE=64
 def banner_line(text="",fill=" "): pad=WIDE-len(text); return f"||  {text}{fill*max(0,pad-2)}||"
 
 def print_banner(port,tunnel,lan_ip):
@@ -839,10 +805,17 @@ def print_banner(port,tunnel,lan_ip):
         print(banner_line(f"PUBLIC URL ({tunnel.provider}):"))
         url=tunnel.url; sys.modules[__name__].CURRENT_PUBLIC_URL=url
         for i in range(0,len(url),WIDE-4): print(banner_line(f"   {url[i:i+WIDE-4]}"))
-        print(banner_line("SHARE THIS LINK with friends anywhere!"))
+        if tunnel.ephemeral:
+            print(banner_line("\u26a0  EPHEMERAL TUNNEL — URL may die after ~30 min!"))
+            print(banner_line("   For reliable tunnels, install cloudflared:"))
+            print(banner_line("   github.com/cloudflare/cloudflared/releases"))
+        else:
+            print(banner_line("SHARE THIS LINK with friends anywhere!"))
     else:
-        print(banner_line("No public tunnel running"))
-        print(banner_line("Run with --tunnel for remote access"))
+        print(banner_line("No public tunnel running."))
+        print(banner_line("Install cloudflared for a free persistent tunnel:"))
+        print(banner_line("  github.com/cloudflare/cloudflared/releases"))
+        print(banner_line("Then run: python server.py --tunnel cloudflare"))
     print(f"+{bar}+")
     print(banner_line(f"Data:  {DB_PATH}"))
     print(banner_line(f"Budget: {BUDGET_TOTAL:.0f} CR  |  XI: {XI_SIZE}  |  Season: {MAX_WEEKS} wks"))
@@ -892,8 +865,10 @@ if __name__=="__main__":
         flask_thread.start(); time.sleep(1.5)
         tunnel=start_tunnel(args.port,args.tunnel)
         if not tunnel:
-            print("\n  Could not start tunnel. Download cloudflared:")
-            print("  https://github.com/cloudflare/cloudflared/releases/latest\n")
+            print("\n  Could not start tunnel.")
+            print("  For a free persistent tunnel, install cloudflared:")
+            print("  https://github.com/cloudflare/cloudflared/releases/latest")
+            print("  Then run: python server.py --tunnel cloudflare\n")
         print_banner(args.port,tunnel,lan_ip)
         tunnel_failures=0; MAX_TF=5
         try:
@@ -906,7 +881,12 @@ if __name__=="__main__":
                         daemon=True); flask_thread.start()
                 if tunnel and tunnel.proc and tunnel.proc.poll() is not None:
                     tunnel_failures+=1
-                    if tunnel_failures>MAX_TF: print(f"\nTunnel failed {tunnel_failures}x - pausing."); tunnel=None; continue
+                    if tunnel_failures>MAX_TF:
+                        print(f"\nTunnel failed {tunnel_failures}x - pausing.")
+                        if tunnel and tunnel.ephemeral:
+                            print("  Ephemeral SSH tunnel died. Install cloudflared for reliability.")
+                            print("  https://github.com/cloudflare/cloudflared/releases/latest")
+                        tunnel=None; continue
                     backoff=min(5*tunnel_failures,30)
                     print(f"\nTunnel exited ({tunnel_failures}/{MAX_TF}). Retry in {backoff}s...")
                     time.sleep(backoff)
