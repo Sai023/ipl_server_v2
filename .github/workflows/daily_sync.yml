@@ -3,7 +3,10 @@ name: IPL 2026 Daily Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    # Run at 18:30 UTC (midnight IST) and 21:30 UTC (3am IST)
+    # This ensures matches that finished in the evening are picked up
+    - cron: '30 18 * * *'
+    - cron: '30 21 * * *'
 
 concurrency:
   group: ipl-sync
@@ -32,24 +35,36 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 4. Run Cricbuzz scraper
+      - name: 4. Seed players (if DB is empty)
+        run: python Seed_Players.py || echo "Players already seeded or error ignored"
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: 5. Seed / update match schedule (auto-detects completed from IST times)
+        # --no-live: skips Cricbuzz fetch (GitHub Actions IPs are often blocked)
+        # --force: always update match statuses (completed/upcoming) based on schedule
+        run: python Seed_Matches.py --no-live --force
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: 6. Run Cricbuzz scorecard scraper
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           mkdir -p data/matches
           python scraper.py
 
-      - name: 5. Commit & push data
+      - name: 7. Commit & push updated data
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
           git add -f data/matches/*.json 2>/dev/null || true
-          git add -f data/fantasy.db 2>/dev/null || true
+          git add -f data/fantasy.db     2>/dev/null || true
 
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "data: sync $(date +%Y-%m-%d)"
+            git commit -m "data: sync $(date -u +%Y-%m-%dT%H:%M)Z"
             git push origin main
           else
-            echo "No changes detected."
+            echo "No data changes — nothing to commit."
           fi

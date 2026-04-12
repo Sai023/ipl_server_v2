@@ -1,2 +1,10 @@
-Flask>=3.0
-requests>=2.31
+Flask>=3.0,<4.0
+requests>=2.31,<3.0
+
+# ── Optional tunnel providers (install binary, not pip) ────────────────────
+# Public tunnel for sharing with friends:
+#   cloudflared:  https://github.com/cloudflare/cloudflared/releases (recommended)
+#   ngrok:        https://ngrok.com/download
+#   Pinggy:       uses built-in ssh — no install needed
+#
+# Then run:  python server.py --tunnel

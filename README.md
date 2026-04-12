@@ -21,34 +21,52 @@ cd ipl_server_v2
 ```bash
 pip install -r requirements.txt
 ```
-This installs `Flask` and `requests` only. No browser or Playwright needed.
+Installs `Flask` and `requests` only. No browser or Playwright needed.
 
 ### Step 3 — Seed the player roster (first time only)
 ```bash
 python Seed_Players.py
 ```
-This populates ~220 IPL 2026 players into the database with IDs, names, teams, prices, and roles.
+Populates ~220 IPL 2026 players with IDs, names, teams, prices, and roles.
 
 ### Step 4 — Seed the match schedule (first time only)
 ```bash
-python Seed_Matches.py --completed 12
+python Seed_Matches.py
 ```
-This creates 74 match slots. Replace `12` with however many matches have been completed.
+**This is now fully automated.** It will:
+1. Try to discover all 74 match IDs from Cricbuzz automatically
+2. Fall back to the built-in IPL 2026 schedule (Match 1 ID `149618` confirmed)
+3. Auto-detect how many matches are completed based on IST timestamps
+4. Write the schedule to the database — no manual flags needed
 
-**Important:** Edit `Seed_Matches.py` and add real Cricbuzz match IDs to the `CB_MATCH_IDS` list as matches are scheduled. Find IDs from Cricbuzz URLs like `cricbuzz.com/live-cricket-scorecard/XXXXX`.
+**Optional flags:**
+```bash
+python Seed_Matches.py --no-live      # Skip Cricbuzz fetch (use hardcoded only)
+python Seed_Matches.py --force        # Re-seed and refresh all statuses
+python Seed_Matches.py --completed 15 # Override auto-detected completed count
+python Seed_Matches.py --verify 149618  # Test a Cricbuzz scorecard URL
+python Seed_Matches.py --debug        # Verbose output for troubleshooting
+```
+
+**Adding new Cricbuzz match IDs as the season progresses:**
+1. Open `Seed_Matches.py`
+2. Find the `IPL_2026_SCHEDULE` list
+3. Update the `None` entry to the real ID for that match
+4. ID is the number in the Cricbuzz URL: `cricbuzz.com/live-cricket-scores/**149618**/srh-vs-rcb...`
+5. Run `python Seed_Matches.py --force` to apply
 
 ### Step 5 — Fetch match data from Cricbuzz
 ```bash
 python scraper.py
 ```
-This fetches scorecards for all completed matches and calculates fantasy points. Takes ~10 seconds.
+Fetches scorecards for all completed matches and calculates fantasy points (~10 seconds).
 
 ### Step 6 — Start the server
 ```bash
 python server.py
 ```
 
-You'll see a banner like:
+You'll see:
 ```
 +=========================================================+
 |  IPL FANTASY 2026                                       |
@@ -58,13 +76,27 @@ You'll see a banner like:
 +=========================================================+
 ```
 
-**Open the Local URL** in your browser: [http://localhost:5000](http://localhost:5000)
-
-### Step 7 (Optional) — Share with friends via public tunnel
+### Step 7 — Share with friends via public tunnel
 ```bash
 python server.py --tunnel
 ```
-This auto-detects Cloudflare, ngrok, or Pinggy and gives you a public URL to share.
+Auto-detects and uses the first available tunnel provider.
+
+**Install a tunnel provider first (pick one):**
+
+| Provider | Install | Notes |
+|----------|---------|-------|
+| **Cloudflare** (recommended) | [Download cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) → add to PATH | Free, fast, stable |
+| **ngrok** | [Download ngrok](https://ngrok.com/download) → add to PATH | Free tier available |
+| **Pinggy** | No install — uses SSH | `python server.py --tunnel pinggy` |
+| **localhost.run** | No install — uses SSH | `python server.py --tunnel localhostrun` |
+
+For Cloudflare on Windows:
+```powershell
+# Download cloudflared.exe, place in e.g. C:\tools\ then:
+$env:PATH += ";C:\tools"
+python server.py --tunnel
+```
 
 ---
 
@@ -72,7 +104,7 @@ This auto-detects Cloudflare, ngrok, or Pinggy and gives you a public URL to sha
 
 ```
 Seed_Players.py   ──▶  players table (~220 players)
-Seed_Matches.py   ──▶  matches table (74 match slots)
+Seed_Matches.py   ──▶  matches table (74 IPL 2026 slots, auto-discovered IDs)
 scraper.py        ──▶  Cricbuzz JSON → match_scores → player_match_points
 server.py         ──▶  Flask API + UI  (reads all tables)
 ipl_glue.js       ──▶  Frontend polling + auto-rollover
@@ -81,7 +113,7 @@ ipl_glue.js       ──▶  Frontend polling + auto-rollover
 ## How Data Flows
 
 1. **Players**: `Seed_Players.py` → `players` table (id, name, team, price, role)
-2. **Matches**: `Seed_Matches.py` → `matches` table (Cricbuzz URLs + status)
+2. **Matches**: `Seed_Matches.py` → `matches` table (Cricbuzz scorecard URLs + status)
 3. **Scores**: `scraper.py` → Cricbuzz JSON → fuzzy-match names to player IDs → `match_scores`
 4. **Points**: `db_manager.calc_pts()` → `player_match_points` (base points per player per match)
 5. **Selections**: Users pick teams via UI → `user_selections` (this_week + next_week)
@@ -130,18 +162,29 @@ The system resolves player inputs through 6 tiers:
 1. **Exact ID** — `r01`, `k16`
 2. **Exact name + team** — "Virat Kohli" + RCB
 3. **Exact name** — "Virat Kohli"
-4. **Semantic shorthand** — "vk" → Virat Kohli, "bumpy" → Jasprit Bumrah
+4. **Semantic shorthand** — `vk` → Virat Kohli, `bumpy` → Jasprit Bumrah
 5. **Token-set fuzzy** — "V Kohli" → Virat Kohli (≥40%)
 6. **Surname match** — "Kohli" → Virat Kohli
 
 ## GitHub Actions (Automated Daily Sync)
 
-The `.github/workflows/daily_sync.yml` runs daily at midnight UTC:
-1. Installs `requests` + `Flask` (no Playwright)
-2. Runs `scraper.py`
-3. Commits updated data
+The `.github/workflows/daily_sync.yml` runs daily at **18:30 UTC and 21:30 UTC**:
+1. Installs dependencies
+2. Seeds players (if empty)
+3. Updates match statuses from IST schedule (no live Cricbuzz fetch — GitHub IPs are often blocked)
+4. Runs `scraper.py` to fetch scorecards for newly completed matches
+5. Commits updated data
 
-**Run time: ~15 seconds** (vs 3+ minutes with old Playwright scraper).
+**Run time: ~15–30 seconds.**
+
+## Cricbuzz URL Reference
+
+| URL pattern | Used for | Example |
+|-------------|----------|---------|
+| `/live-cricket-scores/{ID}/slug` | Series page links (source of match IDs) | `/live-cricket-scores/149618/srh-vs-rcb-...` |
+| `/live-cricket-scorecard/{ID}` | Scorecard data (what scraper.py fetches) | `/live-cricket-scorecard/149618` |
+
+Both use the same numeric ID. Seed_Matches.py discovers IDs from the first pattern and stores the second.
 
 ## API Reference
 
@@ -152,18 +195,10 @@ The `.github/workflows/daily_sync.yml` runs daily at midnight UTC:
 | GET | `/api/players` | Player roster |
 | GET | `/api/leaderboard` | Rankings |
 | GET | `/api/current-week` | Current week number |
-| GET | `/api/history/<name>` | User's week history |
-| POST | `/api/save-next-week/<name>` | Save next week team |
+| GET | `/api/history/<n>` | User's week history |
+| POST | `/api/save-next-week/<n>` | Save next week team |
 | POST | `/api/rollover` | Trigger rollover |
 | POST | `/api/resolve-player` | Test fuzzy matching |
-
-## Updating Match IDs
-
-As IPL 2026 matches are scheduled on Cricbuzz:
-1. Open `Seed_Matches.py`
-2. Add entries to `CB_MATCH_IDS`: `(match_no, "cricbuzz_id", "Title")`
-3. Run `python Seed_Matches.py --completed N`
-4. Run `python scraper.py`
 
 ## Configuration
 
@@ -179,8 +214,11 @@ As IPL 2026 matches are scheduled on Cricbuzz:
 
 | Problem | Fix |
 |---------|-----|
-| "0 players loaded" | Run `python Seed_Players.py` first |
-| "0 completed matches" | Run `python Seed_Matches.py --completed N` |
-| "no valid Cricbuzz ID" | Update `CB_MATCH_IDS` in `Seed_Matches.py` |
-| Leaderboard shows 0 | Check that player IDs match between selections and match_scores |
+| "0 players loaded" | Run `python Seed_Players.py` |
+| "0 completed matches" | Run `python Seed_Matches.py --force` |
+| "no valid Cricbuzz ID" | Run `python Seed_Matches.py` to auto-discover IDs |
+| Seed_Matches shows "Found 0 matches" | Cricbuzz blocked the request — use `--no-live` flag, then add IDs manually |
+| Scraper returns no scorecard data | Test with `python Seed_Matches.py --verify 149618` |
+| Leaderboard shows 0 | Check player IDs match between selections and match_scores |
 | Server won't start | Check `data/fantasy.db` exists and isn't locked |
+| Tunnel not starting | Install cloudflared: https://github.com/cloudflare/cloudflared/releases |
