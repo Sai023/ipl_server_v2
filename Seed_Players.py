@@ -2,33 +2,28 @@
 """
 IPL Fantasy 2026 — Player Roster Seeder
 ========================================
-Populates the `players` table with ~220 IPL 2026 squad players.
+Populates the `players` table with IPL 2026 squad players.
 
 ID convention:  {team_prefix}{number:02d}
-  c  = CSK     d  = DC      g  = GT      k  = KKR
-  l  = LSG     m  = MI      p  = PBKS    r  = RCB
-  rr = RR      s  = SRH
+  c=CSK  d=DC  g=GT  k=KKR  l=LSG  m=MI  p=PBKS  r=RCB  rr=RR  s=SRH
 
 Roles: BAT, BOWL, AR (all-rounder), WK (wicketkeeper)
 
 Usage:
-    python Seed_Players.py                # seed all players
-    python Seed_Players.py --reset        # wipe + re-seed
+    python Seed_Players.py          # seed/update players
+    python Seed_Players.py --reset  # wipe + re-seed
 """
 
 import argparse
 import sqlite3
-import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH  = BASE_DIR / "data" / "fantasy.db"
 
-# ── (id, name, team, price, role) ────────────────────────────────────────────
-# Prices in CR. Roles: BAT, BOWL, AR, WK
-
+# (id, name, team, price, role)
 PLAYERS = [
-    # ══ CSK — Chennai Super Kings ══
+    # ══ CSK ══
     ("c01", "Ruturaj Gaikwad",       "CSK",  14.0, "BAT"),
     ("c02", "Devon Conway",          "CSK",  10.0, "BAT"),
     ("c03", "Shivam Dube",           "CSK",  10.5, "AR"),
@@ -51,8 +46,11 @@ PLAYERS = [
     ("c20", "Anuj Rawat",            "CSK",   3.5, "WK"),
     ("c21", "Vijay Shankar",         "CSK",   4.0, "AR"),
     ("c22", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
+    ("c23", "Prashant Veer",         "CSK",  14.2, "BOWL"),  # record uncapped buy
+    ("c24", "Kartik Sharma",         "CSK",  14.2, "AR"),
+    ("c25", "Sanju Samson",          "CSK",  14.0, "WK"),   # traded from RR
 
-    # ══ DC — Delhi Capitals ══
+    # ══ DC ══
     ("d01", "Rishabh Pant",          "DC",   16.0, "WK"),
     ("d02", "David Warner",          "DC",   10.0, "BAT"),
     ("d03", "Axar Patel",            "DC",   12.0, "AR"),
@@ -75,8 +73,9 @@ PLAYERS = [
     ("d20", "Harry Brook",           "DC",   12.0, "BAT"),
     ("d21", "Faf du Plessis",        "DC",    5.0, "BAT"),
     ("d22", "Lungi Ngidi",           "DC",    6.5, "BOWL"),
+    ("d23", "Pathum Nissanka",       "DC",    6.0, "BAT"),  # IPL debut M5
 
-    # ══ GT — Gujarat Titans ══
+    # ══ GT ══
     ("g01", "Shubman Gill",          "GT",   14.0, "BAT"),
     ("g02", "Sai Sudharsan",         "GT",    9.0, "BAT"),
     ("g03", "Rashid Khan",           "GT",   15.0, "BOWL"),
@@ -98,9 +97,9 @@ PLAYERS = [
     ("g19", "Abhinav Manohar",       "GT",    4.0, "BAT"),
     ("g20", "Josh Little",           "GT",    6.0, "BOWL"),
     ("g21", "Shahrukh Khan",         "GT",    5.0, "BAT"),
-    ("g22", "Sai Sudarshan",         "GT",    3.5, "BAT"),
+    ("g22", "Kagiso Rabada",         "GT",   12.0, "BOWL"),
 
-    # ══ KKR — Kolkata Knight Riders ══
+    # ══ KKR ══
     ("k01", "Sunil Narine",          "KKR",  12.0, "AR"),
     ("k02", "Andre Russell",         "KKR",  12.0, "AR"),
     ("k03", "Rinku Singh",           "KKR",  10.0, "BAT"),
@@ -114,41 +113,41 @@ PLAYERS = [
     ("k11", "Angkrish Raghuvanshi",  "KKR",   5.0, "BAT"),
     ("k12", "Manish Pandey",         "KKR",   4.0, "BAT"),
     ("k13", "Vaibhav Arora",         "KKR",   4.0, "BOWL"),
-    ("k14", "Gus Atkinson",          "KKR",   8.0, "BOWL"),
+    ("k14", "Cameron Green",         "KKR",  25.2, "AR"),  # most expensive overseas IPL 2026
     ("k15", "Suyash Sharma",         "KKR",   3.0, "BOWL"),
     ("k16", "Quinton de Kock",       "KKR",  11.0, "WK"),
     ("k17", "Chetan Sakariya",       "KKR",   4.0, "BOWL"),
-    ("k18", "Dushmantha Chameera",   "KKR",   3.5, "BOWL"),
-    ("k19", "Anukul Roy",            "KKR",   3.0, "AR"),
-    ("k20", "Shreyas Iyer",          "KKR",  12.0, "BAT"),
-    ("k21", "Ajith Agarkar",         "KKR",   3.0, "BOWL"),
+    ("k18", "Blessing Muzarabani",   "KKR",   5.0, "BOWL"),  # IPL debut M2
+    ("k19", "Ajinkya Rahane",        "KKR",   5.0, "BAT"),
+    ("k20", "Finn Allen",            "KKR",   6.0, "BAT"),   # IPL debut M2
+    ("k21", "Allah Ghazanfar",       "KKR",   5.0, "BOWL"),  # IPL debut M2
     ("k22", "Lockie Ferguson",       "KKR",   9.0, "BOWL"),
 
-    # ══ LSG — Lucknow Super Giants ══
-    ("l01", "KL Rahul",              "LSG",  14.0, "WK"),
+    # ══ LSG ══
+    ("l01", "Rishabh Pant",          "LSG",  14.0, "WK"),
     ("l02", "Nicholas Pooran",       "LSG",  11.0, "WK"),
     ("l03", "Marcus Stoinis",        "LSG",  10.0, "AR"),
     ("l04", "Ravi Bishnoi",          "LSG",   8.0, "BOWL"),
     ("l05", "Mohsin Khan",           "LSG",   5.0, "BOWL"),
     ("l06", "Ayush Badoni",          "LSG",   6.0, "BAT"),
-    ("l07", "Quinton de Kock",       "LSG",  11.0, "WK"),
-    ("l08", "Krunal Pandya",         "LSG",   7.0, "AR"),
-    ("l09", "Deepak Hooda",          "LSG",   5.0, "AR"),
-    ("l10", "Matt Henry",            "LSG",   6.0, "BOWL"),
-    ("l11", "Naveen-ul-Haq",         "LSG",   7.0, "BOWL"),
-    ("l12", "Kyle Mayers",           "LSG",   5.0, "AR"),
-    ("l13", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
-    ("l14", "Yash Thakur",           "LSG",   3.5, "BOWL"),
-    ("l15", "Prerak Mankad",         "LSG",   3.0, "AR"),
-    ("l16", "Devdutt Padikkal",      "LSG",   7.0, "BAT"),
-    ("l17", "Mayank Yadav",          "LSG",   8.0, "BOWL"),
-    ("l18", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
-    ("l19", "David Willey",          "LSG",   4.0, "AR"),
-    ("l20", "Yudhvir Charak",        "LSG",   3.0, "BOWL"),
-    ("l21", "Rishabh Pant",          "LSG",  14.0, "WK"),
-    ("l22", "Mitchell Marsh",        "LSG",   9.0, "AR"),
+    ("l07", "Krunal Pandya",         "LSG",   7.0, "AR"),
+    ("l08", "Deepak Hooda",          "LSG",   5.0, "AR"),
+    ("l09", "Matt Henry",            "LSG",   6.0, "BOWL"),
+    ("l10", "Naveen-ul-Haq",         "LSG",   7.0, "BOWL"),
+    ("l11", "Kyle Mayers",           "LSG",   5.0, "AR"),
+    ("l12", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
+    ("l13", "Yash Thakur",           "LSG",   3.5, "BOWL"),
+    ("l14", "Prerak Mankad",         "LSG",   3.0, "AR"),
+    ("l15", "Devdutt Padikkal",      "LSG",   7.0, "BAT"),
+    ("l16", "Mayank Yadav",          "LSG",   8.0, "BOWL"),
+    ("l17", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
+    ("l18", "David Willey",          "LSG",   4.0, "AR"),
+    ("l19", "Yudhvir Charak",        "LSG",   3.0, "BOWL"),
+    ("l20", "Shahbaz Ahmed",         "LSG",   4.0, "AR"),
+    ("l21", "Mitchell Marsh",        "LSG",   9.0, "AR"),
+    ("l22", "Quinton de Kock",       "LSG",  11.0, "WK"),
 
-    # ══ MI — Mumbai Indians ══
+    # ══ MI ══
     ("m01", "Rohit Sharma",          "MI",   14.0, "BAT"),
     ("m02", "Suryakumar Yadav",      "MI",   14.0, "BAT"),
     ("m03", "Jasprit Bumrah",        "MI",   16.0, "BOWL"),
@@ -170,10 +169,10 @@ PLAYERS = [
     ("m19", "Romario Shepherd",      "MI",    6.0, "AR"),
     ("m20", "Mohammad Nabi",         "MI",    4.0, "AR"),
     ("m21", "Will Jacks",            "MI",    8.0, "AR"),
-    ("m22", "Ashton Turner",         "MI",    4.0, "BAT"),
+    ("m22", "Shashank Singh",        "MI",    5.0, "BAT"),
 
-    # ══ PBKS — Punjab Kings ══
-    ("p01", "Sam Curran",            "PBKS",  11.0, "AR"),
+    # ══ PBKS ══
+    ("p01", "Shreyas Iyer",          "PBKS",  12.0, "BAT"),
     ("p02", "Shikhar Dhawan",        "PBKS",   5.0, "BAT"),
     ("p03", "Liam Livingstone",      "PBKS",  10.0, "AR"),
     ("p04", "Kagiso Rabada",         "PBKS",  12.0, "BOWL"),
@@ -194,16 +193,18 @@ PLAYERS = [
     ("p19", "Vidwath Kaverappa",     "PBKS",   3.0, "BOWL"),
     ("p20", "Atharva Taide",         "PBKS",   3.0, "BAT"),
     ("p21", "Marco Jansen",          "PBKS",   9.0, "AR"),
-    ("p22", "Shreyas Iyer",          "PBKS",  12.0, "BAT"),
+    ("p22", "Sam Curran",            "PBKS",  11.0, "AR"),
+    ("p23", "Cooper Connolly",       "PBKS",   5.0, "AR"),   # IPL debut M4
+    ("p24", "Ashok Sharma",          "PBKS",   3.0, "BOWL"), # IPL debut M4
 
-    # ══ RCB — Royal Challengers Bengaluru ══
+    # ══ RCB ══
     ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),
     ("r02", "Glenn Maxwell",         "RCB",  11.0, "AR"),
     ("r03", "Mohammed Siraj",        "RCB",  10.0, "BOWL"),
     ("r04", "Wanindu Hasaranga",     "RCB",  10.0, "AR"),
-    ("r05", "Cameron Green",         "RCB",  12.0, "AR"),
+    ("r05", "Rajat Patidar",         "RCB",   9.0, "BAT"),
     ("r06", "Dinesh Karthik",        "RCB",   5.0, "WK"),
-    ("r07", "Rajat Patidar",         "RCB",   9.0, "BAT"),
+    ("r07", "Bhuvneshwar Kumar",     "RCB",   8.0, "BOWL"),
     ("r08", "Will Jacks",            "RCB",   8.0, "AR"),
     ("r09", "Yash Dayal",            "RCB",   6.0, "BOWL"),
     ("r10", "Karn Sharma",           "RCB",   3.5, "BOWL"),
@@ -217,34 +218,38 @@ PLAYERS = [
     ("r18", "Akash Deep",            "RCB",   5.0, "BOWL"),
     ("r19", "Himanshu Sharma",       "RCB",   3.0, "BOWL"),
     ("r20", "Shimron Hetmyer",       "RCB",   7.0, "BAT"),
-    ("r21", "Lockie Ferguson",       "RCB",   9.0, "BOWL"),
-    ("r22", "Travis Head",           "RCB",  12.0, "BAT"),
+    ("r21", "Liam Livingstone",      "RCB",  10.0, "AR"),
+    ("r22", "Tim David",             "RCB",   8.0, "BAT"),
+    # IPL 2026 debutants confirmed from Match 1 (SRH vs RCB, 28 Mar 2026)
+    ("r23", "Jacob Duffy",           "RCB",   5.0, "BOWL"), # NZ pace, IPL debut
+    ("r24", "Abhinandan Singh",      "RCB",   3.0, "BOWL"), # T20 debut
+    ("r25", "Aniket Verma",          "RCB",   3.0, "BAT"),  # debut
 
-    # ══ RR — Rajasthan Royals ══
-    ("rr01", "Sanju Samson",         "RR",   14.0, "WK"),
+    # ══ RR ══
+    ("rr01", "Riyan Parag",          "RR",    9.0, "AR"),   # captain 2026
     ("rr02", "Yashasvi Jaiswal",     "RR",   14.0, "BAT"),
     ("rr03", "Jos Buttler",          "RR",   11.0, "WK"),
     ("rr04", "Shimron Hetmyer",      "RR",    7.0, "BAT"),
     ("rr05", "Trent Boult",          "RR",   10.0, "BOWL"),
     ("rr06", "Yuzvendra Chahal",     "RR",    8.0, "BOWL"),
     ("rr07", "R Ashwin",             "RR",    5.0, "BOWL"),
-    ("rr08", "Riyan Parag",          "RR",    9.0, "AR"),
-    ("rr09", "Dhruv Jurel",          "RR",    7.0, "WK"),
-    ("rr10", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
-    ("rr11", "Shimron Rutherford",   "RR",    5.0, "BAT"),
-    ("rr12", "Navdeep Saini",        "RR",    4.0, "BOWL"),
-    ("rr13", "Avesh Khan",           "RR",    6.0, "BOWL"),
-    ("rr14", "Rovman Powell",        "RR",    5.0, "BAT"),
-    ("rr15", "Vaibhav Suryavanshi",  "RR",    7.0, "BAT"),
-    ("rr16", "Nandre Burger",        "RR",    4.0, "BOWL"),
-    ("rr17", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
-    ("rr18", "Adam Zampa",           "RR",    5.0, "BOWL"),
-    ("rr19", "Donovan Ferreira",     "RR",    3.0, "AR"),
-    ("rr20", "Kunal Rathore",        "RR",    3.0, "BAT"),
-    ("rr21", "Abid Mushtaq",         "RR",    3.0, "BOWL"),
-    ("rr22", "Tanush Kotian",        "RR",    3.0, "AR"),
+    ("rr08", "Dhruv Jurel",          "RR",    7.0, "WK"),
+    ("rr09", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
+    ("rr10", "Shimron Rutherford",   "RR",    5.0, "BAT"),
+    ("rr11", "Navdeep Saini",        "RR",    4.0, "BOWL"),
+    ("rr12", "Avesh Khan",           "RR",    6.0, "BOWL"),
+    ("rr13", "Rovman Powell",        "RR",    5.0, "BAT"),
+    ("rr14", "Vaibhav Suryavanshi",  "RR",    7.0, "BAT"),
+    ("rr15", "Nandre Burger",        "RR",    4.0, "BOWL"),
+    ("rr16", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
+    ("rr17", "Adam Zampa",           "RR",    5.0, "BOWL"),
+    ("rr18", "Donovan Ferreira",     "RR",    3.0, "AR"),
+    ("rr19", "Kunal Rathore",        "RR",    3.0, "BAT"),
+    ("rr20", "Abid Mushtaq",         "RR",    3.0, "BOWL"),
+    ("rr21", "Tanush Kotian",        "RR",    3.0, "AR"),
+    ("rr22", "Ravindra Jadeja",      "RR",   14.0, "AR"),  # traded from CSK
 
-    # ══ SRH — Sunrisers Hyderabad ══
+    # ══ SRH ══
     ("s01", "Heinrich Klaasen",      "SRH",  14.0, "WK"),
     ("s02", "Abhishek Sharma",       "SRH",  10.0, "AR"),
     ("s03", "Pat Cummins",           "SRH",  14.0, "BOWL"),
@@ -265,17 +270,19 @@ PLAYERS = [
     ("s18", "Anmolpreet Singh",      "SRH",   3.0, "BAT"),
     ("s19", "Upendra Yadav",         "SRH",   3.0, "WK"),
     ("s20", "Nitish Reddy",          "SRH",   7.0, "AR"),
-    ("s21", "Jayant Yadav",          "SRH",   3.5, "AR"),
+    ("s21", "Harshal Patel",         "SRH",   7.0, "BOWL"),
     ("s22", "Mohammed Shami",        "SRH",  10.0, "BOWL"),
+    # IPL 2026 debutants confirmed from Match 1 (SRH vs RCB, 28 Mar 2026)
+    ("s23", "David Payne",           "SRH",   5.0, "BOWL"), # ENG pace, IPL debut
+    ("s24", "Harsh Dubey",           "SRH",   3.0, "BOWL"), # domestic
+    ("s25", "Eshan Malinga",         "SRH",   3.0, "BOWL"), # in Cricbuzz scorecard
 ]
 
 
 def seed(reset: bool = False):
-    """Insert all players into the database."""
     (BASE_DIR / "data").mkdir(exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
 
     if reset:
         print("  Clearing existing players...")
@@ -284,14 +291,13 @@ def seed(reset: bool = False):
         conn.execute("DELETE FROM players")
         conn.commit()
 
-    inserted = 0
-    skipped  = 0
+    inserted = skipped = 0
     for pid, name, team, price, role in PLAYERS:
         try:
-            conn.execute("""
-                INSERT OR REPLACE INTO players (id, name, team, price, role)
-                VALUES (?, ?, ?, ?, ?)
-            """, (pid, name, team, price, role))
+            conn.execute(
+                "INSERT OR REPLACE INTO players (id, name, team, price, role) VALUES (?,?,?,?,?)",
+                (pid, name, team, price, role)
+            )
             inserted += 1
         except sqlite3.IntegrityError as e:
             print(f"  Skip {pid} ({name}): {e}")
@@ -300,14 +306,13 @@ def seed(reset: bool = False):
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
     conn.close()
-
-    print(f"\n\u2705 Players seeded: {inserted} inserted, {skipped} skipped")
+    print(f"\n✅ Players seeded: {inserted} inserted, {skipped} skipped")
     print(f"  Total players in DB: {total}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed IPL 2026 player roster")
-    parser.add_argument("--reset", action="store_true", help="Wipe and re-seed")
+    parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
     print("\n--- IPL 2026 Player Roster Seeder ---")
     seed(reset=args.reset)
