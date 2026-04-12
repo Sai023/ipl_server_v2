@@ -1,8 +1,13 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.1
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.2
 ===========================================================================
-v5.1: Increased connection timeout to 30s + PRAGMA busy_timeout=30000
-      to prevent 'database is locked' when scraper.py and server.py run concurrently.
+v5.2: Fix _LEADERBOARD_SQL — use ALL user_selections weeks joined to
+      player_match_points.week_no.  Prevents rollover from retroactively
+      re-scoring old matches with the new team:
+        week 1 team  →  only scores week 1 matches
+        week 2 team  →  only scores week 2 matches   (after first rollover)
+      Cumulative leaderboard = sum across all weeks automatically.
+v5.1: timeout 30s + busy_timeout 30000 (DB locked fix).
 """
 
 import json
@@ -17,8 +22,6 @@ from pathlib import Path
 DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
-
-# ════ SCHEMA ═════════════════════════════════════════════════════════════════════════
 
 _SCHEMA = """
 PRAGMA journal_mode  = WAL;
@@ -104,26 +107,24 @@ CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, pla
 """
 
 
-# ════ LEADERBOARD SQL ═════════════════════════════════════════════════════════════════════
-
+# v5.2: Each week's team only scores in matches whose week_no matches the selection week.
+# Week 1 team → week 1 matches.  Week 2 team → week 2 matches.  Total = sum across all.
 _LEADERBOARD_SQL = """
 WITH
-current_picks AS (
+all_picks AS (
     SELECT us.display_name, us.week_no AS selection_week,
            je.value AS player_id, us.tw_cap_id AS cap_id, us.tw_vc_id AS vc_id
     FROM  user_selections us, JSON_EACH(us.tw_team_json) AS je
-    WHERE us.week_no = (
-              SELECT MAX(week_no) FROM user_selections u2
-              WHERE  u2.display_name = us.display_name)
+    WHERE (CAST(:week_no AS INTEGER) IS NULL OR us.week_no = CAST(:week_no AS INTEGER))
 ),
 scored_points AS (
     SELECT cp.display_name, pmp.match_id, cp.player_id, pmp.base_pts,
            CASE WHEN cp.player_id = cp.cap_id THEN ROUND(pmp.base_pts * 2.0)
                 WHEN cp.player_id = cp.vc_id  THEN ROUND(pmp.base_pts * 1.5)
                 ELSE pmp.base_pts END AS awarded_pts
-    FROM  current_picks cp
+    FROM  all_picks cp
     INNER JOIN player_match_points pmp ON pmp.player_id = cp.player_id
-    WHERE (CAST(:week_no AS INTEGER) IS NULL OR pmp.week_no = CAST(:week_no AS INTEGER))
+        AND pmp.week_no = cp.selection_week
 ),
 user_totals AS (
     SELECT display_name, SUM(awarded_pts) AS total_pts,
@@ -156,8 +157,6 @@ LEFT JOIN players p ON p.id = r.mvp_player_id
 ORDER BY r.rank, r.display_name
 """
 
-
-# ════ POINTS ENGINE ═══════════════════════════════════════════════════════════════════════
 
 def _normalise_overs(raw: float) -> float:
     if raw <= 0: return 0.0
@@ -214,8 +213,6 @@ def calc_pts(s: dict) -> int:
     pts += stump * 12 + rod * 12 + roa * 6
     return round(pts)
 
-
-# ════ HELPERS ═════════════════════════════════════════════════════════════════════════════
 
 def _jloads(s, default):
     if not s: return default
@@ -276,15 +273,7 @@ def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
         ))
 
 
-# ════ DATABASE MANAGER ══════════════════════════════════════════════════════════════════════
-
 class DatabaseManager:
-    """
-    Thread-safe SQLite manager.
-    One connection per thread (threading.local). Single threading.Lock for writes.
-    WAL mode lets reads run concurrently. busy_timeout prevents lock errors.
-    """
-
     def __init__(self, path):
         self._path  = str(path)
         self._local = threading.local()
@@ -294,16 +283,12 @@ class DatabaseManager:
     def _connect(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)
         if con is None:
-            con = sqlite3.connect(
-                self._path,
-                timeout=30,                         # v5.1: was 10
-                check_same_thread=False,
-                detect_types=sqlite3.PARSE_DECLTYPES,
-            )
+            con = sqlite3.connect(self._path, timeout=30, check_same_thread=False,
+                                  detect_types=sqlite3.PARSE_DECLTYPES)
             con.row_factory = sqlite3.Row
             con.execute("PRAGMA journal_mode = WAL")
             con.execute("PRAGMA foreign_keys = ON")
-            con.execute("PRAGMA busy_timeout  = 30000")  # v5.1: was 8000
+            con.execute("PRAGMA busy_timeout  = 30000")
             self._local.con = con
         return con
 
@@ -329,8 +314,6 @@ class DatabaseManager:
         con.executescript(_SCHEMA)
         con.close()
 
-    # ── Meta ───────────────────────────────────────────────────────────────────────────
-
     def get_meta(self, key, default=""):
         with self._read() as con:
             row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -339,8 +322,6 @@ class DatabaseManager:
     def set_meta(self, key, value):
         with self._write() as con:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, value))
-
-    # ── GET /api/state ────────────────────────────────────────────────────────────
 
     def get_state(self) -> dict:
         with self._read() as con:
@@ -380,8 +361,6 @@ class DatabaseManager:
                 "_saved": self.get_meta("_saved","never"),
                 "_last_rollover": self.get_meta("_last_rollover","")}
 
-    # ── POST /api/state ──────────────────────────────────────────────────────────
-
     def save_state(self, payload: dict) -> str:
         members = payload.get("members", {})
         matches = payload.get("matches", [])
@@ -412,8 +391,6 @@ class DatabaseManager:
             self.recalculate_points(match_id=mid)
         return now_iso
 
-    # ── PUT /api/member/<n> ─────────────────────────────────────────────────────────
-
     def upsert_member(self, name: str, data: dict) -> None:
         with self._write() as con:
             row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
@@ -435,8 +412,6 @@ class DatabaseManager:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
                         (datetime.now(timezone.utc).isoformat(),))
 
-    # ── POST /api/match ──────────────────────────────────────────────────────────────
-
     def upsert_match(self, m: dict) -> None:
         mid = m.get("id")
         with self._write() as con:
@@ -445,8 +420,6 @@ class DatabaseManager:
                         (datetime.now(timezone.utc).isoformat(),))
         if mid and m.get("scores"):
             self.recalculate_points(match_id=mid)
-
-    # ── Points recalculation ────────────────────────────────────────────────────────
 
     def recalculate_points(self, match_id=None) -> int:
         with self._read() as con:
@@ -479,8 +452,6 @@ class DatabaseManager:
                 rows_written += 1
         return rows_written
 
-    # ── Cold-start hydration ─────────────────────────────────────────────────────────
-
     def hydrate_from_json(self, json_dir="data/matches") -> int:
         json_dir = Path(json_dir)
         if not json_dir.exists(): return 0
@@ -502,44 +473,11 @@ class DatabaseManager:
             print(f"  [hydrate] Ingested {count} matches from {json_dir}")
         return count
 
-    # ── Legacy rollover ─────────────────────────────────────────────────────────────────
-
-    def do_rollover(self) -> dict:
-        now = datetime.now(timezone.utc)
-        days_since_mon = now.weekday()
-        lmd = (now - timedelta(days=days_since_mon)).replace(
-            hour=DEADLINE_HOUR, minute=DEADLINE_MIN, second=0, microsecond=0, tzinfo=timezone.utc)
-        if lmd > now: lmd -= timedelta(days=7)
-        last_raw = self.get_meta("_last_rollover", "")
-        if last_raw:
-            try:
-                last_dt = datetime.fromisoformat(last_raw)
-                if last_dt.tzinfo is None: last_dt = last_dt.replace(tzinfo=timezone.utc)
-                if lmd <= last_dt: return {"ok": True, "rolled": False}
-            except ValueError: pass
-        with self._write() as con:
-            con.execute("""
-                UPDATE user_selections SET
-                    tw_team_json = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_team_json ELSE tw_team_json END,
-                    tw_cap_id    = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_cap_id    ELSE tw_cap_id    END,
-                    tw_vc_id     = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_vc_id     ELSE tw_vc_id     END,
-                    nw_team_json = '[]', nw_cap_id = NULL, nw_vc_id = NULL
-                WHERE week_no = (SELECT MAX(week_no) FROM user_selections u2
-                                 WHERE u2.display_name = user_selections.display_name)
-            """)
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)", (lmd.isoformat(),))
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (datetime.now(timezone.utc).isoformat(),))
-        return {"ok": True, "rolled": True}
-
-    # ── Ping stats ───────────────────────────────────────────────────────────────────
-
     def ping_stats(self) -> dict:
         with self._read() as con:
             member_count = con.execute("SELECT COUNT(DISTINCT display_name) AS n FROM user_selections").fetchone()["n"]
             scored_count = con.execute("SELECT COUNT(DISTINCT match_id) AS n FROM match_scores WHERE played=1").fetchone()["n"]
         return {"members": member_count, "matches_scored": scored_count, "saved": self.get_meta("_saved","never")}
-
-    # ── Leaderboard ──────────────────────────────────────────────────────────────────
 
     def get_leaderboard(self, week_no=None) -> dict:
         with self._read() as con:
@@ -635,10 +573,9 @@ class DatabaseManager:
             return {"ok":True,"rolled":False,"new_week_no":None,
                     "season_complete":True,"reason":f"Season complete — {max_weeks} weeks reached"}
         with self._read() as con:
-            users = con.execute("""
-                SELECT display_name, MAX(week_no) AS cur_wk
-                FROM user_selections GROUP BY display_name
-            """).fetchall()
+            users = con.execute(
+                "SELECT display_name, MAX(week_no) AS cur_wk FROM user_selections GROUP BY display_name"
+            ).fetchall()
         if not users:
             return {"ok":True,"rolled":False,"new_week_no":None,
                     "season_complete":False,"reason":"No members found"}
@@ -648,7 +585,6 @@ class DatabaseManager:
             for u in users:
                 uname  = u["display_name"]
                 cur_wk = int(u["cur_wk"])
-                new_wk = cur_wk + 1
                 cur_row = con.execute("""
                     SELECT tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id
                     FROM user_selections WHERE display_name=? AND week_no=?
@@ -670,7 +606,7 @@ class DatabaseManager:
                     INSERT OR IGNORE INTO user_selections
                         (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
                     VALUES (?,?,?,?,?,?,?,?)
-                """, (uname, new_wk, nw_team, nw_cap, nw_vc, nw_team, nw_cap, nw_vc))
+                """, (uname, cur_wk+1, nw_team, nw_cap, nw_vc, nw_team, nw_cap, nw_vc))
             if not force:
                 con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)", (now_iso,))
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
@@ -681,6 +617,34 @@ class DatabaseManager:
         with self._write() as con:
             for t in ("match_scores","player_match_points","user_selections","matches","meta"):
                 con.execute(f"DELETE FROM {t}")
+
+    def do_rollover(self) -> dict:
+        """Legacy single-table rollover (kept for compat)."""
+        now = datetime.now(timezone.utc)
+        days_since_mon = now.weekday()
+        lmd = (now - timedelta(days=days_since_mon)).replace(
+            hour=DEADLINE_HOUR, minute=DEADLINE_MIN, second=0, microsecond=0, tzinfo=timezone.utc)
+        if lmd > now: lmd -= timedelta(days=7)
+        last_raw = self.get_meta("_last_rollover", "")
+        if last_raw:
+            try:
+                last_dt = datetime.fromisoformat(last_raw)
+                if last_dt.tzinfo is None: last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if lmd <= last_dt: return {"ok": True, "rolled": False}
+            except ValueError: pass
+        with self._write() as con:
+            con.execute("""
+                UPDATE user_selections SET
+                    tw_team_json = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_team_json ELSE tw_team_json END,
+                    tw_cap_id    = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_cap_id    ELSE tw_cap_id    END,
+                    tw_vc_id     = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_vc_id     ELSE tw_vc_id     END,
+                    nw_team_json = '[]', nw_cap_id = NULL, nw_vc_id = NULL
+                WHERE week_no = (SELECT MAX(week_no) FROM user_selections u2
+                                 WHERE u2.display_name = user_selections.display_name)
+            """)
+            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)", (lmd.isoformat(),))
+            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (datetime.now(timezone.utc).isoformat(),))
+        return {"ok": True, "rolled": True}
 
 
 GoldenDB = DatabaseManager
