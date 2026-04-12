@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.1
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.2
 ================================================
-v10.1 changes:
-  FIX-004: Position-based match ID discovery replaces slug-based.
-           Works for generic 'Match N' titles AND rematches (same teams twice).
-           Match N = index N-1 in the ordered Cricbuzz series page list.
-  FIX-005: All raw sqlite3 connections use timeout=30 + PRAGMA busy_timeout=30000
-           to prevent 'database is locked' when server.py runs concurrently.
+v10.2 fix:
+  FIX-006: Match number regex was r'(\d+)' on 'ipl26_m02' which matched '26'
+            (from the season year), not '02' (the match number). All 17 matches
+            were trying ids[25] which is out-of-range on a 24-entry list.
+            Fixed to r'_m(\d+)' so 'ipl26_m02' -> '02' -> position index 1.
 """
 
 import json
@@ -27,7 +26,7 @@ except ImportError:
 
 from db_manager import DatabaseManager, _upsert_match
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Paths
 BASE_DIR    = Path(__file__).resolve().parent
 DB_PATH     = BASE_DIR / "data" / "fantasy.db"
 MATCHES_DIR = BASE_DIR / "data" / "matches"
@@ -36,6 +35,8 @@ MAX_RETRIES = 3
 RETRY_DELAY = 3
 
 _ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
+# FIX-006: must anchor to '_m' so we don't accidentally grab '26' from 'ipl26'
+_MATCH_NO_RE = re.compile(r'_m(\d+)', re.IGNORECASE)
 
 HEADERS = {
     "User-Agent": (
@@ -46,7 +47,6 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Team prefix map for auto-generated player IDs
 _TEAM_PREFIX = {
     "CSK": "c",  "DC": "d",   "GT": "g",  "KKR": "k",
     "LSG": "l",  "MI": "m",   "PBKS": "p", "RCB": "r",
@@ -54,7 +54,7 @@ _TEAM_PREFIX = {
 }
 
 
-# ════ OVERS NORMALISATION ════════════════════════════════════════════════════════
+# ════ OVERS NORMALISATION
 
 def _normalise_overs(raw: float) -> float:
     if raw <= 0:
@@ -64,23 +64,17 @@ def _normalise_overs(raw: float) -> float:
     return round(full + balls / 6, 4)
 
 
-# ════ MATCH ID DISCOVERY: POSITION-BASED (FIX-004) ═════════════════════════════════
+# ════ MATCH ID DISCOVERY: POSITION-BASED
 #
-# WHY POSITION-BASED instead of slug-based:
-#   Slug-based: parse team names from title -> look up "srh-vs-rcb" in a dict.
-#   Problem 1: Fails if title is "Match 11" (no team names to parse).
-#   Problem 2: Teams play twice (SRH vs RCB in M1 AND M67) -> slug maps to M1 only.
-#   Position-based: Cricbuzz lists matches chronologically on the series page.
-#   _ORDERED_CB_IDS[0] = Match 1, _ORDERED_CB_IDS[10] = Match 11, etc.
+# Cricbuzz series page lists matches chronologically.
+# _ORDERED_CB_IDS[0] = Match 1 (index 0), _ORDERED_CB_IDS[N-1] = Match N.
+# FIX-006: match number is parsed via _MATCH_NO_RE (anchored to '_m'),
+# so ipl26_m02 correctly gives match_no=2 -> index 1.
 
-_ORDERED_CB_IDS: list = []   # populated once: [match1_id, match2_id, ...]
+_ORDERED_CB_IDS: list = []
 
 
 def _fetch_ordered_ids() -> list:
-    """
-    Fetch series page once, return CB IDs in chronological match order.
-    Index 0 = Match 1, index N-1 = Match N.
-    """
     global _ORDERED_CB_IDS
     if _ORDERED_CB_IDS:
         return _ORDERED_CB_IDS
@@ -106,10 +100,15 @@ def _fetch_ordered_ids() -> list:
     return _ORDERED_CB_IDS
 
 
-# ════ AUTO-ADD UNKNOWN PLAYERS (FIX-002) ═══════════════════════════════════════
+def _match_no_from_id(iid: str) -> int:
+    """Extract match number from match id like 'ipl26_m02' -> 2."""
+    m = _MATCH_NO_RE.search(iid)
+    return int(m.group(1)) if m else 0
+
+
+# ════ AUTO-ADD UNKNOWN PLAYERS
 
 def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
-    """Auto-insert unknown player, update in-memory index, return new ID."""
     n = _norm(name)
     if n in pidx["by_name"]:
         return pidx["by_name"][n]["id"]
@@ -124,9 +123,9 @@ def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
     new_id   = f"{prefix}{next_num:02d}"
 
     try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)  # FIX-005
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
         conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 30000")        # FIX-005
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute(
             "INSERT OR IGNORE INTO players (id, name, team, price, role) VALUES (?,?,?,?,?)",
             (new_id, name, team_code.upper(), 5.0, "AR")
@@ -143,11 +142,11 @@ def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
     if parts:
         pidx["by_surname"].setdefault(parts[-1], []).append(player)
 
-    print(f"    \u2795 Auto-added: '{name}' \u2192 {new_id} ({team_code.upper()}, 5.0 CR, AR)")
+    print(f"    \u2795 Auto-added: '{name}' \u2192 {new_id} ({team_code.upper()})")
     return new_id
 
 
-# ════ CRICBUZZ JSON EXTRACTION ══════════════════════════════════════════════════════════
+# ════ CRICBUZZ JSON EXTRACTION
 
 def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
     url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cricbuzz_match_id}"
@@ -182,7 +181,7 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
     return None
 
 
-# ════ DISMISSAL PARSER ═════════════════════════════════════════════════════════════════════
+# ════ DISMISSAL PARSER
 
 def _parse_dismissal(out_desc: str) -> dict:
     result = {"is_out": False, "is_lbw_bowled": False,
@@ -227,7 +226,7 @@ def _parse_dismissal(out_desc: str) -> dict:
     return result
 
 
-# ════ FUZZY NAME MATCHER ═══════════════════════════════════════════════════════════════════
+# ════ FUZZY NAME MATCHER
 
 def _norm(s: str) -> str:
     s = str(s).lower().strip()
@@ -295,7 +294,7 @@ def _fuzzy_fielder(name: str, idx: dict, bowling_team: str = None) -> str | None
     return None
 
 
-# ════ SCORECARD PROCESSOR ═════════════════════════════════════════════════════════════════
+# ════ SCORECARD PROCESSOR
 
 def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
     cards = data.get("scoreCard", [])
@@ -339,32 +338,25 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
                 if fid:
                     fc.setdefault(fid, {"catches": 0, "stumpings": 0, "run_out_direct": 0, "run_out_assist": 0})
                     fc[fid]["catches"] += 1
-                else:
-                    dropped_fielding.append(f"catch: '{d['caught_by']}'")
+                else: dropped_fielding.append(f"catch: '{d['caught_by']}'")
             if d["stumped_by"]:
                 fid = _fuzzy_fielder(d["stumped_by"], pidx, bowl_code)
                 if fid:
                     fc.setdefault(fid, {"catches": 0, "stumpings": 0, "run_out_direct": 0, "run_out_assist": 0})
                     fc[fid]["stumpings"] += 1
-                else:
-                    dropped_fielding.append(f"stumping: '{d['stumped_by']}'")
+                else: dropped_fielding.append(f"stumping: '{d['stumped_by']}'")
             if d["run_out_fielders"]:
                 for i, fn in enumerate(d["run_out_fielders"]):
                     fid = _fuzzy_fielder(fn, pidx, bowl_code)
                     if fid:
                         fc.setdefault(fid, {"catches": 0, "stumpings": 0, "run_out_direct": 0, "run_out_assist": 0})
-                        if i == 0 and len(d["run_out_fielders"]) == 1:
-                            fc[fid]["run_out_direct"] += 1
-                        elif i == 0:
-                            fc[fid]["run_out_assist"] += 1
-                        else:
-                            fc[fid]["run_out_direct"] += 1
-                    else:
-                        dropped_fielding.append(f"run-out: '{fn}'")
+                        if i == 0 and len(d["run_out_fielders"]) == 1: fc[fid]["run_out_direct"] += 1
+                        elif i == 0: fc[fid]["run_out_assist"] += 1
+                        else: fc[fid]["run_out_direct"] += 1
+                    else: dropped_fielding.append(f"run-out: '{fn}'")
             if d["is_lbw_bowled"] and d["bowler"]:
                 bid = _fuzzy_fielder(d["bowler"], pidx, bowl_code)
-                if bid:
-                    lbw_c[bid] = lbw_c.get(bid, 0) + 1
+                if bid: lbw_c[bid] = lbw_c.get(bid, 0) + 1
 
         for _, bw in bowl_team.get("bowlersData", {}).items():
             cb = (bw.get("bowlName") or "").strip()
@@ -390,8 +382,7 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
 
     if dropped_fielding:
         print(f"    \u26a0 DROPPED FIELDING CREDITS ({len(dropped_fielding)}):")
-        for df in dropped_fielding:
-            print(f"      - {df}")
+        for df in dropped_fielding: print(f"      - {df}")
     return stats
 
 
@@ -413,10 +404,10 @@ def _extract_meta(data: dict, iid: str, wk: int) -> dict:
             "teams": teams, "date": str(h.get("matchStartTimestamp", "")), "status": status}
 
 
-# ════ MAIN ═══════════════════════════════════════════════════════════════════════════════
+# ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.1 (Position-based discovery) ---")
+    print("\n--- IPL 2026 SCRAPER v10.2 (FIX-006 regex) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -431,14 +422,13 @@ def main():
             "SELECT * FROM matches WHERE LOWER(status)='completed'").fetchall()]
     print(f"  Targets: {len(targets)} completed matches")
 
-    # Pre-fetch ordered IDs once if any match has placeholder ID 00000
     needs_discovery = any(
         (m.get("scorecard_url") or "").endswith("/00000")
         for m in targets
     )
     if needs_discovery:
-        n_missing = sum(1 for m in targets if (m.get("scorecard_url") or "").endswith("/00000"))
-        print(f"  {n_missing} matches need ID discovery — fetching series page...")
+        n_miss = sum(1 for m in targets if (m.get("scorecard_url") or "").endswith("/00000"))
+        print(f"  {n_miss} matches need ID discovery — fetching series page...")
         _fetch_ordered_ids()
 
     processed = 0; failed = 0
@@ -448,22 +438,19 @@ def main():
         url   = m.get("scorecard_url", "")
         title = m.get("title", "")
 
-        # Extract stored CB ID
         last_seg = url.split("/")[-1] if url else ""
         cb_m     = re.search(r'(\d+)', last_seg)
         cb_id    = cb_m.group(1) if cb_m else "0"
 
         if not cb_m or int(cb_id) == 0:
-            # FIX-004: position-based discovery via match number
-            mn_m = re.search(r'(\d+)', iid)
-            mno  = int(mn_m.group(1)) if mn_m else 0
+            # FIX-006: use _match_no_from_id (anchored to _m)
+            mno  = _match_no_from_id(iid)
             ids  = _fetch_ordered_ids()
             discovered = ids[mno - 1] if 0 < mno <= len(ids) else None
             if discovered:
                 cb_id   = discovered
                 new_url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-                print(f"  DISCOVERED: {iid} \u2014 CB#{cb_id} (match #{mno})")
-                # Persist so next run skips discovery
+                print(f"  DISCOVERED: {iid} — CB#{cb_id} (match #{mno})")
                 try:
                     conn = sqlite3.connect(str(DB_PATH), timeout=30)
                     conn.execute("PRAGMA busy_timeout = 30000")
@@ -472,16 +459,17 @@ def main():
                 except Exception as e:
                     print(f"    \u26a0 Could not persist URL: {e}")
             else:
-                print(f"  SKIP: {iid} \u2014 match #{mno} not in series page ({len(ids)} found so far)")
+                print(f"  SKIP: {iid} — match #{mno} not in series page ({len(ids)} found)")
                 continue
 
-        mn  = re.search(r'(\d+)', iid)
-        mns = mn.group(1) if mn else iid
-        jp  = MATCHES_DIR / f"match_{mns.zfill(2)}.json"
+        # FIX-006: also use _match_no_from_id for the output filename
+        mno = _match_no_from_id(iid)
+        mns = str(mno).zfill(2) if mno else re.sub(r'[^\d]', '', iid).zfill(2)
+        jp  = MATCHES_DIR / f"match_{mns}.json"
         if jp.exists() and jp.stat().st_size > 500:
             print(f"  CACHED: {iid}"); continue
 
-        print(f"  SCRAPING: {iid} \u2014 CB#{cb_id}")
+        print(f"  SCRAPING: {iid} — CB#{cb_id}")
         time.sleep(1.5)
         data = fetch_scorecard_json(cb_id)
         if not data:
@@ -493,7 +481,7 @@ def main():
         resolved = sum(1 for pid in scores if _ID_RE.match(pid))
         fallback = len(scores) - resolved
         if fallback > 5:
-            print(f"    \u26a0 {fallback}/{len(scores)} players unresolved in {iid}")
+            print(f"    \u26a0 {fallback}/{len(scores)} players unresolved")
         if resolved < 15 and scores:
             print(f"    \u26a0 Only {resolved} resolved players (expected ~22)")
 
