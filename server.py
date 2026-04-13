@@ -1,15 +1,17 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.5
+IPL Fantasy 2026 — Flask Server                             Golden File v11.6
 ===========================================================================
+v11.6:
+  _audit_player_id_coverage(): new startup function called after points are
+  calculated. For every user, checks which of their tw_team_json player IDs
+  exist in player_match_points and which are ghosts (0 pmp rows). Prints a
+  clear WARNING for any ghost IDs so the admin can fix _HISTORY_SEED to use
+  the real IDs from the players table. This is the root cause of Moe having
+  only 131 pts — some seeded IDs don't match what Seed_Players.py stored.
 v11.5:
-  SSH tunnel hang fix: add -o BatchMode=yes + -o PasswordAuthentication=no
-  to both try_pinggy and try_localhost_run.  Without BatchMode=yes, SSH
-  blocks forever waiting for a password prompt instead of failing fast.
+  BatchMode=yes on SSH tunnels to prevent password-prompt hang.
 v11.4:
-  1. _run_bg: encoding='utf-8', errors='replace' (Windows charmap fix)
-  2. try_cloudflare: local cloudflared.exe lookup
-  3. api_player_points: Flask route param mismatch fix
-  4. _ensure_points_calculated: startup points sanity check
+  UTF-8 encoding fix, cloudflared local lookup, route param fix, points check.
 """
 
 import collections
@@ -321,6 +323,86 @@ def _ensure_points_calculated():
             print("  [startup] No match_scores found — run scraper or seed matches with scores.")
     except Exception as e:
         print(f"  [startup] Points check failed: {e}")
+
+
+def _audit_player_id_coverage():
+    """
+    v11.6 — Run after _ensure_points_calculated().
+
+    For every user×week selection, checks which player IDs from tw_team_json
+    have ZERO matching rows in player_match_points for that week. These are
+    'ghost' IDs — they exist in user_selections but never scored because the
+    ID doesn't match what Seed_Players.py + the scraper put in the DB.
+
+    Prints a WARNING for any ghost IDs, and shows the correct ID from the
+    players table (by fuzzy name match) so the admin can fix _HISTORY_SEED.
+    Also prints a per-user total so it's instantly obvious who is under-scoring.
+    """
+    try:
+        with db._read() as con:
+            con.row_factory = sqlite3.Row
+
+            # All player IDs that ever appear in player_match_points
+            pmp_ids = {r[0] for r in con.execute("SELECT DISTINCT player_id FROM player_match_points").fetchall()}
+            # players table for name lookup
+            all_players = {r["id"]: r["name"] for r in con.execute("SELECT id,name FROM players").fetchall()}
+
+            sels = con.execute(
+                "SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id "
+                "FROM user_selections ORDER BY display_name, week_no"
+            ).fetchall()
+
+            # Per-user leaderboard total from DB
+            totals = {r[0]: r[1] for r in con.execute(
+                "SELECT us.display_name, COALESCE(SUM(pmp.base_pts),0) AS pts "
+                "FROM user_selections us "
+                "JOIN json_each(us.tw_team_json) je ON 1=1 "
+                "LEFT JOIN player_match_points pmp ON pmp.player_id=je.value AND pmp.week_no=us.week_no "
+                "GROUP BY us.display_name"
+            ).fetchall()}
+
+        print("  [startup] === Player ID Coverage Audit ===")
+        ghost_found = False
+        seen_ghosts = set()  # avoid duplicate warnings for same ID
+
+        for sel in sels:
+            name  = sel["display_name"]
+            wk    = sel["week_no"]
+            try:
+                ids = _json.loads(sel["tw_team_json"] or "[]")
+            except Exception:
+                continue
+            for pid in ids:
+                if pid not in pmp_ids and pid not in seen_ghosts:
+                    seen_ghosts.add(pid)
+                    ghost_found = True
+                    # Try to identify the real player from the players table
+                    real_name = all_players.get(pid, "UNKNOWN — not in players table")
+                    # Also fuzzy-search by prefix to suggest correct ID
+                    prefix = re.match(r'^[a-z]+', pid)
+                    suggestions = [
+                        f"{p_id}={p_nm}" for p_id, p_nm in all_players.items()
+                        if prefix and p_id.startswith(prefix.group()) and p_id != pid
+                    ][:4]
+                    sugg_str = ", ".join(suggestions) if suggestions else "none"
+                    print(f"  [startup] ⚠  GHOST ID '{pid}' ({name}/W{wk}): "
+                          f"players table says '{real_name}'. "
+                          f"Same-prefix alternatives: {sugg_str}")
+
+        if not ghost_found:
+            print("  [startup] ✓ All team player IDs exist in player_match_points — no ghost IDs.")
+        else:
+            print("  [startup] ⚠  Fix _HISTORY_SEED in server.py with the correct IDs above, "
+                  "then restart the server.")
+
+        # Per-user point totals
+        print("  [startup] === Per-user point totals ===")
+        for uname, pts in sorted(totals.items()):
+            print(f"  [startup]   {uname}: {pts} pts")
+        print("  [startup] =========================================")
+
+    except Exception as e:
+        print(f"  [startup] ID coverage audit failed: {e}")
 
 
 # ════ DB SINGLETON + COLD-START
@@ -805,11 +887,6 @@ def try_ngrok(port):
     except Exception as e: print(f"    ngrok error: {e}")
     return None
 
-# ── v11.5 FIX: BatchMode=yes prevents SSH hanging on password prompt ──────────
-# Without it, Pinggy/localhost.run ask for a password and the readline() loop
-# blocks forever because proc.poll() never returns (process is alive, waiting).
-# BatchMode=yes makes SSH exit immediately with "Permission denied" instead.
-
 def try_pinggy(port):
     exe=shutil.which("ssh")
     if not exe: return None
@@ -817,8 +894,8 @@ def try_pinggy(port):
     try:
         proc=_run_bg([exe,
             "-o","StrictHostKeyChecking=no",
-            "-o","BatchMode=yes",              # v11.5: never prompt for password
-            "-o","PasswordAuthentication=no",  # v11.5: key-only auth
+            "-o","BatchMode=yes",
+            "-o","PasswordAuthentication=no",
             "-o","ServerAliveInterval=30",
             "-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
         url=None; dl=time.time()+20
@@ -840,8 +917,8 @@ def try_localhost_run(port):
     try:
         proc=_run_bg([exe,
             "-o","StrictHostKeyChecking=no",
-            "-o","BatchMode=yes",              # v11.5: never prompt for password
-            "-o","PasswordAuthentication=no",  # v11.5: key-only auth
+            "-o","BatchMode=yes",
+            "-o","PasswordAuthentication=no",
             "-o","ServerAliveInterval=30",
             "-R",f"80:localhost:{port}","nokey@localhost.run"])
         url=None; dl=time.time()+20
@@ -884,8 +961,7 @@ def print_banner(port,tunnel,lan_ip):
         for i in range(0,len(url),WIDE-4): print(banner_line(f"   {url[i:i+WIDE-4]}"))
         if tunnel.ephemeral:
             print(banner_line("\u26a0  EPHEMERAL TUNNEL — URL may die after ~30 min!"))
-            print(banner_line("   For a free persistent tunnel, run setup_cloudflare.ps1"))
-            print(banner_line("   then: python server.py --tunnel cloudflare"))
+            print(banner_line("   Run setup_cloudflare.ps1 for a persistent tunnel"))
         else:
             print(banner_line("SHARE THIS LINK with friends anywhere!"))
     else:
@@ -932,7 +1008,8 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()
-    _ensure_points_calculated()
+    _ensure_points_calculated()   # recalc if pmp table is empty
+    _audit_player_id_coverage()   # v11.6: warn about ghost IDs causing zero scores
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")

@@ -1,48 +1,28 @@
 /**
- * static/ipl_glue.js — Frontend Integration Layer          Golden File v3
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7
  * =========================================================================
- * Drop this script tag AFTER your existing app bundle in templates/index.html:
+ * CHANGES vs v6:
+ *   • IplConfig gains current_week (hydrated on init + after every rollover)
+ *   • IplApi.rollover() dispatches "ipl:week-changed" with { week_no, max_weeks }
+ *     after a successful roll, so any UI panel can update without page refresh.
+ *   • IplApi.rollover() dispatches "ipl:season-complete" when the season cap
+ *     is reached (season_complete === true).
+ *   • _init() calls IplApi.getCurrentWeek() to prime IplConfig.current_week.
  *
- *   <script src="/static/ipl_glue.js"></script>
- *
- * Then wire the events once in your app's initialisation block:
- *
+ * Wire events:
  *   window.addEventListener("ipl:state-updated",       e => render(e.detail));
  *   window.addEventListener("ipl:leaderboard-updated", e => renderLb(e.detail));
+ *   window.addEventListener("ipl:players-updated",     e => setPlayers(e.detail));
+ *   window.addEventListener("ipl:rollover-triggered",  e => onRollover(e.detail));
+ *   window.addEventListener("ipl:week-changed",        e => onWeekChange(e.detail));  // NEW v7
+ *   window.addEventListener("ipl:season-complete",     e => onSeasonEnd(e.detail));   // NEW v7
  *   window.addEventListener("ipl:error",               e => console.error(e.detail));
  *
- * After writes, signal the glue to invalidate its ETag cache so the next
- * poll triggers a full refresh immediately:
- *
- *   await window.IplApi.saveMember(name, payload);
- *   window.dispatchEvent(new CustomEvent("ipl:saved"));
- *
- * ── What this file does ────────────────────────────────────────────────────
- *
- * 1. LEADERBOARD NORMALISATION
- *    /api/leaderboard now emits both `standings` (new) and `rankings` (legacy).
- *    normaliseLeaderboard() handles either shape, plus any pre-migration cached
- *    response that has only one key, so render() functions work without change.
- *
- * 2. 60-SECOND ETag POLLING
- *    GET /api/poll returns { state_etag } — a single DB meta read.
- *    The glue compares against _lastStateEtag.  Full fetches to /api/state
- *    and /api/leaderboard only fire when the ETag has changed.
- *    Tab hidden → polling paused (visibilitychange).  Tab focused → immediate
- *    poll cycle then resumes at the regular interval.
- *
- * 3. MAINTENANCE MODE OVERLAY
- *    Any 5xx or network failure schedules the overlay after MAINTENANCE_DELAY ms
- *    (avoids flash on transient errors).  On recovery the overlay is removed
- *    automatically without a page reload.
- *
- * 4. window.IplApi
- *    Thin async wrappers over every API endpoint.  Existing render() calls can
- *    migrate incrementally — the events are the primary integration path.
- *
  * ── Exported globals ───────────────────────────────────────────────────────
- *   window.IplApi              — API wrapper object
- *   window.IplPolling          — { start(), stop() }
+ *   window.IplApi               — API wrapper object
+ *   window.IplPolling           — { start(), stop() }
+ *   window.IplConfig            — { budget, xi_size, max_weeks, current_week }
+ *   window.IplRollover          — { scheduleNext(), cancelPending() }
  *   window.normaliseLeaderboard — pure function (exposed for unit tests)
  */
 
@@ -50,14 +30,25 @@
   "use strict";
 
   // ── Config ────────────────────────────────────────────────────────────────
-  var POLL_INTERVAL_MS  = 60000;   // 60 seconds
-  var MAINTENANCE_DELAY = 1500;    // ms before overlay appears (avoids flash)
+  var POLL_INTERVAL_MS  = 60000;
+  var MAINTENANCE_DELAY = 1500;
+  var ROLLOVER_HOUR_UTC = 14;
+  var ROLLOVER_MIN_UTC  = 0;
 
   // ── Module state ──────────────────────────────────────────────────────────
   var _lastStateEtag  = null;
   var _overlayTimer   = null;
   var _overlayVisible = false;
   var _pollTimer      = null;
+  var _rolloverTimer  = null;
+
+  // ── Season/budget config (hydrated from /api/ping + /api/current-week) ───
+  var IplConfig = {
+    budget:       100.0,
+    xi_size:      11,
+    max_weeks:    8,
+    current_week: 1,
+  };
 
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -138,23 +129,6 @@
   // LEADERBOARD NORMALISATION
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Accepts any /api/leaderboard response shape and returns a canonical object:
-   *
-   *   {
-   *     rankings  : [ {rank, name, total_pts, matches_counted, mvp} ],  // primary
-   *     standings : <same array>,
-   *     meta      : { league_avg, top_score, member_count },
-   *     league_avg, top_score, member_count,                             // flat
-   *     week_no, generated_at
-   *   }
-   *
-   * Handles:
-   *   • New server (both `rankings` and `standings` present)
-   *   • Legacy server (only `rankings`)
-   *   • leaderboard_route.py shape (only `standings` + `meta`)
-   *   • Empty / null responses
-   */
   function normaliseLeaderboard(raw) {
     if (!raw || typeof raw !== "object") {
       return {
@@ -164,29 +138,24 @@
         week_no: null, generated_at: null,
       };
     }
-
-    // Prefer `rankings` (legacy primary), fall back to `standings` (new primary)
     var rows = Array.isArray(raw.rankings)
       ? raw.rankings
       : Array.isArray(raw.standings)
         ? raw.standings
         : [];
-
-    // Benchmark values: prefer flat keys, fall back to meta sub-object
     var m            = raw.meta || {};
     var league_avg   = (raw.league_avg   != null) ? raw.league_avg   : (m.league_avg   || 0);
     var top_score    = (raw.top_score    != null) ? raw.top_score    : (m.top_score    || 0);
     var member_count = (raw.member_count != null) ? raw.member_count : (m.member_count || 0);
-
     return {
       week_no:      raw.week_no      != null ? raw.week_no      : null,
       generated_at: raw.generated_at != null ? raw.generated_at : null,
       league_avg:   league_avg,
       top_score:    top_score,
       member_count: member_count,
-      meta:     { league_avg: league_avg, top_score: top_score, member_count: member_count },
-      rankings: rows,
-      standings: rows,   // same reference — no copy cost
+      meta:      { league_avg: league_avg, top_score: top_score, member_count: member_count },
+      rankings:  rows,
+      standings: rows,
     };
   }
 
@@ -195,11 +164,6 @@
   // HTTP HELPERS
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Wraps fetch() with Accept/Content-Type headers and basic error handling.
-   * Returns parsed JSON or null (304 Not Modified).
-   * Throws an Error with .status set on HTTP errors.
-   */
   function _fetchJson(url, options) {
     options = options || {};
     var headers = Object.assign({ "Accept": "application/json" }, options.headers || {});
@@ -211,6 +175,7 @@
           err.status = res.status;
           return res.json().catch(function () { return {}; }).then(function (j) {
             err.serverMessage = j.error || j.detail || "";
+            err.serverData    = j;
             throw err;
           });
         }
@@ -220,20 +185,66 @@
 
 
   // ──────────────────────────────────────────────────────────────────────────
+  // MONDAY 14:00 UTC AUTO-ROLLOVER SCHEDULER
+  // ──────────────────────────────────────────────────────────────────────────
+
+  function _msUntilNextRollover() {
+    var now  = new Date();
+    var utcDay = now.getUTCDay();
+    var daysUntilMon = (utcDay === 1) ? 0 : (8 - utcDay) % 7;
+    var candidate = new Date(now);
+    candidate.setUTCDate(now.getUTCDate() + daysUntilMon);
+    candidate.setUTCHours(ROLLOVER_HOUR_UTC, ROLLOVER_MIN_UTC, 0, 0);
+    if (candidate.getTime() - now.getTime() <= 5000) {
+      candidate.setUTCDate(candidate.getUTCDate() + 7);
+    }
+    return candidate.getTime() - now.getTime();
+  }
+
+  function _executeRollover() {
+    console.info("[IplRollover] Triggering Monday 14:00 rollover …");
+    IplApi.rollover(false)
+      .then(function (data) {
+        if (data && data.rolled) {
+          console.info("[IplRollover] Rollover complete — new week: " + data.new_week_no);
+          _lastStateEtag = null;
+          _pollCycle();
+        } else {
+          console.info("[IplRollover] Rollover no-op:", data && data.reason);
+        }
+      })
+      .catch(function (err) {
+        console.warn("[IplRollover] Rollover failed:", err.message || err);
+      })
+      .finally(function () {
+        _scheduleNextRollover();
+      });
+  }
+
+  function _scheduleNextRollover() {
+    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
+    var ms     = _msUntilNextRollover();
+    var capped = Math.min(ms, 7 * 24 * 60 * 60 * 1000);
+    console.info("[IplRollover] Next rollover scheduled in " + Math.round(capped / 60000) + " min");
+    _rolloverTimer = setTimeout(_executeRollover, capped);
+  }
+
+  function _cancelRolloverTimer() {
+    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
+  }
+
+  var IplRollover = {
+    scheduleNext:  _scheduleNextRollover,
+    cancelPending: _cancelRolloverTimer,
+  };
+
+
+  // ──────────────────────────────────────────────────────────────────────────
   // PUBLIC API  —  window.IplApi
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Thin async wrappers over every Flask endpoint.
-   * All methods return Promises.
-   */
   var IplApi = {
 
-    /**
-     * GET /api/state — full league state.
-     * Sends If-None-Match header; returns null on 304 (nothing changed).
-     * Updates _lastStateEtag from ETag response header.
-     */
     getState: function () {
       var headers = { "Accept": "application/json" };
       if (_lastStateEtag) headers["If-None-Match"] = _lastStateEtag;
@@ -250,24 +261,50 @@
       });
     },
 
-    /**
-     * GET /api/leaderboard[?week=N] — normalised leaderboard.
-     * @param {number|null} weekNo  Pass integer for weekly view, null/undefined for global.
-     */
     getLeaderboard: function (weekNo) {
       var url = (weekNo != null) ? ("/api/leaderboard?week=" + weekNo) : "/api/leaderboard";
       return _fetchJson(url).then(normaliseLeaderboard);
     },
 
-    /** GET /api/ping */
-    ping: function () {
-      return _fetchJson("/api/ping");
+    getPlayers: function () {
+      return _fetchJson("/api/players");
     },
 
-    /**
-     * POST /api/state — full merge save.
-     * After calling this, dispatch "ipl:saved" to bust the ETag cache.
-     */
+    getCurrentWeek: function () {
+      return _fetchJson("/api/current-week");
+    },
+
+    getHistory: function (name) {
+      return _fetchJson("/api/history/" + encodeURIComponent(name));
+    },
+
+    saveNextWeek: function (name, picks) {
+      return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(picks),
+      });
+    },
+
+    resolvePlayer: function (query, team) {
+      return _fetchJson("/api/resolve-player", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query, team: team || null }),
+      });
+    },
+
+    ping: function () {
+      return _fetchJson("/api/ping").then(function (d) {
+        if (d) {
+          if (d.budget    != null) IplConfig.budget    = d.budget;
+          if (d.xi_size   != null) IplConfig.xi_size   = d.xi_size;
+          if (d.max_weeks != null) IplConfig.max_weeks = d.max_weeks;
+        }
+        return d;
+      });
+    },
+
     saveState: function (payload) {
       return _fetchJson("/api/state", {
         method: "POST",
@@ -276,14 +313,6 @@
       });
     },
 
-    /**
-     * PUT /api/member/<name> — upsert one member's picks.
-     * After calling this, dispatch "ipl:saved" to bust the ETag cache.
-     *
-     * @param {string} name    Display name (max 30 chars)
-     * @param {object} data    { this_week:{team,cap,vc}, next_week:{team,cap,vc} }
-     *                         or legacy { team:[...], cap:str, vc:str }
-     */
     saveMember: function (name, data) {
       return _fetchJson("/api/member/" + encodeURIComponent(name), {
         method: "PUT",
@@ -292,9 +321,6 @@
       });
     },
 
-    /**
-     * POST /api/match — upsert one match + scores.
-     */
     saveMatch: function (matchObj) {
       return _fetchJson("/api/match", {
         method: "POST",
@@ -304,11 +330,49 @@
     },
 
     /**
-     * POST /api/rollover — trigger Monday 14:00 UTC promotion.
-     * Idempotent; returns { ok, rolled }.
+     * POST /api/rollover[?force=1]
+     *
+     * On success (rolled === true):
+     *   1. Fetches /api/current-week and updates IplConfig.current_week.
+     *   2. Dispatches "ipl:week-changed"   { week_no, max_weeks }
+     *   3. Dispatches "ipl:rollover-triggered" { ...server response }
+     *   4. Busts ETag so next poll fetches fresh state + leaderboard.
+     *
+     * On season_complete === true:
+     *   Dispatches "ipl:season-complete" in addition to the above.
      */
-    rollover: function () {
-      return _fetchJson("/api/rollover", { method: "POST" });
+    rollover: function (force) {
+      var url = force ? "/api/rollover?force=1" : "/api/rollover";
+      return _fetchJson(url, { method: "POST" }).then(function (data) {
+        if (!data) return data;
+
+        if (data.season_complete) {
+          console.warn("[IplApi] Season complete — all " + IplConfig.max_weeks + " weeks rolled.");
+          window.dispatchEvent(new CustomEvent("ipl:season-complete", { detail: data }));
+        }
+
+        if (data.rolled) {
+          // Re-fetch current week from server and update IplConfig
+          _fetchJson("/api/current-week").then(function (wk) {
+            if (wk && wk.week_no != null) {
+              IplConfig.current_week = wk.week_no;
+              window.dispatchEvent(new CustomEvent("ipl:week-changed", {
+                detail: { week_no: wk.week_no, max_weeks: wk.max_weeks }
+              }));
+            }
+          }).catch(function () {});
+
+          // Bust ETag → next poll cycle will pull fresh state + leaderboard
+          _lastStateEtag = null;
+          window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
+        }
+
+        return data;
+      });
+    },
+
+    seedHistory: function () {
+      return _fetchJson("/api/seed-history", { method: "POST" });
     },
   };
 
@@ -317,22 +381,12 @@
   // 60-SECOND POLLING LOOP
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * One poll cycle:
-   *  1. GET /api/poll  → { state_etag }   (single meta-row read, very cheap)
-   *  2. Compare ETag. If unchanged → return (no further fetches).
-   *  3. If changed → fire /api/state + /api/leaderboard in parallel.
-   *  4. Dispatch ipl:state-updated and ipl:leaderboard-updated custom events.
-   *  5. On any 5xx or network failure → schedule maintenance overlay.
-   *  6. On recovery (2xx after error) → cancel overlay, refresh.
-   */
   function _pollCycle() {
     return _fetchJson("/api/poll")
       .then(function (poll) {
         _cancelOverlay();
-
         var serverEtag = poll && poll.state_etag;
-        if (!serverEtag || serverEtag === _lastStateEtag) return;  // nothing new
+        if (!serverEtag || serverEtag === _lastStateEtag) return;
 
         return Promise.all([
           IplApi.getState(),
@@ -340,7 +394,6 @@
         ]).then(function (results) {
           var state = results[0];
           var lb    = results[1];
-
           if (state) {
             _lastStateEtag = state._saved || serverEtag;
             window.dispatchEvent(new CustomEvent("ipl:state-updated", { detail: state }));
@@ -359,8 +412,8 @@
   }
 
   function startPolling() {
-    if (_pollTimer) return;                    // already running
-    _pollCycle();                              // immediate first cycle
+    if (_pollTimer) return;
+    _pollCycle();
     _pollTimer = setInterval(_pollCycle, POLL_INTERVAL_MS);
   }
 
@@ -374,21 +427,38 @@
   // ──────────────────────────────────────────────────────────────────────────
 
   function _init() {
-    startPolling();
+    // Hydrate IplConfig from server
+    IplApi.ping().catch(function () {});
 
-    // Pause polling when tab is hidden; resume (with immediate cycle) on focus
+    // Prime current_week synchronously for components that read IplConfig early
+    IplApi.getCurrentWeek().then(function (wk) {
+      if (wk && wk.week_no != null) {
+        IplConfig.current_week = wk.week_no;
+      }
+    }).catch(function () {});
+
+    startPolling();
+    _scheduleNextRollover();
+
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) {
         stopPolling();
       } else {
         startPolling();
+        _pollCycle();
       }
     });
 
-    // Any write operation should bust the ETag so the next poll refreshes
     window.addEventListener("ipl:saved", function () {
       _lastStateEtag = null;
     });
+
+    window.addEventListener("ipl:rollover-triggered", function () {
+      _lastStateEtag = null;
+      _pollCycle();
+    });
+
+    window.dispatchEvent(new CustomEvent("ipl:ready"));
   }
 
   if (document.readyState === "loading") {
@@ -402,8 +472,10 @@
   // EXPORTS
   // ──────────────────────────────────────────────────────────────────────────
 
-  window.IplApi                = IplApi;
-  window.IplPolling            = { start: startPolling, stop: stopPolling };
-  window.normaliseLeaderboard  = normaliseLeaderboard;   // exposed for unit tests
+  window.IplApi               = IplApi;
+  window.IplPolling           = { start: startPolling, stop: stopPolling };
+  window.IplConfig            = IplConfig;
+  window.IplRollover          = IplRollover;
+  window.normaliseLeaderboard = normaliseLeaderboard;
 
 }(window));
