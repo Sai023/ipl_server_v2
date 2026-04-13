@@ -74,8 +74,9 @@ _SEMANTIC_MAP = {
     "samson":"sanju samson","tharva":"atharva taide",
 }
 
-_SAI_W1_TEAM = ["d12","rr08","g11","c05","g08","rr15","rr05","s22","rr03","p01","s03"]
-_MOE_W1_TEAM = ["m10","r15","k10","r09","m11","m20","rr05","rr11","m04","s03","d01"]
+SAI_W1_TEAM = ["g01", "g02", "g03", "c26", "d24", "r03", "r05", "r02", "k01", "k03", "k07"]
+MOE_W1_TEAM = ["r01", "m01", "m24", "m23", "m25", "r26", "rr24", "s01", "s02", "s26", "d02"]
+
 
 _HISTORY_SEED = [
     ("Sai", 1, _SAI_W1_TEAM, "rr03", "rr15"),
