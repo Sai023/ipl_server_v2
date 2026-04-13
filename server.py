@@ -1,22 +1,15 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.4
+IPL Fantasy 2026 — Flask Server                             Golden File v11.5
 ===========================================================================
-v11.4 (fixes):
-  1. _run_bg: add encoding='utf-8', errors='replace' so Pinggy/localhost.run
-     SSH output (which may contain non-cp1252 bytes on Windows) no longer
-     crashes with 'charmap codec can't decode byte 0x90 …'
-  2. try_cloudflare: also looks for cloudflared.exe in the project directory
-     so users can simply drop the binary alongside server.py without adding
-     it to PATH.
-  3. api_player_points: fix Flask route-parameter mismatch (<n> vs name).
-     The function was raising TypeError on every call.
-  4. _ensure_points_calculated: new startup helper — if match_scores has
-     played rows but player_match_points is empty, recalculate automatically
-     so the leaderboard is never silently zeroed after a cold start.
-v11.3:
-  Seed W1, W2, W3 selections so all 17 completed matches score.
-  New endpoint: POST /api/recalculate-points.
-  Tunnel: warn user when using ephemeral SSH tunnels.
+v11.5:
+  SSH tunnel hang fix: add -o BatchMode=yes + -o PasswordAuthentication=no
+  to both try_pinggy and try_localhost_run.  Without BatchMode=yes, SSH
+  blocks forever waiting for a password prompt instead of failing fast.
+v11.4:
+  1. _run_bg: encoding='utf-8', errors='replace' (Windows charmap fix)
+  2. try_cloudflare: local cloudflared.exe lookup
+  3. api_player_points: Flask route param mismatch fix
+  4. _ensure_points_calculated: startup points sanity check
 """
 
 import collections
@@ -79,23 +72,14 @@ _SEMANTIC_MAP = {
     "samson":"sanju samson","tharva":"atharva taide",
 }
 
-# ── History seed ────────────────────────────────────────────────────────
-# Calendar-based week boundaries (Monday 14:00 IST rollover):
-#   W1: Mar 28-29 (M1=SRH/RCB, M2=KKR/MI) — 2 matches
-#   W2: Mar 30 14:00 – Apr 6 14:00 (M3-M11) — 9 matches
-#   W3: Apr 6 14:00 – Apr 13 14:00 (M12-M17+) — current week
-# Same team carried forward each rollover (no change made by users yet).
 _SAI_W1_TEAM = ["d12","rr08","g11","c05","g08","rr15","rr05","s22","rr03","p01","s03"]
 _MOE_W1_TEAM = ["m10","r15","k10","r09","m11","m20","rr05","rr11","m04","s03","d01"]
 
 _HISTORY_SEED = [
-    # Week 1 — M1 (SRH vs RCB) + M2 (KKR vs MI)
     ("Sai", 1, _SAI_W1_TEAM, "rr03", "rr15"),
     ("Moe", 1, _MOE_W1_TEAM, "d01",  "s03"),
-    # Week 2 rollover — Mar 30 14:00 IST. Same team carried forward.
     ("Sai", 2, _SAI_W1_TEAM, "rr03", "rr15"),
     ("Moe", 2, _MOE_W1_TEAM, "d01",  "s03"),
-    # Week 3 rollover — Apr 6 14:00 IST. Same team, locked until Apr 13.
     ("Sai", 3, _SAI_W1_TEAM, "rr03", "rr15"),
     ("Moe", 3, _MOE_W1_TEAM, "d01",  "s03"),
 ]
@@ -314,17 +298,10 @@ def _auto_seed_history_if_needed():
 # ════ POINTS SANITY CHECK
 
 def _ensure_points_calculated():
-    """
-    v11.4: On startup, if match_scores has played rows but player_match_points
-    is empty, automatically recalculate points so the leaderboard is never
-    silently zeroed after a cold start or DB reset.
-    Also logs a per-week breakdown to help diagnose points discrepancies.
-    """
     try:
         with db._read() as con:
             pmp = con.execute("SELECT COUNT(*) FROM player_match_points").fetchone()[0]
             ms  = con.execute("SELECT COUNT(*) FROM match_scores WHERE played=1").fetchone()[0]
-            # Per-week diagnostics
             week_rows = con.execute(
                 "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
                 "COUNT(DISTINCT pmp2.match_id) AS matches "
@@ -565,39 +542,32 @@ def api_poll():
     except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
-# ════ v11.2 / v11.3 / v11.4 ENDPOINTS
+# ════ v11.x ENDPOINTS
 
 @app.route("/api/player-points/<n>",methods=["GET"])
-def api_player_points(n):  # v11.4 FIX: parameter was 'name' but route uses <n> — caused TypeError on every call
-    """Per-player fantasy points breakdown, aggregated across ALL selection weeks."""
-    name = n  # use 'name' internally for readability
+def api_player_points(n):
+    name = n
     try:
         if not name or len(name)>30:
             return jsonify({"error":"invalid name","code":400}),400
-
         with db._read() as con:
             con.row_factory=sqlite3.Row
             sel_rows=con.execute("""
                 SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id
                 FROM user_selections WHERE display_name=? ORDER BY week_no
             """,(name,)).fetchall()
-
             if not sel_rows:
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
-
             import json as _j
             latest=sel_rows[-1]
             team_ids=_j.loads(latest["tw_team_json"] or "[]")
             latest_cap=latest["tw_cap_id"]; latest_vc=latest["tw_vc_id"]
-
             if not team_ids:
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
-
             ph=",".join("?"*len(team_ids))
             player_rows={r["id"]:dict(r) for r in
                 con.execute(f"SELECT id,name,team,role,price FROM players WHERE id IN ({ph})",
                             team_ids).fetchall()}
-
             by_player=collections.defaultdict(list)
             for sel in sel_rows:
                 wn=sel["week_no"]
@@ -623,7 +593,6 @@ def api_player_points(n):  # v11.4 FIX: parameter was 'name' but route uses <n> 
                         "multiplier":mult,
                         "final_pts":round(r["base_pts"]*mult),
                     })
-
         players_out=[]; grand_total=0
         for pid in team_ids:
             info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0})
@@ -637,7 +606,6 @@ def api_player_points(n):  # v11.4 FIX: parameter was 'name' but route uses <n> 
             })
         players_out.sort(key=lambda x:-x["total_pts"])
         return jsonify({"ok":True,"name":name,"total_pts":grand_total,"players":players_out})
-
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -645,37 +613,30 @@ def api_player_points(n):  # v11.4 FIX: parameter was 'name' but route uses <n> 
 
 @app.route("/api/debug-points/<n>",methods=["GET"])
 def api_debug_points(n):
-    """v11.4: Diagnostic — shows per-player, per-week match coverage so you can
-    see exactly which players are or aren't scoring and why."""
     try:
         if not n or len(n)>30:
             return jsonify({"error":"invalid name","code":400}),400
         with db._read() as con:
             con.row_factory=sqlite3.Row
-            # Selections
             sels=con.execute(
                 "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id FROM user_selections WHERE display_name=? ORDER BY week_no",
                 (n,)).fetchall()
             if not sels:
                 return jsonify({"ok":True,"name":n,"message":"No selections found","selections":[]})
             import json as _j
-            out=[]
-            total_pts=0
+            out=[]; total_pts=0
             for sel in sels:
                 wn=sel["week_no"]
                 ids=_j.loads(sel["tw_team_json"] or "[]")
                 cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]
-                # Matches in this week
                 matches=con.execute(
                     "SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)).fetchall()
-                # pmp rows for these players in this week
                 pmp_rows=[]
                 if ids:
                     iph=",".join("?"*len(ids))
                     pmp_rows=con.execute(
                         f"SELECT player_id,match_id,base_pts FROM player_match_points WHERE player_id IN ({iph}) AND week_no=?",
                         ids+[wn]).fetchall()
-                # players with no pmp rows at all this week
                 scored_pids={r["player_id"] for r in pmp_rows}
                 missing=[pid for pid in ids if pid not in scored_pids]
                 wk_pts=sum(
@@ -684,8 +645,7 @@ def api_debug_points(n):
                 )
                 total_pts+=wk_pts
                 out.append({
-                    "week_no":wn,"cap":cap,"vc":vc,
-                    "team":ids,
+                    "week_no":wn,"cap":cap,"vc":vc,"team":ids,
                     "week_pts":round(wk_pts),
                     "matches_in_week":[{"id":m["id"],"title":m["title"],"status":m["status"]} for m in matches],
                     "scored_entries":len(pmp_rows),
@@ -746,7 +706,6 @@ def api_update_match_url():
 
 @app.route("/api/recalculate-points",methods=["POST"])
 def api_recalculate_points():
-    """Admin convenience: re-run points calculation for all matches."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -797,8 +756,6 @@ class TunnelResult:
         except: pass
 
 def _run_bg(cmd):
-    # v11.4 FIX: specify utf-8 + errors='replace' so Windows charmap codec
-    # doesn't crash on SSH output bytes like 0x90 (was: text=True with no encoding).
     return subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -810,7 +767,6 @@ def _run_bg(cmd):
     )
 
 def try_cloudflare(port):
-    # v11.4: also look for cloudflared.exe in the project directory (Windows convenience)
     exe=shutil.which("cloudflared")
     if not exe:
         _local=BASE_DIR/"cloudflared.exe"
@@ -849,12 +805,22 @@ def try_ngrok(port):
     except Exception as e: print(f"    ngrok error: {e}")
     return None
 
+# ── v11.5 FIX: BatchMode=yes prevents SSH hanging on password prompt ──────────
+# Without it, Pinggy/localhost.run ask for a password and the readline() loop
+# blocks forever because proc.poll() never returns (process is alive, waiting).
+# BatchMode=yes makes SSH exit immediately with "Permission denied" instead.
+
 def try_pinggy(port):
     exe=shutil.which("ssh")
     if not exe: return None
     print("  -> Trying Pinggy (ephemeral SSH tunnel)...")
     try:
-        proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
+        proc=_run_bg([exe,
+            "-o","StrictHostKeyChecking=no",
+            "-o","BatchMode=yes",              # v11.5: never prompt for password
+            "-o","PasswordAuthentication=no",  # v11.5: key-only auth
+            "-o","ServerAliveInterval=30",
+            "-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
         url=None; dl=time.time()+20
         while time.time()<dl:
             line=proc.stdout.readline() or ""
@@ -872,7 +838,12 @@ def try_localhost_run(port):
     if not exe: return None
     print("  -> Trying localhost.run (ephemeral SSH tunnel)...")
     try:
-        proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-R",f"80:localhost:{port}","nokey@localhost.run"])
+        proc=_run_bg([exe,
+            "-o","StrictHostKeyChecking=no",
+            "-o","BatchMode=yes",              # v11.5: never prompt for password
+            "-o","PasswordAuthentication=no",  # v11.5: key-only auth
+            "-o","ServerAliveInterval=30",
+            "-R",f"80:localhost:{port}","nokey@localhost.run"])
         url=None; dl=time.time()+20
         while time.time()<dl:
             line=proc.stdout.readline() or ""
@@ -890,7 +861,6 @@ def start_tunnel(port,provider="auto"):
     if provider=="ngrok": return try_ngrok(port)
     if provider=="pinggy": return try_pinggy(port)
     if provider=="localhostrun": return try_localhost_run(port)
-    # Auto: try persistent tunnels first, then ephemeral
     for fn in [try_cloudflare,try_ngrok,try_pinggy,try_localhost_run]:
         result=fn(port)
         if result: return result
@@ -962,7 +932,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()
-    _ensure_points_calculated()  # v11.4: auto-fix empty player_match_points on cold start
+    _ensure_points_calculated()
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")
