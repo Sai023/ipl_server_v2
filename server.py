@@ -1,14 +1,22 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.3
+IPL Fantasy 2026 — Flask Server                             Golden File v11.4
 ===========================================================================
+v11.4 (fixes):
+  1. _run_bg: add encoding='utf-8', errors='replace' so Pinggy/localhost.run
+     SSH output (which may contain non-cp1252 bytes on Windows) no longer
+     crashes with 'charmap codec can't decode byte 0x90 …'
+  2. try_cloudflare: also looks for cloudflared.exe in the project directory
+     so users can simply drop the binary alongside server.py without adding
+     it to PATH.
+  3. api_player_points: fix Flask route-parameter mismatch (<n> vs name).
+     The function was raising TypeError on every call.
+  4. _ensure_points_calculated: new startup helper — if match_scores has
+     played rows but player_match_points is empty, recalculate automatically
+     so the leaderboard is never silently zeroed after a cold start.
 v11.3:
-  Seed W1, W2, W3 selections so all 17 completed matches score:
-    Week 1: M1-M2  (before Mar 30 14:00 IST rollover)
-    Week 2: M3-M11 (Mar 30 14:00 – Apr 6 14:00 IST)
-    Week 3: M12-M17 (Apr 6 14:00 onwards, current week until Apr 13)
-  New endpoint: POST /api/recalculate-points  (admin convenience trigger)
-  Tunnel: warn user when using ephemeral SSH tunnels (localhost.run/pinggy)
-  (all v11.2 endpoints retained)
+  Seed W1, W2, W3 selections so all 17 completed matches score.
+  New endpoint: POST /api/recalculate-points.
+  Tunnel: warn user when using ephemeral SSH tunnels.
 """
 
 import collections
@@ -303,6 +311,41 @@ def _auto_seed_history_if_needed():
         print(f"  [startup] Could not seed history: {e}")
 
 
+# ════ POINTS SANITY CHECK
+
+def _ensure_points_calculated():
+    """
+    v11.4: On startup, if match_scores has played rows but player_match_points
+    is empty, automatically recalculate points so the leaderboard is never
+    silently zeroed after a cold start or DB reset.
+    Also logs a per-week breakdown to help diagnose points discrepancies.
+    """
+    try:
+        with db._read() as con:
+            pmp = con.execute("SELECT COUNT(*) FROM player_match_points").fetchone()[0]
+            ms  = con.execute("SELECT COUNT(*) FROM match_scores WHERE played=1").fetchone()[0]
+            # Per-week diagnostics
+            week_rows = con.execute(
+                "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
+                "COUNT(DISTINCT pmp2.match_id) AS matches "
+                "FROM player_match_points pmp2 "
+                "JOIN matches m ON m.id=pmp2.match_id "
+                "GROUP BY m.week_no ORDER BY m.week_no"
+            ).fetchall()
+        if ms > 0 and pmp == 0:
+            print(f"  [startup] {ms} match_score rows but 0 pmp rows — recalculating points...")
+            n = db.recalculate_points()
+            print(f"  [startup] Calculated {n} player-match-point rows.")
+        elif ms > 0:
+            print(f"  [startup] Points OK: {pmp} pmp rows from {ms} played scores.")
+            for wr in week_rows:
+                print(f"  [startup]   W{wr['week_no']}: {wr['players']} players scored across {wr['matches']} matches")
+        else:
+            print("  [startup] No match_scores found — run scraper or seed matches with scores.")
+    except Exception as e:
+        print(f"  [startup] Points check failed: {e}")
+
+
 # ════ DB SINGLETON + COLD-START
 
 db=DatabaseManager(DB_PATH)
@@ -522,18 +565,18 @@ def api_poll():
     except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
-# ════ NEW v11.2 / v11.3 ENDPOINTS
+# ════ v11.2 / v11.3 / v11.4 ENDPOINTS
 
-@app.route("/api/player-points/<name>",methods=["GET"])
-def api_player_points(name):
+@app.route("/api/player-points/<n>",methods=["GET"])
+def api_player_points(n):  # v11.4 FIX: parameter was 'name' but route uses <n> — caused TypeError on every call
     """Per-player fantasy points breakdown, aggregated across ALL selection weeks."""
+    name = n  # use 'name' internally for readability
     try:
         if not name or len(name)>30:
             return jsonify({"error":"invalid name","code":400}),400
 
         with db._read() as con:
             con.row_factory=sqlite3.Row
-            # Collect all week selections for this user
             sel_rows=con.execute("""
                 SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id
                 FROM user_selections WHERE display_name=? ORDER BY week_no
@@ -543,7 +586,6 @@ def api_player_points(name):
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
 
             import json as _j
-            # Build {player_id: {name,team,role,is_cap,is_vc}} from latest week
             latest=sel_rows[-1]
             team_ids=_j.loads(latest["tw_team_json"] or "[]")
             latest_cap=latest["tw_cap_id"]; latest_vc=latest["tw_vc_id"]
@@ -556,7 +598,6 @@ def api_player_points(name):
                 con.execute(f"SELECT id,name,team,role,price FROM players WHERE id IN ({ph})",
                             team_ids).fetchall()}
 
-            # For each selection week, get matching player_match_points
             by_player=collections.defaultdict(list)
             for sel in sel_rows:
                 wn=sel["week_no"]
@@ -599,6 +640,60 @@ def api_player_points(name):
 
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@app.route("/api/debug-points/<n>",methods=["GET"])
+def api_debug_points(n):
+    """v11.4: Diagnostic — shows per-player, per-week match coverage so you can
+    see exactly which players are or aren't scoring and why."""
+    try:
+        if not n or len(n)>30:
+            return jsonify({"error":"invalid name","code":400}),400
+        with db._read() as con:
+            con.row_factory=sqlite3.Row
+            # Selections
+            sels=con.execute(
+                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id FROM user_selections WHERE display_name=? ORDER BY week_no",
+                (n,)).fetchall()
+            if not sels:
+                return jsonify({"ok":True,"name":n,"message":"No selections found","selections":[]})
+            import json as _j
+            out=[]
+            total_pts=0
+            for sel in sels:
+                wn=sel["week_no"]
+                ids=_j.loads(sel["tw_team_json"] or "[]")
+                cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]
+                # Matches in this week
+                matches=con.execute(
+                    "SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)).fetchall()
+                # pmp rows for these players in this week
+                pmp_rows=[]
+                if ids:
+                    iph=",".join("?"*len(ids))
+                    pmp_rows=con.execute(
+                        f"SELECT player_id,match_id,base_pts FROM player_match_points WHERE player_id IN ({iph}) AND week_no=?",
+                        ids+[wn]).fetchall()
+                # players with no pmp rows at all this week
+                scored_pids={r["player_id"] for r in pmp_rows}
+                missing=[pid for pid in ids if pid not in scored_pids]
+                wk_pts=sum(
+                    (r["base_pts"]*2 if r["player_id"]==cap else r["base_pts"]*1.5 if r["player_id"]==vc else r["base_pts"])
+                    for r in pmp_rows
+                )
+                total_pts+=wk_pts
+                out.append({
+                    "week_no":wn,"cap":cap,"vc":vc,
+                    "team":ids,
+                    "week_pts":round(wk_pts),
+                    "matches_in_week":[{"id":m["id"],"title":m["title"],"status":m["status"]} for m in matches],
+                    "scored_entries":len(pmp_rows),
+                    "players_with_no_points":missing,
+                })
+        return jsonify({"ok":True,"name":n,"total_pts":round(total_pts),"weeks":out})
+    except Exception as e:
+        _log(f"GET /api/debug-points/{n}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
@@ -651,9 +746,7 @@ def api_update_match_url():
 
 @app.route("/api/recalculate-points",methods=["POST"])
 def api_recalculate_points():
-    """Admin convenience: re-run points calculation for all matches.
-    Call this after running Seed_Matches.py --force to sync week_no changes.
-    """
+    """Admin convenience: re-run points calculation for all matches."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -704,10 +797,24 @@ class TunnelResult:
         except: pass
 
 def _run_bg(cmd):
-    return subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+    # v11.4 FIX: specify utf-8 + errors='replace' so Windows charmap codec
+    # doesn't crash on SSH output bytes like 0x90 (was: text=True with no encoding).
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        encoding='utf-8',
+        errors='replace'
+    )
 
 def try_cloudflare(port):
+    # v11.4: also look for cloudflared.exe in the project directory (Windows convenience)
     exe=shutil.which("cloudflared")
+    if not exe:
+        _local=BASE_DIR/"cloudflared.exe"
+        if _local.exists(): exe=str(_local)
     if not exe: return None
     print("  -> Trying Cloudflare Tunnel...")
     try:
@@ -750,7 +857,7 @@ def try_pinggy(port):
         proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
         url=None; dl=time.time()+20
         while time.time()<dl:
-            line=proc.stdout.readline() or proc.stderr.readline()
+            line=proc.stdout.readline() or ""
             if not line: time.sleep(0.3); continue
             m=re.search(r"https://[a-z0-9-]+\.a\.free\.pinggy\.link",line)
             if m: url=m.group(0); break
@@ -768,7 +875,7 @@ def try_localhost_run(port):
         proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","ServerAliveInterval=30","-R",f"80:localhost:{port}","nokey@localhost.run"])
         url=None; dl=time.time()+20
         while time.time()<dl:
-            line=proc.stdout.readline() or proc.stderr.readline()
+            line=proc.stdout.readline() or ""
             if not line: time.sleep(0.3); continue
             m=re.search(r"https://[a-z0-9-]+\.lhr\.life",line)
             if m: url=m.group(0); break
@@ -807,15 +914,14 @@ def print_banner(port,tunnel,lan_ip):
         for i in range(0,len(url),WIDE-4): print(banner_line(f"   {url[i:i+WIDE-4]}"))
         if tunnel.ephemeral:
             print(banner_line("\u26a0  EPHEMERAL TUNNEL — URL may die after ~30 min!"))
-            print(banner_line("   For reliable tunnels, install cloudflared:"))
-            print(banner_line("   github.com/cloudflare/cloudflared/releases"))
+            print(banner_line("   For a free persistent tunnel, run setup_cloudflare.ps1"))
+            print(banner_line("   then: python server.py --tunnel cloudflare"))
         else:
             print(banner_line("SHARE THIS LINK with friends anywhere!"))
     else:
         print(banner_line("No public tunnel running."))
-        print(banner_line("Install cloudflared for a free persistent tunnel:"))
-        print(banner_line("  github.com/cloudflare/cloudflared/releases"))
-        print(banner_line("Then run: python server.py --tunnel cloudflare"))
+        print(banner_line("Run setup_cloudflare.ps1 once, then:"))
+        print(banner_line("  python server.py --tunnel cloudflare"))
     print(f"+{bar}+")
     print(banner_line(f"Data:  {DB_PATH}"))
     print(banner_line(f"Budget: {BUDGET_TOTAL:.0f} CR  |  XI: {XI_SIZE}  |  Season: {MAX_WEEKS} wks"))
@@ -856,6 +962,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()
+    _ensure_points_calculated()  # v11.4: auto-fix empty player_match_points on cold start
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")
@@ -865,8 +972,8 @@ if __name__=="__main__":
         flask_thread.start(); time.sleep(1.5)
         tunnel=start_tunnel(args.port,args.tunnel)
         if not tunnel:
-            print("\n  Could not start tunnel.")
-            print("  For a free persistent tunnel, install cloudflared:")
+            print("\n  Could not start any tunnel.")
+            print("  Run setup_cloudflare.ps1 to install cloudflared (free, persistent):")
             print("  https://github.com/cloudflare/cloudflared/releases/latest")
             print("  Then run: python server.py --tunnel cloudflare\n")
         print_banner(args.port,tunnel,lan_ip)
@@ -884,8 +991,7 @@ if __name__=="__main__":
                     if tunnel_failures>MAX_TF:
                         print(f"\nTunnel failed {tunnel_failures}x - pausing.")
                         if tunnel and tunnel.ephemeral:
-                            print("  Ephemeral SSH tunnel died. Install cloudflared for reliability.")
-                            print("  https://github.com/cloudflare/cloudflared/releases/latest")
+                            print("  Ephemeral SSH tunnel died. Run setup_cloudflare.ps1 for reliability.")
                         tunnel=None; continue
                     backoff=min(5*tunnel_failures,30)
                     print(f"\nTunnel exited ({tunnel_failures}/{MAX_TF}). Retry in {backoff}s...")
