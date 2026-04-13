@@ -79,12 +79,12 @@ MOE_W1_TEAM = ["r01", "m01", "m24", "m23", "m25", "r26", "rr24", "s01", "s02", "
 
 
 _HISTORY_SEED = [
-    ("Sai", 1, _SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 1, _MOE_W1_TEAM, "d01",  "s03"),
-    ("Sai", 2, _SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 2, _MOE_W1_TEAM, "d01",  "s03"),
-    ("Sai", 3, _SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 3, _MOE_W1_TEAM, "d01",  "s03"),
+    ("Sai", 1, SAI_W1_TEAM, "rr03", "rr15"),
+    ("Moe", 1, MOE_W1_TEAM, "d01",  "s03"),
+    ("Sai", 2, SAI_W1_TEAM, "rr03", "rr15"),
+    ("Moe", 2, MOE_W1_TEAM, "d01",  "s03"),
+    ("Sai", 3, SAI_W1_TEAM, "rr03", "rr15"),
+    ("Moe", 3, MOE_W1_TEAM, "d01",  "s03"),
 ]
 
 
