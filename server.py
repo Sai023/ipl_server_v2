@@ -1,17 +1,29 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.6
+IPL Fantasy 2026 — Flask Server                             Golden File v11.7
 ===========================================================================
-v11.6:
-  _audit_player_id_coverage(): new startup function called after points are
-  calculated. For every user, checks which of their tw_team_json player IDs
-  exist in player_match_points and which are ghosts (0 pmp rows). Prints a
-  clear WARNING for any ghost IDs so the admin can fix _HISTORY_SEED to use
-  the real IDs from the players table. This is the root cause of Moe having
-  only 131 pts — some seeded IDs don't match what Seed_Players.py stored.
-v11.5:
-  BatchMode=yes on SSH tunnels to prevent password-prompt hang.
-v11.4:
-  UTF-8 encoding fix, cloudflared local lookup, route param fix, points check.
+v11.7 (this release):
+  1. Correct _HISTORY_SEED player IDs from actual screenshots (Seed_Players.py):
+       SAI W1 (Sai_week_1_30_March):
+         Ngidi(d22) Chahal(rr06) NoorAhmad(g05) Dube(c03) Rashid(g03)
+         Suryavanshi(rr14-VC) Hetmyer(rr04) Markram(s06)
+         Samson(c25-C) Prabhsimran(p09) Kishan(m05)
+       MOE W1 (Moe_week_1_30_March):
+         Bumrah(m03) Bhuvneshwar(s04) H.Rana(k09) Shepherd(m19) Jansen(s17)
+         Brevis(m09) Hetmyer(rr04) A.Sharma(s02) Rickelton(m12)
+         Kishan(m05-VC) Pant(l01-C, LSG 2026)
+       W2 = W1 (no changes made), W3 = W1 (no changes made).
+  2. _SEED_VERSION versioned re-seed: whenever _HISTORY_SEED changes, bump
+     _SEED_VERSION and the startup function force-replaces stale tw_team rows
+     while preserving any user-saved nw_team_json draft for the current week.
+     Fixes the core bug: _looks_like_ids() returned True for ghost IDs (valid
+     format but wrong players) so old bad seeds were never replaced.
+  3. Draft persistence for week 4: save_next_week correctly stores to
+     nw_team_json and the seed never overwrites it, so "Save Draft" survives
+     server restarts. After Monday 14:00 rollover, nw becomes the new tw for
+     week 4 and the user can keep editing their next draft from where they left.
+v11.6: _audit_player_id_coverage startup diagnostic.
+v11.5: BatchMode=yes SSH tunnel fix.
+v11.4: UTF-8 encoding, cloudflared local lookup, route param fix, points check.
 """
 
 import collections
@@ -69,22 +81,50 @@ _SEMANTIC_MAP = {
     "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
     "ravindra":"rachin ravindra","suryavanshi":"vaibhav suryavanshi",
     "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
-    "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"nitish rana",
+    "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
     "pant":"rishabh pant","noor":"noor ahmad","dube":"shivam dube",
-    "samson":"sanju samson","tharva":"atharva taide",
+    "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
+    "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
 }
 
-SAI_W1_TEAM = ["g01", "g02", "g03", "c26", "d24", "r03", "r05", "r02", "k01", "k03", "k07"]
-MOE_W1_TEAM = ["r01", "m01", "m24", "m23", "m25", "r26", "rr24", "s01", "s02", "s26", "d02"]
+# ── History seed ─────────────────────────────────────────────────────────────
+# Bump _SEED_VERSION whenever any team data below changes.
+# The startup function will detect the mismatch and force-replace tw_team rows
+# while preserving any nw_team_json draft the user has already saved.
+_SEED_VERSION = "2026.v7.correct-ids"
 
+# SAI W1 — verified from Sai_week_1_30_March.jpeg against Seed_Players.py:
+#   Bowlers:  Lungi Ngidi (d22=DC), Yuzvendra Chahal (rr06=RR), Noor Ahmad (g05=GT)
+#   AR:       Shivam Dube (c03=CSK), Rashid Khan (g03=GT)
+#   Batsmen:  Vaibhav Suryavanshi (rr14=RR) VC, Shimron Hetmyer (rr04=RR),
+#             Aiden Markram (s06=SRH)
+#   WK:       Sanju Samson (c25=CSK) C, Prabhsimran Singh (p09=PBKS),
+#             Ishan Kishan (m05=MI)
+_SAI_W1_TEAM = ["d22","rr06","g05","c03","g03","rr14","rr04","s06","c25","p09","m05"]
+_SAI_W1_CAP  = "c25"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
+_SAI_W1_VC   = "rr14"   # Vaibhav Suryavanshi (RR)
 
+# MOE W1 — verified from Moe_week_1_30_March.jpeg against Seed_Players.py:
+#   Bowlers:  Jasprit Bumrah (m03=MI), Bhuvneshwar Kumar (s04=SRH),
+#             Harshit Rana (k09=KKR)
+#   AR:       Romario Shepherd (m19=MI), Marco Jansen (s17=SRH)
+#   Batsmen:  Dewald Brevis (m09=MI), Shimron Hetmyer (rr04=RR),
+#             Abhishek Sharma (s02=SRH)
+#   WK:       Ryan Rickelton (m12=MI), Ishan Kishan (m05=MI) VC,
+#             Rishabh Pant (l01=LSG) C  ← Pant moved to LSG in 2026 auction
+_MOE_W1_TEAM = ["m03","s04","k09","m19","s17","m09","rr04","s02","m12","m05","l01"]
+_MOE_W1_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
+_MOE_W1_VC   = "m05"    # Ishan Kishan (MI)
+
+# W2 = same team as W1 (rollover Mar 30 14:00 IST, neither user changed their squad)
+# W3 = same team as W1 (rollover Apr 6 14:00 IST, neither user changed their squad)
 _HISTORY_SEED = [
-    ("Sai", 1, SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 1, MOE_W1_TEAM, "d01",  "s03"),
-    ("Sai", 2, SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 2, MOE_W1_TEAM, "d01",  "s03"),
-    ("Sai", 3, SAI_W1_TEAM, "rr03", "rr15"),
-    ("Moe", 3, MOE_W1_TEAM, "d01",  "s03"),
+    ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
+    ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
+    ("Sai", 2, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
+    ("Moe", 2, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
+    ("Sai", 3, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
+    ("Moe", 3, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
 ]
 
 
@@ -252,48 +292,114 @@ def _auto_seed_players_if_needed():
     try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
     except Exception as e: print(f"  [startup] Could not run: {e}\n")
 
+
 def _auto_seed_history_if_needed():
-    def _looks_like_ids(tj):
-        try: arr=_json.loads(tj or "[]")
-        except: return False
-        if not arr: return True
-        return all(_ID_RE.match(str(v)) for v in arr)
+    """
+    v11.7: Versioned history seed.
+
+    Uses _SEED_VERSION to detect stale data (old wrong IDs).  On mismatch:
+      1. Back up nw_team_json for every seeded user's current week (preserves
+         any 'Save Draft' the user already clicked — their week-4 draft is safe).
+      2. Delete and re-insert the seeded weeks (1-3) with correct player IDs.
+      3. Restore backed-up nw drafts onto the highest seeded week row.
+      4. Write the new _SEED_VERSION to meta so this only runs once per bump.
+
+    This fixes the original bug where _looks_like_ids() returned True for ghost
+    IDs (valid format like 'g01' but wrong player) so stale rows were never
+    corrected on restart.
+    """
     try:
-        con=_db_con(); seeded=[]; replaced=[]
-        for name,week_no,team,cap,vc in _HISTORY_SEED:
-            if week_no<1: continue
-            try:
-                existing=con.execute("SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",(name,week_no)).fetchone()
-                if existing:
-                    if _looks_like_ids(existing["tw_team_json"]): continue
-                    resolved_team,rlog=resolve_id_list(con,team)
-                    unres=[e for e in rlog if e["action"]=="unresolved"]
-                    if unres: print(f"  [startup] Warn: unresolved in {name}/W{week_no}: {unres}")
-                    con.execute("DELETE FROM user_selections WHERE display_name=? AND week_no=?",(name,week_no))
-                    team=resolved_team
-                    if cap and not _ID_RE.match(str(cap)):
-                        m=resolve_player_id(con,cap)
-                        if m: cap=m["id"]
-                    if vc and not _ID_RE.match(str(vc)):
-                        m=resolve_player_id(con,vc)
-                        if m: vc=m["id"]
-                    replaced.append(f"{name}/W{week_no}")
-                con.execute("""
-                    INSERT INTO user_selections (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                    VALUES (?,?,?,?,?,?,?,?)
-                    ON CONFLICT(display_name,week_no) DO UPDATE SET tw_team_json=excluded.tw_team_json,tw_cap_id=excluded.tw_cap_id,tw_vc_id=excluded.tw_vc_id
-                """,(name,week_no,_json.dumps(team),cap,vc,_json.dumps(team),cap,vc))
-                seeded.append(f"{name}/W{week_no}")
-            except sqlite3.Error as e:
-                print(f"  [startup] Skip seed {name}/W{week_no}: {e}"); continue
-        if replaced: print(f"  [startup] Replaced stale seeds: {', '.join(replaced)}")
-        if seeded:
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",(datetime.now(timezone.utc).isoformat(),))
-            con.commit()
-            print(f"  [startup] History seeded: {', '.join(seeded)}")
-        else:
+        con = _db_con()
+
+        # ── Step 1: Version check ─────────────────────────────────────────
+        ver_row = con.execute("SELECT value FROM meta WHERE key='_seed_version'").fetchone()
+        stored_ver = ver_row["value"] if ver_row else None
+
+        if stored_ver == _SEED_VERSION:
             print("  [startup] Season history up-to-date.")
+            con.close()
+            return
+
+        print(f"  [startup] Seed version ({stored_ver!r} → {_SEED_VERSION!r}) — re-seeding W1/W2/W3...")
+
+        seeded_names = list(set(name for name, _, _, _, _ in _HISTORY_SEED))
+        max_seed_wk  = max(wk for _, wk, _, _, _ in _HISTORY_SEED)
+
+        # ── Step 2: Back up nw drafts & extra weeks ───────────────────────
+        nw_backups   = {}   # {username: (nw_team_json, nw_cap_id, nw_vc_id)}
+        extra_weeks  = {}   # {username: [rows beyond max_seed_wk]}
+
+        for uname in seeded_names:
+            row = con.execute(
+                "SELECT nw_team_json,nw_cap_id,nw_vc_id FROM user_selections "
+                "WHERE display_name=? AND week_no=?", (uname, max_seed_wk)
+            ).fetchone()
+            if row:
+                nw_t = row["nw_team_json"]
+                # Only keep the backup if it differs from the (stale) tw
+                # — i.e. the user actually saved a custom draft
+                tw_row = con.execute(
+                    "SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",
+                    (uname, max_seed_wk)
+                ).fetchone()
+                stale_tw = tw_row["tw_team_json"] if tw_row else "[]"
+                if nw_t and nw_t != "[]" and nw_t != stale_tw:
+                    nw_backups[uname] = (nw_t, row["nw_cap_id"], row["nw_vc_id"])
+
+            extras = con.execute(
+                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id "
+                "FROM user_selections WHERE display_name=? AND week_no>?",
+                (uname, max_seed_wk)
+            ).fetchall()
+            if extras:
+                extra_weeks[uname] = [dict(r) for r in extras]
+
+        # ── Step 3: Delete seeded weeks and re-insert ─────────────────────
+        for uname in seeded_names:
+            con.execute("DELETE FROM user_selections WHERE display_name=? AND week_no<=?",
+                        (uname, max_seed_wk))
+
+        seeded = []
+        for name, week_no, team, cap, vc in _HISTORY_SEED:
+            # For the last seeded week, restore the user's custom nw draft if any
+            if week_no == max_seed_wk and name in nw_backups:
+                nw_team, nw_cap, nw_vc = nw_backups[name]
+            else:
+                nw_team = _json.dumps(team)
+                nw_cap  = cap
+                nw_vc   = vc
+
+            con.execute("""
+                INSERT OR REPLACE INTO user_selections
+                (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (name, week_no, _json.dumps(team), cap, vc, nw_team, nw_cap, nw_vc))
+            seeded.append(f"{name}/W{week_no}")
+
+        # ── Step 4: Restore any extra weeks (week 4+ after rollover) ──────
+        for uname, rows in extra_weeks.items():
+            for r in rows:
+                con.execute("""
+                    INSERT OR IGNORE INTO user_selections
+                    (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (uname, r["week_no"], r["tw_team_json"], r["tw_cap_id"], r["tw_vc_id"],
+                      r["nw_team_json"], r["nw_cap_id"], r["nw_vc_id"]))
+
+        # ── Step 5: Write version and save ────────────────────────────────
+        con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_seed_version',?)", (_SEED_VERSION,))
+        con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
+                    (datetime.now(timezone.utc).isoformat(),))
+        con.commit()
         con.close()
+
+        print(f"  [startup] History re-seeded: {', '.join(seeded)}")
+        if nw_backups:
+            print(f"  [startup] Preserved nw drafts for: {', '.join(nw_backups)}")
+        if extra_weeks:
+            restored = [f"{u}/W{r['week_no']}" for u,rs in extra_weeks.items() for r in rs]
+            print(f"  [startup] Restored extra weeks: {', '.join(restored)}")
+
     except Exception as e:
         print(f"  [startup] Could not seed history: {e}")
 
@@ -327,33 +433,15 @@ def _ensure_points_calculated():
 
 
 def _audit_player_id_coverage():
-    """
-    v11.6 — Run after _ensure_points_calculated().
-
-    For every user×week selection, checks which player IDs from tw_team_json
-    have ZERO matching rows in player_match_points for that week. These are
-    'ghost' IDs — they exist in user_selections but never scored because the
-    ID doesn't match what Seed_Players.py + the scraper put in the DB.
-
-    Prints a WARNING for any ghost IDs, and shows the correct ID from the
-    players table (by fuzzy name match) so the admin can fix _HISTORY_SEED.
-    Also prints a per-user total so it's instantly obvious who is under-scoring.
-    """
+    """Check all tw_team_json IDs against player_match_points and print any ghosts."""
     try:
         with db._read() as con:
             con.row_factory = sqlite3.Row
-
-            # All player IDs that ever appear in player_match_points
             pmp_ids = {r[0] for r in con.execute("SELECT DISTINCT player_id FROM player_match_points").fetchall()}
-            # players table for name lookup
             all_players = {r["id"]: r["name"] for r in con.execute("SELECT id,name FROM players").fetchall()}
-
             sels = con.execute(
-                "SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id "
-                "FROM user_selections ORDER BY display_name, week_no"
+                "SELECT display_name, week_no, tw_team_json FROM user_selections ORDER BY display_name, week_no"
             ).fetchall()
-
-            # Per-user leaderboard total from DB
             totals = {r[0]: r[1] for r in con.execute(
                 "SELECT us.display_name, COALESCE(SUM(pmp.base_pts),0) AS pts "
                 "FROM user_selections us "
@@ -363,45 +451,26 @@ def _audit_player_id_coverage():
             ).fetchall()}
 
         print("  [startup] === Player ID Coverage Audit ===")
-        ghost_found = False
-        seen_ghosts = set()  # avoid duplicate warnings for same ID
-
+        ghost_found = False; seen_ghosts = set()
         for sel in sels:
-            name  = sel["display_name"]
-            wk    = sel["week_no"]
-            try:
-                ids = _json.loads(sel["tw_team_json"] or "[]")
-            except Exception:
-                continue
+            name = sel["display_name"]; wk = sel["week_no"]
+            try: ids = _json.loads(sel["tw_team_json"] or "[]")
+            except: continue
             for pid in ids:
                 if pid not in pmp_ids and pid not in seen_ghosts:
-                    seen_ghosts.add(pid)
-                    ghost_found = True
-                    # Try to identify the real player from the players table
-                    real_name = all_players.get(pid, "UNKNOWN — not in players table")
-                    # Also fuzzy-search by prefix to suggest correct ID
+                    seen_ghosts.add(pid); ghost_found = True
+                    real_name = all_players.get(pid, "NOT IN players table")
                     prefix = re.match(r'^[a-z]+', pid)
-                    suggestions = [
-                        f"{p_id}={p_nm}" for p_id, p_nm in all_players.items()
-                        if prefix and p_id.startswith(prefix.group()) and p_id != pid
-                    ][:4]
-                    sugg_str = ", ".join(suggestions) if suggestions else "none"
-                    print(f"  [startup] ⚠  GHOST ID '{pid}' ({name}/W{wk}): "
-                          f"players table says '{real_name}'. "
-                          f"Same-prefix alternatives: {sugg_str}")
-
+                    suggestions = [f"{p_id}={p_nm}" for p_id,p_nm in all_players.items()
+                                   if prefix and p_id.startswith(prefix.group()) and p_id != pid][:4]
+                    print(f"  [startup] ⚠  GHOST '{pid}' ({name}/W{wk}): "
+                          f"players={real_name}. Alternatives: {', '.join(suggestions) or 'none'}")
         if not ghost_found:
-            print("  [startup] ✓ All team player IDs exist in player_match_points — no ghost IDs.")
-        else:
-            print("  [startup] ⚠  Fix _HISTORY_SEED in server.py with the correct IDs above, "
-                  "then restart the server.")
-
-        # Per-user point totals
-        print("  [startup] === Per-user point totals ===")
+            print("  [startup] ✓ All IDs verified in player_match_points — no ghosts.")
+        print("  [startup] === Per-user totals ===")
         for uname, pts in sorted(totals.items()):
             print(f"  [startup]   {uname}: {pts} pts")
         print("  [startup] =========================================")
-
     except Exception as e:
         print(f"  [startup] ID coverage audit failed: {e}")
 
@@ -520,6 +589,12 @@ def api_history(n):
 
 @app.route("/api/save-next-week/<n>",methods=["POST"])
 def api_save_next_week(n):
+    """
+    Saves the user's 'Next Week' draft to nw_team_json for the current week.
+    Survives server restarts — the seed never overwrites nw_team_json.
+    On Monday 14:00 rollover, this nw becomes the tw for the new week.
+    The user can keep editing and re-saving until the deadline.
+    """
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -840,13 +915,8 @@ class TunnelResult:
 
 def _run_bg(cmd):
     return subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        encoding='utf-8',
-        errors='replace'
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, encoding='utf-8', errors='replace'
     )
 
 def try_cloudflare(port):
@@ -893,12 +963,9 @@ def try_pinggy(port):
     if not exe: return None
     print("  -> Trying Pinggy (ephemeral SSH tunnel)...")
     try:
-        proc=_run_bg([exe,
-            "-o","StrictHostKeyChecking=no",
-            "-o","BatchMode=yes",
-            "-o","PasswordAuthentication=no",
-            "-o","ServerAliveInterval=30",
-            "-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
+        proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","BatchMode=yes",
+                     "-o","PasswordAuthentication=no","-o","ServerAliveInterval=30",
+                     "-p","443","-R",f"0:localhost:{port}","a.pinggy.io"])
         url=None; dl=time.time()+20
         while time.time()<dl:
             line=proc.stdout.readline() or ""
@@ -916,12 +983,9 @@ def try_localhost_run(port):
     if not exe: return None
     print("  -> Trying localhost.run (ephemeral SSH tunnel)...")
     try:
-        proc=_run_bg([exe,
-            "-o","StrictHostKeyChecking=no",
-            "-o","BatchMode=yes",
-            "-o","PasswordAuthentication=no",
-            "-o","ServerAliveInterval=30",
-            "-R",f"80:localhost:{port}","nokey@localhost.run"])
+        proc=_run_bg([exe,"-o","StrictHostKeyChecking=no","-o","BatchMode=yes",
+                     "-o","PasswordAuthentication=no","-o","ServerAliveInterval=30",
+                     "-R",f"80:localhost:{port}","nokey@localhost.run"])
         url=None; dl=time.time()+20
         while time.time()<dl:
             line=proc.stdout.readline() or ""
@@ -1008,9 +1072,9 @@ if __name__=="__main__":
 
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
-    _auto_seed_history_if_needed()
-    _ensure_points_calculated()   # recalc if pmp table is empty
-    _audit_player_id_coverage()   # v11.6: warn about ghost IDs causing zero scores
+    _auto_seed_history_if_needed()   # v11.7: versioned re-seed with draft preservation
+    _ensure_points_calculated()
+    _audit_player_id_coverage()
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")
