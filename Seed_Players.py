@@ -28,7 +28,7 @@ PLAYERS = [
     ("c02", "Shivam Dube",           "CSK",  10.0, "AR"),
     ("c03", "MS Dhoni",              "CSK",   4.0, "WK"),   # Retained (Uncapped)
     ("c04", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
-    ("c05", "Anshul Kamboj",         "CSK",   3.4, "BOWL"), # Key 2026 Retention
+    ("c05", "Anshul Kamboj",         "CSK",   5.0, "BOWL"), # Key 2026 Retention
     ("c06", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
     ("c07", "Prashant Veer",         "CSK",  7.0, "AR"),   # Record Uncapped Buy
     ("c08", "Kartik Sharma",         "CSK",  7.0, "WK"),   # Record Uncapped Buy
