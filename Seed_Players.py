@@ -127,7 +127,7 @@ PLAYERS = [
     ("l08", "Anrich Nortje",         "LSG",   7.0, "BOWL"), # Auction Buy
     ("l09", "Wanindu Hasaranga",     "LSG",   7.0, "AR"),   # Auction Buy
     ("l10", "Josh Inglis",           "LSG",   6.0, "WK"),   # Auction Buy
-    ("I11", "Aiden Markram",         "LSG",   5.0, "BAT"), # Retention
+    ("l11", "Aiden Markram",         "LSG",   5.0, "BAT"), # Retention
     ("l12", "Shahbaz Ahmed",         "LSG",   4.0, "AR"),
     ("l13", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
     ("l14", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
