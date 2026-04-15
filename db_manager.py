@@ -1,6 +1,10 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.2
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.3
 ===========================================================================
+v5.3: Add rebuild_scores_and_points() — called on every server restart.
+      Wipes match_scores and player_match_points clean, re-ingests all
+      scores from data/matches/*.json, then recalculates points.
+      Guarantees both tables are always in sync with current JSON data.
 v5.2: Fix _LEADERBOARD_SQL — use ALL user_selections weeks joined to
       player_match_points.week_no.  Prevents rollover from retroactively
       re-scoring old matches with the new team:
@@ -451,6 +455,46 @@ class DatabaseManager:
                        base_pts, float(base_pts), now_iso))
                 rows_written += 1
         return rows_written
+
+    def rebuild_scores_and_points(self, json_dir=None) -> dict:
+        """
+        v5.3 — Called on every server restart.
+        1. DELETE all rows from match_scores and player_match_points.
+        2. Re-ingest every data/matches/*.json file into match_scores.
+        3. Recalculate player_match_points from the fresh match_scores.
+        Returns {"files_ingested": int, "pmp_rows": int}.
+        """
+        if json_dir is None:
+            json_dir = Path(self._path).parent / "matches"
+        json_dir = Path(json_dir)
+
+        # Step 1: Wipe both tables atomically
+        with self._write() as con:
+            con.execute("DELETE FROM player_match_points")
+            con.execute("DELETE FROM match_scores")
+
+        # Step 2: Re-ingest scores from every JSON file
+        files_ingested = 0
+        if json_dir.exists():
+            files = sorted(
+                json_dir.glob("*.json"),
+                key=lambda f: int(m.group(1)) if (m := re.search(r"(\d+)", f.stem)) else 0
+            )
+            with self._write() as con:
+                for fp in files:
+                    try:
+                        with open(fp) as fh:
+                            match_data = json.load(fh)
+                        if "id" not in match_data:
+                            continue
+                        _upsert_match(con, match_data)
+                        files_ingested += 1
+                    except Exception as e:
+                        print(f"  [rebuild] skip {fp.name}: {e}")
+
+        # Step 3: Recalculate player_match_points from fresh match_scores
+        pmp_rows = self.recalculate_points()
+        return {"files_ingested": files_ingested, "pmp_rows": pmp_rows}
 
     def hydrate_from_json(self, json_dir="data/matches") -> int:
         json_dir = Path(json_dir)
