@@ -27,24 +27,24 @@ PLAYERS = [
     ("c01", "Ruturaj Gaikwad",       "CSK",  10.0, "BAT"),
     ("c02", "Devon Conway",          "CSK",  10.0, "BAT"),
     ("c03", "Shivam Dube",           "CSK",  10.5, "AR"),
-    ("c05", "MS Dhoni",              "CSK",   4.0, "WK"),
-    ("c06", "Matheesha Pathirana",   "CSK",  11.0, "BOWL"),
-    ("c08", "Maheesh Theekshana",    "CSK",   8.0, "BOWL"),
-    ("c09", "Deepak Chahar",         "CSK",   9.0, "BOWL"),
-    ("c12", "Rachin Ravindra",       "CSK",  11.0, "AR"),
-    ("c13", "Daryl Mitchell",        "CSK",   9.0, "AR"),
-    ("c14", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
-    ("c15", "Shaik Rasheed",         "CSK",   4.0, "BAT"),
-    ("c16", "Aravind Swaminathan",   "CSK",   3.0, "WK"),
-    ("c17", "Nishant Sindhu",        "CSK",   3.0, "AR"),
-    ("c18", "Sameer Rizvi",          "CSK",   5.0, "BAT"),
-    ("c19", "Mustafizur Rahman",     "CSK",   8.0, "BOWL"),
-    ("c20", "Anuj Rawat",            "CSK",   3.5, "WK"),
-    ("c21", "Vijay Shankar",         "CSK",   4.0, "AR"),
-    ("c22", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
-    ("c23", "Prashant Veer",         "CSK",  6.0, "BOWL"),  # record uncapped buy
-    ("c24", "Kartik Sharma",         "CSK",  6.0, "AR"),
-    ("c25", "Sanju Samson",          "CSK",  14.0, "WK"),   # traded from RR
+    ("c04", "MS Dhoni",              "CSK",   4.0, "WK"),
+    ("c05", "Matheesha Pathirana",   "CSK",  11.0, "BOWL"),
+    ("c06", "Maheesh Theekshana",    "CSK",   8.0, "BOWL"),
+    ("c07", "Deepak Chahar",         "CSK",   9.0, "BOWL"),
+    ("c08", "Rachin Ravindra",       "CSK",  11.0, "AR"),
+    ("c09", "Daryl Mitchell",        "CSK",   9.0, "AR"),
+    ("c10", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
+    ("c11", "Shaik Rasheed",         "CSK",   4.0, "BAT"),
+    ("c12", "Aravind Swaminathan",   "CSK",   3.0, "WK"),
+    ("c13", "Nishant Sindhu",        "CSK",   3.0, "AR"),
+    ("c14", "Sameer Rizvi",          "CSK",   5.0, "BAT"),
+    ("c15", "Mustafizur Rahman",     "CSK",   8.0, "BOWL"),
+    ("c16", "Anuj Rawat",            "CSK",   3.5, "WK"),
+    ("c17", "Vijay Shankar",         "CSK",   4.0, "AR"),
+    ("c18", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
+    ("c19", "Prashant Veer",         "CSK",  6.0, "BOWL"),  # record uncapped buy
+    ("c20", "Kartik Sharma",         "CSK",  6.0, "AR"),
+    ("c21", "Sanju Samson",          "CSK",  14.0, "WK"),   # traded from RR
 
     # ══ DC ══
     ("d01", "KL Rahul",              "DC",   14.0, "WK"),
@@ -135,64 +135,64 @@ PLAYERS = [
     ("l28", "Mukul Choudhary",       "LSG",   3.0, "WK"),   # Auction Buy
     ("l29", "Abdul Samad",           "LSG",   3.0, "BAT"),
 
- # ══ MI — Mumbai Indians ══
-    ("m03", "Jasprit Bumrah",        "MI",   15.0, "BOWL"), # Lead Retainer
+# ══ MI — Mumbai Indians ══
     ("m01", "Rohit Sharma",          "MI",   14.0, "BAT"),  # Retained
     ("m02", "Suryakumar Yadav",      "MI",   14.0, "BAT"),  # Retained
+    ("m03", "Jasprit Bumrah",        "MI",   15.0, "BOWL"), # Lead Retainer
     ("m04", "Hardik Pandya",         "MI",   14.0, "AR"),   # Captain
-    ("m23", "Quinton de Kock",       "MI",   11.0, "WK"),   # Back with MI 2026
-    ("m10", "Trent Boult",           "MI",   10.0, "BOWL"), # Back with MI 2026
     ("m07", "Tilak Varma",           "MI",   10.0, "BAT"),  # Retained
-    ("m21", "Will Jacks",            "MI",    8.0, "AR"),   # Retention
-    ("m08", "Naman Dhir",            "MI",    5.0, "BAT"),  # Retention
-    ("m19", "Deepak Chahar",         "MI",    6.0, "BOWL"), # Retention
-    ("m24", "Mitchell Santner",      "MI",    4.0, "AR"),   # Retention
-    ("m25", "Shardul Thakur",        "MI",    4.0, "AR"),   # Traded from LSG
-    ("m26", "Sherfane Rutherford",   "MI",    4.0, "BAT"),  # Traded from GT
-    ("m27", "Mayank Markande",       "MI",    4.0, "BOWL"), # Traded from KKR
-    ("m12", "Ryan Rickelton",        "MI",    9.0, "WK"),   # Retained
-    ("m28", "Robin Minz",            "MI",    3.0, "WK"),   # Retention
-    ("m29", "Allah Ghazanfar",       "MI",    3.0, "BOWL"), # Retention
-    ("m30", "Danish Malewar",        "MI",    0.5, "BAT"), 
+    ("m08", "Naman Dhir",            "MI",    5.0, "AR"),   # Updated Role: All-Rounder
+    ("m10", "Trent Boult",           "MI",   10.0, "BOWL"), # Retained (Back since 2025)
+    ("m11", "Ryan Rickelton",        "MI",    9.0, "WK"),   # Retained
+    ("m12", "Deepak Chahar",         "MI",    6.0, "BOWL"), # Retained
+    ("m13", "Will Jacks",            "MI",    8.0, "AR"),   # Retained
+    ("m14", "Quinton de Kock",       "MI",   11.0, "WK"),   # Back with MI 2026 (Auction)
+    ("m15", "Mitchell Santner",      "MI",    4.0, "AR"),   # Retained
+    ("m16", "Shardul Thakur",        "MI",    4.0, "AR"),   # Traded from LSG
+    ("m17", "Sherfane Rutherford",   "MI",    4.0, "BAT"),  # Traded from GT
+    ("m18", "Mayank Markande",       "MI",    4.0, "BOWL"), # Traded from KKR
+    ("m19", "Robin Minz",            "MI",    3.0, "WK"),   # Retained
+    ("m20", "Allah Ghazanfar",       "MI",    3.0, "BOWL"), # Retained
+    ("m21", "Danish Malewar",        "MI",    0.5, "BAT"),  # Signed at 2026 Auction
 
-     # ══ PBKS — Punjab Kings ══
+# ══ PBKS — Punjab Kings ══
     ("p01", "Shreyas Iyer",          "PBKS",  12.0, "BAT"),  # Captain
-    ("p06", "Arshdeep Singh",        "PBKS",  10.0, "BOWL"), # Lead Retainer
-    ("p21", "Marco Jansen",          "PBKS",   9.0, "AR"),   # Star All-rounder
-    ("p18", "Harshal Patel",         "PBKS",   7.0, "BOWL"),
-    ("p16", "Shashank Singh",        "PBKS",   5.5, "BAT"),  # 2026 Retention
-    ("p09", "Prabhsimran Singh",     "PBKS",   4.0, "WK"),
-    ("p10", "Harpreet Brar",         "PBKS",   4.0, "AR"),
-    ("p22", "Marcus Stoinis",        "PBKS",  11.0, "AR"),   # Huge 2026 Buy
-    ("p23", "Lockie Ferguson",       "PBKS",   2.0, "BOWL"), # Pacer
-    ("p24", "Yuzvendra Chahal",      "PBKS",  10.0, "BOWL"), # Star Spinner
-    ("p25", "Azmatullah Omarzai",    "PBKS",   4.0, "AR"),
-    ("p26", "Nehal Wadhera",         "PBKS",   4.2, "BAT"),
-    ("p27", "Priyansh Arya",         "PBKS",   3.8, "BAT"),  # Breakout Star
-    ("p28", "Cooper Connolly",       "PBKS",   5.0, "AR"),   # Auction Buy
-    ("p29", "Ben Dwarshuis",         "PBKS",   4.4, "BOWL"), # Auction Buy
-    ("p30", "Xavier Bartlett",       "PBKS",   3.0, "BOWL"),
-    ("p31", "Musheer Khan",          "PBKS",   1.0, "AR"),   # Young Talent
+    ("p02", "Arshdeep Singh",        "PBKS",  10.0, "BOWL"), # Lead Retainer
+    ("p03", "Prabhsimran Singh",     "PBKS",   4.0, "WK"),   # Retained
+    ("p04", "Harpreet Brar",         "PBKS",   4.0, "AR"),   # Retained
+    ("p05", "Shashank Singh",        "PBKS",   5.5, "BAT"),  # Retained
+    ("p06", "Vyshak Vijaykumar",     "PBKS",   2.0, "BOWL"), # Replaces Harshal Patel
+    ("p07", "Marco Jansen",          "PBKS",   9.0, "AR"),   # Retained
+    ("p08", "Marcus Stoinis",        "PBKS",  11.0, "AR"),   # Retained
+    ("p09", "Lockie Ferguson",       "PBKS",   7.0, "BOWL"), # Retained
+    ("p10", "Yuzvendra Chahal",      "PBKS",  10.0, "BOWL"), # Retained
+    ("p11", "Azmatullah Omarzai",    "PBKS",   4.0, "AR"),   # Retained
+    ("p12", "Nehal Wadhera",         "PBKS",   6.0, "AR"),   # Updated Role: All-rounder
+    ("p13", "Priyansh Arya",         "PBKS",   3.8, "BAT"),  # Retained
+    ("p14", "Cooper Connolly",       "PBKS",   8.0, "AR"),   # 2026 Auction Buy
+    ("p15", "Ben Dwarshuis",         "PBKS",   4.4, "BOWL"), # 2026 Auction Buy
+    ("p16", "Xavier Bartlett",       "PBKS",   3.0, "BOWL"), # Retained
+    ("p17", "Musheer Khan",          "PBKS",   1.0, "AR"),   # Retained
 
 
     # ══ RCB — Royal Challengers Bengaluru ══
     ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),
-    ("r05", "Rajat Patidar",         "RCB",  11.0, "BAT"),  # Captain
-    ("r21", "Phil Salt",             "RCB",  11.5, "WK"),   # 2026 Lead Opener
-    ("r22", "Tim David",             "RCB",   8.0, "BAT"),
-    ("r07", "Bhuvneshwar Kumar",     "RCB",   8.0, "BOWL"), # New Lead Indian Pacer
-    ("r15", "Josh Hazlewood",        "RCB",   7.0, "BOWL"),
-    ("r23", "Jacob Duffy",           "RCB",   5.0, "BOWL"), # NZ Star / Debut Hero
+    ("r02", "Rajat Patidar",         "RCB",  11.0, "BAT"),  # Captain
+    ("r03", "Phil Salt",             "RCB",  11.5, "WK"),   # 2026 Lead Opener
+    ("r04", "Tim David",             "RCB",   8.0, "BAT"),
+    ("r05", "Bhuvneshwar Kumar",     "RCB",   8.0, "BOWL"), # New Lead Indian Pacer
+    ("r06", "Josh Hazlewood",        "RCB",   7.0, "BOWL"),
+    ("r07", "Jacob Duffy",           "RCB",   5.0, "BOWL"), # NZ Star / Debut Hero
     ("r09", "Yash Dayal",            "RCB",   6.0, "BOWL"),
-    ("r26", "Venkatesh Iyer",        "RCB",   7.0, "AR"),   # Major 2026 Signing
-    ("r27", "Jitesh Sharma",         "RCB",   5.0, "WK"),   # New Signing
-    ("r28", "Krunal Pandya",         "RCB",   5.75, "AR"),  # 2025 Final Hero
-    ("r18", "Akash Deep",            "RCB",   5.0, "BOWL"),
-    ("r24", "Abhinandan Singh",      "RCB",   3.0, "BOWL"), # Retained Uncapped
-    ("r29", "Mangesh Yadav",         "RCB",   5.2, "AR"),   # Big Uncapped Buy
-    ("r10", "Karn Sharma",           "RCB",   3.5, "BOWL"),
-    ("r14", "Swapnil Singh",         "RCB",   3.0, "AR"),
-    ("r30", "Jordan Cox",            "RCB",   3.0, "WK"),
+    ("r10", "Venkatesh Iyer",        "RCB",   7.0, "AR"),   # Major 2026 Signing
+    ("r11", "Jitesh Sharma",         "RCB",   5.0, "WK"),   # New Signing
+    ("r12", "Krunal Pandya",         "RCB",   5.75, "AR"),  # 2025 Final Hero
+    ("r13", "Akash Deep",            "RCB",   5.0, "BOWL"),
+    ("r14", "Abhinandan Singh",      "RCB",   3.0, "BOWL"), # Retained Uncapped
+    ("r15", "Mangesh Yadav",         "RCB",   5.2, "AR"),   # Big Uncapped Buy
+    ("r16", "Karn Sharma",           "RCB",   3.5, "BOWL"),
+    ("r17", "Swapnil Singh",         "RCB",   3.0, "AR"),
+    ("r18", "Jordan Cox",            "RCB",   3.0, "WK"),
 
 
     # ══ RR ══
@@ -219,27 +219,27 @@ PLAYERS = [
 
    # ══ SRH — Sunrisers Hyderabad ══
     ("s01", "Heinrich Klaasen",      "SRH",  14.0, "WK"),   # Retained
-    ("s03", "Pat Cummins",           "SRH",  14.0, "BOWL"), # Captain
-    ("s05", "Travis Head",           "SRH",  12.0, "BAT"),  # Retained
-    ("s22", "Ishan Kishan",          "SRH",  11.5, "WK"),   # New Core
-    ("s02", "Abhishek Sharma",       "SRH",  10.0, "AR"),   # Retained
-    ("s23", "Liam Livingstone",      "SRH",  10.0, "AR"),   # Star Auction Buy
-    ("s21", "Harshal Patel",         "SRH",   8.0, "BOWL"), # Retention
-    ("s20", "Nitish Kumar Reddy",    "SRH",   7.0, "AR"),   # Retention
-    ("s24", "Shivam Mavi",           "SRH",   4.0, "BOWL"), # Auction Buy
-    ("s09", "T Natarajan",           "SRH",   5.0, "BOWL"),
-    ("s14", "Jaydev Unadkat",        "SRH",   4.0, "BOWL"),
-    ("s10", "Umran Malik",           "SRH",   5.0, "BOWL"),
-    ("s11", "Abdul Samad",           "SRH",   3.0, "BAT"),
-    ("s12", "Glenn Phillips",        "SRH",   2.0, "WK"),
-    ("s29", "Kamindu Mendis",        "SRH",   3.0, "AR"),
-    ("s26", "Dilshan Madushanka",    "SRH",   3.0, "BOWL"), # Injury Replacement
-    ("s27", "David Payne",           "SRH",   3.0, "BOWL"), # IPL Debut Hero
-    ("s28", "Harsh Dubey",           "SRH",   3.0, "AR"),   # Breakout Spinner
+    ("s02", "Pat Cummins",           "SRH",  14.0, "BOWL"), # Captain
+    ("s03", "Travis Head",           "SRH",  12.0, "BAT"),  # Retained
+    ("s04", "Ishan Kishan",          "SRH",  11.5, "WK"),   # New Core
+    ("s05", "Abhishek Sharma",       "SRH",  10.0, "AR"),   # Retained
+    ("s06", "Liam Livingstone",      "SRH",  10.0, "AR"),   # Star Auction Buy
+    ("s07", "Harshal Patel",         "SRH",   8.0, "BOWL"), # Retention
+    ("s08", "Nitish Kumar Reddy",    "SRH",   7.0, "AR"),   # Retention
+    ("s09", "Shivam Mavi",           "SRH",   4.0, "BOWL"), # Auction Buy
+    ("s10", "T Natarajan",           "SRH",   5.0, "BOWL"),
+    ("s11", "Jaydev Unadkat",        "SRH",   4.0, "BOWL"),
+    ("s12", "Umran Malik",           "SRH",   5.0, "BOWL"),
+    ("s13", "Abdul Samad",           "SRH",   3.0, "BAT"),
+    ("s14", "Glenn Phillips",        "SRH",   2.0, "WK"),
+    ("s15", "Kamindu Mendis",        "SRH",   3.0, "AR"),
+    ("s16", "Dilshan Madushanka",    "SRH",   3.0, "BOWL"), # Injury Replacement
+    ("s17", "David Payne",           "SRH",   3.0, "BOWL"), # IPL Debut Hero
+    ("s18", "Harsh Dubey",           "SRH",   3.0, "AR"),   # Breakout Spinner
     # IPL 2026 debutants confirmed from Match 1 (SRH vs RCB, 28 Mar 2026)
-    ("s23", "David Payne",           "SRH",   5.0, "BOWL"), # ENG pace, IPL debut
-    ("s24", "Harsh Dubey",           "SRH",   3.0, "BOWL"), # domestic
-    ("s25", "Eshan Malinga",         "SRH",   3.0, "BOWL"), # in Cricbuzz scorecard
+    ("19", "David Payne",           "SRH",   5.0, "BOWL"), # ENG pace, IPL debut
+    ("s20", "Harsh Dubey",           "SRH",   3.0, "BOWL"), # domestic
+    ("s21", "Eshan Malinga",         "SRH",   3.0, "BOWL"), # in Cricbuzz scorecard
 ]
 
 
