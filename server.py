@@ -1,19 +1,17 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.0
+IPL Fantasy 2026 — Flask Server                             Golden File v12.1
 ===========================================================================
-v12.0 (this release):
-  1. _rebuild_scores_and_points() replaces _ensure_points_calculated().
-     On EVERY restart: DELETE all match_scores rows, DELETE all
-     player_match_points rows, re-ingest from data/matches/*.json via
-     db_manager.rebuild_scores_and_points(), then recalculate pmp.
-     Both tables are always clean and fully up-to-date after boot.
-v11.8: _ensure_points_calculated() detects ANY played match_scores rows
-       missing from player_match_points and triggers full recalc.
-v11.7: Correct _HISTORY_SEED player IDs, versioned re-seed (_SEED_VERSION),
-       draft persistence for week 4.
+v12.1 (this release):
+  _rebuild_scores_and_points() now logs week_pts_rows — the number of
+  user_selections rows updated with accurate weekly points (cap×2, vc×1.5)
+  by db_manager.rebuild_scores_and_points() → update_week_points().
+v12.0: _rebuild_scores_and_points() — clear & rebuild match_scores + pmp
+       on every restart.
+v11.8: _ensure_points_calculated() gap detection.
+v11.7: Versioned history seed, draft preservation.
 v11.6: _audit_player_id_coverage startup diagnostic.
 v11.5: BatchMode=yes SSH tunnel fix.
-v11.4: UTF-8 encoding, cloudflared local lookup, route param fix, points check.
+v11.4: UTF-8 encoding, cloudflared local lookup, route param fix.
 """
 
 import collections
@@ -78,31 +76,24 @@ _SEMANTIC_MAP = {
 }
 
 # ── History seed ─────────────────────────────────────────────────────────────
-# Bump _SEED_VERSION whenever any team data below changes.
-# The startup function will detect the mismatch and force-replace tw_team rows
-# while preserving any nw_team_json draft the user has already saved.
 _SEED_VERSION = "2026.v7.correct-ids"
 
 _SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r11","m04","m07","m12"]
-_SAI_W1_CAP  = "k04"   
-_SAI_W1_VC   = "s05" 
-
+_SAI_W1_CAP  = "k04"
+_SAI_W1_VC   = "s05"
 
 _SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
-_SAI_W2_CAP  = "c09"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
-_SAI_W2_VC   = "rr11"   # Vaibhav Suryavanshi (RR)
-
+_SAI_W2_CAP  = "c09"
+_SAI_W2_VC   = "rr11"
 
 _MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
 _MOE_W1_CAP  = "r03"
-_MOE_W1_VC   = "s04"    
-
+_MOE_W1_VC   = "s04"
 
 _MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
-_MOE_W2_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
-_MOE_W2_VC   = "s04"    # Ishan Kishan (MI)
-# W2 = same team as W1 (rollover Mar 30 14:00 IST, neither user changed their squad)
-# W3 = same team as W1 (rollover Apr 6 14:00 IST, neither user changed their squad)
+_MOE_W2_CAP  = "l01"
+_MOE_W2_VC   = "s04"
+
 _HISTORY_SEED = [
     ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
     ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
@@ -282,39 +273,20 @@ def _auto_seed_players_if_needed():
 
 def _auto_seed_history_if_needed():
     """
-    v11.7: Versioned history seed.
-
-    Uses _SEED_VERSION to detect stale data (old wrong IDs).  On mismatch:
-      1. Back up nw_team_json for every seeded user's current week (preserves
-         any 'Save Draft' the user already clicked — their week-4 draft is safe).
-      2. Delete and re-insert the seeded weeks (1-3) with correct player IDs.
-      3. Restore backed-up nw drafts onto the highest seeded week row.
-      4. Write the new _SEED_VERSION to meta so this only runs once per bump.
-
-    This fixes the original bug where _looks_like_ids() returned True for ghost
-    IDs (valid format like 'g01' but wrong player) so stale rows were never
-    corrected on restart.
+    v11.7: Versioned history seed with draft preservation.
     """
     try:
         con = _db_con()
-
-        # ── Step 1: Version check ─────────────────────────────────────────
         ver_row = con.execute("SELECT value FROM meta WHERE key='_seed_version'").fetchone()
         stored_ver = ver_row["value"] if ver_row else None
-
         if stored_ver == _SEED_VERSION:
             print("  [startup] Season history up-to-date.")
-            con.close()
-            return
+            con.close(); return
 
         print(f"  [startup] Seed version ({stored_ver!r} → {_SEED_VERSION!r}) — re-seeding W1/W2/W3...")
-
         seeded_names = list(set(name for name, _, _, _, _ in _HISTORY_SEED))
         max_seed_wk  = max(wk for _, wk, _, _, _ in _HISTORY_SEED)
-
-        # ── Step 2: Back up nw drafts & extra weeks ───────────────────────
-        nw_backups   = {}   # {username: (nw_team_json, nw_cap_id, nw_vc_id)}
-        extra_weeks  = {}   # {username: [rows beyond max_seed_wk]}
+        nw_backups = {}; extra_weeks = {}
 
         for uname in seeded_names:
             row = con.execute(
@@ -323,8 +295,6 @@ def _auto_seed_history_if_needed():
             ).fetchone()
             if row:
                 nw_t = row["nw_team_json"]
-                # Only keep the backup if it differs from the (stale) tw
-                # — i.e. the user actually saved a custom draft
                 tw_row = con.execute(
                     "SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",
                     (uname, max_seed_wk)
@@ -332,30 +302,23 @@ def _auto_seed_history_if_needed():
                 stale_tw = tw_row["tw_team_json"] if tw_row else "[]"
                 if nw_t and nw_t != "[]" and nw_t != stale_tw:
                     nw_backups[uname] = (nw_t, row["nw_cap_id"], row["nw_vc_id"])
-
             extras = con.execute(
                 "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id "
                 "FROM user_selections WHERE display_name=? AND week_no>?",
                 (uname, max_seed_wk)
             ).fetchall()
-            if extras:
-                extra_weeks[uname] = [dict(r) for r in extras]
+            if extras: extra_weeks[uname] = [dict(r) for r in extras]
 
-        # ── Step 3: Delete seeded weeks and re-insert ─────────────────────
         for uname in seeded_names:
             con.execute("DELETE FROM user_selections WHERE display_name=? AND week_no<=?",
                         (uname, max_seed_wk))
 
         seeded = []
         for name, week_no, team, cap, vc in _HISTORY_SEED:
-            # For the last seeded week, restore the user's custom nw draft if any
             if week_no == max_seed_wk and name in nw_backups:
                 nw_team, nw_cap, nw_vc = nw_backups[name]
             else:
-                nw_team = _json.dumps(team)
-                nw_cap  = cap
-                nw_vc   = vc
-
+                nw_team = _json.dumps(team); nw_cap = cap; nw_vc = vc
             con.execute("""
                 INSERT OR REPLACE INTO user_selections
                 (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
@@ -363,7 +326,6 @@ def _auto_seed_history_if_needed():
             """, (name, week_no, _json.dumps(team), cap, vc, nw_team, nw_cap, nw_vc))
             seeded.append(f"{name}/W{week_no}")
 
-        # ── Step 4: Restore any extra weeks (week 4+ after rollover) ──────
         for uname, rows in extra_weeks.items():
             for r in rows:
                 con.execute("""
@@ -373,52 +335,44 @@ def _auto_seed_history_if_needed():
                 """, (uname, r["week_no"], r["tw_team_json"], r["tw_cap_id"], r["tw_vc_id"],
                       r["nw_team_json"], r["nw_cap_id"], r["nw_vc_id"]))
 
-        # ── Step 5: Write version and save ────────────────────────────────
         con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_seed_version',?)", (_SEED_VERSION,))
         con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
                     (datetime.now(timezone.utc).isoformat(),))
-        con.commit()
-        con.close()
-
+        con.commit(); con.close()
         print(f"  [startup] History re-seeded: {', '.join(seeded)}")
-        if nw_backups:
-            print(f"  [startup] Preserved nw drafts for: {', '.join(nw_backups)}")
+        if nw_backups: print(f"  [startup] Preserved nw drafts for: {', '.join(nw_backups)}")
         if extra_weeks:
             restored = [f"{u}/W{r['week_no']}" for u,rs in extra_weeks.items() for r in rs]
             print(f"  [startup] Restored extra weeks: {', '.join(restored)}")
-
     except Exception as e:
         print(f"  [startup] Could not seed history: {e}")
 
 
-# ════ STARTUP: REBUILD SCORES & POINTS
+# ════ STARTUP: REBUILD SCORES, POINTS & WEEK_PTS
 
 def _rebuild_scores_and_points():
     """
-    v12.0 — Runs on every server restart.
-    Clears match_scores and player_match_points completely, then calls
-    db_manager.rebuild_scores_and_points() to re-ingest all scores from
-    data/matches/*.json and recalculate player_match_points from scratch.
-    Both tables are always clean and fully up-to-date after boot.
+    v12.1 — Runs on every server restart.
+    1. Clears match_scores + player_match_points.
+    2. Re-ingests all data/matches/*.json → match_scores.
+    3. Recalculates player_match_points.
+    4. Recomputes user_selections.week_pts (cap×2, vc×1.5) per week.
     """
     try:
         print("  [startup] Clearing match_scores and player_match_points — rebuilding from JSON...")
         result = db.rebuild_scores_and_points(DATA_DIR / "matches")
         print(
             f"  [startup] Rebuild complete: {result['files_ingested']} match files ingested, "
-            f"{result['pmp_rows']} player-match-point rows calculated."
+            f"{result['pmp_rows']} pmp rows, "
+            f"{result['week_pts_rows']} user_selections.week_pts rows updated."
         )
-        # Per-week scored summary
         with db._read() as con:
             week_rows = con.execute(
-                "SELECT m.week_no, COUNT(DISTINCT pmp.player_id) AS players, "
-                "COUNT(DISTINCT pmp.match_id) AS matches "
-                "FROM player_match_points pmp "
-                "JOIN matches m ON m.id=pmp.match_id "
-                "GROUP BY m.week_no ORDER BY m.week_no"
+                "SELECT us.week_no, us.display_name, us.week_pts "
+                "FROM user_selections us ORDER BY us.week_no, us.display_name"
             ).fetchall()
         for wr in week_rows:
-            print(f"  [startup]   W{wr['week_no']}: {wr['players']} players across {wr['matches']} matches")
+            print(f"  [startup]   W{wr['week_no']} {wr['display_name']}: {wr['week_pts']} pts")
         if not week_rows:
             print("  [startup]   No scored matches found — run scraper or check data/matches/.")
     except Exception as e:
@@ -436,11 +390,8 @@ def _audit_player_id_coverage():
                 "SELECT display_name, week_no, tw_team_json FROM user_selections ORDER BY display_name, week_no"
             ).fetchall()
             totals = {r[0]: r[1] for r in con.execute(
-                "SELECT us.display_name, COALESCE(SUM(pmp.base_pts),0) AS pts "
-                "FROM user_selections us "
-                "JOIN json_each(us.tw_team_json) je ON 1=1 "
-                "LEFT JOIN player_match_points pmp ON pmp.player_id=je.value AND pmp.week_no=us.week_no "
-                "GROUP BY us.display_name"
+                "SELECT us.display_name, COALESCE(SUM(us.week_pts),0) AS pts "
+                "FROM user_selections us GROUP BY us.display_name"
             ).fetchall()}
 
         print("  [startup] === Player ID Coverage Audit ===")
@@ -460,7 +411,7 @@ def _audit_player_id_coverage():
                           f"players={real_name}. Alternatives: {', '.join(suggestions) or 'none'}")
         if not ghost_found:
             print("  [startup] ✓ All IDs verified in player_match_points — no ghosts.")
-        print("  [startup] === Per-user totals ===")
+        print("  [startup] === Per-user cumulative totals (from week_pts) ===")
         for uname, pts in sorted(totals.items()):
             print(f"  [startup]   {uname}: {pts} pts")
         print("  [startup] =========================================")
@@ -582,12 +533,6 @@ def api_history(n):
 
 @app.route("/api/save-next-week/<n>",methods=["POST"])
 def api_save_next_week(n):
-    """
-    Saves the user's 'Next Week' draft to nw_team_json for the current week.
-    Survives server restarts — the seed never overwrites nw_team_json.
-    On Monday 14:00 rollover, this nw becomes the tw for the new week.
-    The user can keep editing and re-saving until the deadline.
-    """
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -704,7 +649,7 @@ def api_player_points(n):
         with db._read() as con:
             con.row_factory=sqlite3.Row
             sel_rows=con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts
                 FROM user_selections WHERE display_name=? ORDER BY week_no
             """,(name,)).fetchall()
             if not sel_rows:
@@ -744,12 +689,11 @@ def api_player_points(n):
                         "multiplier":mult,
                         "final_pts":round(r["base_pts"]*mult),
                     })
-        players_out=[]; grand_total=0
+        players_out=[]; grand_total=sum(sel["week_pts"] for sel in sel_rows)
         for pid in team_ids:
             info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0})
             matches=by_player.get(pid,[])
             p_total=sum(m["final_pts"] for m in matches)
-            grand_total+=p_total
             players_out.append({
                 "id":pid,"name":info.get("name",pid),"team":info.get("team",""),
                 "role":info.get("role",""),"is_cap":pid==latest_cap,"is_vc":pid==latest_vc,
@@ -770,7 +714,7 @@ def api_debug_points(n):
         with db._read() as con:
             con.row_factory=sqlite3.Row
             sels=con.execute(
-                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id FROM user_selections WHERE display_name=? ORDER BY week_no",
+                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts FROM user_selections WHERE display_name=? ORDER BY week_no",
                 (n,)).fetchall()
             if not sels:
                 return jsonify({"ok":True,"name":n,"message":"No selections found","selections":[]})
@@ -790,19 +734,16 @@ def api_debug_points(n):
                         ids+[wn]).fetchall()
                 scored_pids={r["player_id"] for r in pmp_rows}
                 missing=[pid for pid in ids if pid not in scored_pids]
-                wk_pts=sum(
-                    (r["base_pts"]*2 if r["player_id"]==cap else r["base_pts"]*1.5 if r["player_id"]==vc else r["base_pts"])
-                    for r in pmp_rows
-                )
+                wk_pts=sel["week_pts"]  # use pre-computed value
                 total_pts+=wk_pts
                 out.append({
                     "week_no":wn,"cap":cap,"vc":vc,"team":ids,
-                    "week_pts":round(wk_pts),
+                    "week_pts":wk_pts,
                     "matches_in_week":[{"id":m["id"],"title":m["title"],"status":m["status"]} for m in matches],
                     "scored_entries":len(pmp_rows),
                     "players_with_no_points":missing,
                 })
-        return jsonify({"ok":True,"name":n,"total_pts":round(total_pts),"weeks":out})
+        return jsonify({"ok":True,"name":n,"total_pts":total_pts,"weeks":out})
     except Exception as e:
         _log(f"GET /api/debug-points/{n}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -861,8 +802,9 @@ def api_recalculate_points():
     if re_: return re_
     try:
         n=db.recalculate_points()
-        return jsonify({"ok":True,"rows_updated":n,
-                        "message":f"Recalculated points for {n} player-match rows."})
+        wp=db.update_week_points()
+        return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,
+                        "message":f"Recalculated points for {n} player-match rows, {wp} week_pts rows."})
     except Exception as e:
         _log(f"POST /api/recalculate-points: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -1066,7 +1008,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()       # v11.7: versioned re-seed with draft preservation
-    _rebuild_scores_and_points()         # v12.0: clear & rebuild match_scores + pmp on every restart
+    _rebuild_scores_and_points()         # v12.1: rebuild match_scores + pmp + week_pts on every restart
     _audit_player_id_coverage()
 
     if args.tunnel:

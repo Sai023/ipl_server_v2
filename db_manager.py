@@ -1,17 +1,16 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.3
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.4
 ===========================================================================
+v5.4: Add week_pts column to user_selections.
+      New update_week_points() computes per (display_name, week_no):
+        SUM(base_pts * multiplier) from player_match_points for that week's
+        tw_team_json, applying cap×2 and vc×1.5.
+      rebuild_scores_and_points() now calls update_week_points() after
+      recalculate_points() so user_selections.week_pts is always fresh.
+      Schema migration: ALTER TABLE adds column if absent (safe on existing DB).
 v5.3: Add rebuild_scores_and_points() — called on every server restart.
-      Wipes match_scores and player_match_points clean, re-ingests all
-      scores from data/matches/*.json, then recalculates points.
-      Guarantees both tables are always in sync with current JSON data.
-v5.2: Fix _LEADERBOARD_SQL — use ALL user_selections weeks joined to
-      player_match_points.week_no.  Prevents rollover from retroactively
-      re-scoring old matches with the new team:
-        week 1 team  →  only scores week 1 matches
-        week 2 team  →  only scores week 2 matches   (after first rollover)
-      Cumulative leaderboard = sum across all weeks automatically.
-v5.1: timeout 30s + busy_timeout 30000 (DB locked fix).
+v5.2: Fix _LEADERBOARD_SQL week-scoped scoring.
+v5.1: timeout 30s + busy_timeout 30000.
 """
 
 import json
@@ -60,6 +59,7 @@ CREATE TABLE IF NOT EXISTS user_selections (
     nw_team_json TEXT    NOT NULL DEFAULT '[]',
     nw_cap_id    TEXT,
     nw_vc_id     TEXT,
+    week_pts     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (display_name, week_no)
 );
 
@@ -112,7 +112,6 @@ CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, pla
 
 
 # v5.2: Each week's team only scores in matches whose week_no matches the selection week.
-# Week 1 team → week 1 matches.  Week 2 team → week 2 matches.  Total = sum across all.
 _LEADERBOARD_SQL = """
 WITH
 all_picks AS (
@@ -316,6 +315,12 @@ class DatabaseManager:
         con = sqlite3.connect(self._path, timeout=30)
         con.execute("PRAGMA busy_timeout = 30000")
         con.executescript(_SCHEMA)
+        # v5.4 migration: add week_pts if the DB predates this version
+        try:
+            con.execute("ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
         con.close()
 
     def get_meta(self, key, default=""):
@@ -456,19 +461,64 @@ class DatabaseManager:
                 rows_written += 1
         return rows_written
 
+    def update_week_points(self) -> int:
+        """
+        v5.4 — Recompute week_pts for every user_selections row.
+
+        For each (display_name, week_no):
+          week_pts = SUM over tw_team_json players of:
+            base_pts * 2   if player == tw_cap_id
+            base_pts * 1.5 if player == tw_vc_id
+            base_pts       otherwise
+        Only matches player_match_points rows whose week_no matches the
+        selection week, so each week's team only earns points for that week.
+        Returns the number of user_selections rows updated.
+        """
+        with self._read() as con:
+            rows = con.execute("""
+                SELECT
+                    us.display_name,
+                    us.week_no,
+                    COALESCE(CAST(SUM(
+                        CASE
+                            WHEN je.value = us.tw_cap_id THEN ROUND(pmp.base_pts * 2.0)
+                            WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
+                            ELSE pmp.base_pts
+                        END
+                    ) AS INTEGER), 0) AS week_pts
+                FROM user_selections us
+                JOIN json_each(us.tw_team_json) je
+                LEFT JOIN player_match_points pmp
+                    ON pmp.player_id = je.value
+                    AND pmp.week_no  = us.week_no
+                GROUP BY us.display_name, us.week_no
+            """).fetchall()
+        if not rows:
+            return 0
+        updated = 0
+        with self._write() as con:
+            for row in rows:
+                con.execute(
+                    "UPDATE user_selections SET week_pts=? WHERE display_name=? AND week_no=?",
+                    (row["week_pts"], row["display_name"], row["week_no"])
+                )
+                updated += 1
+        return updated
+
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
         """
-        v5.3 — Called on every server restart.
+        v5.3/v5.4 — Called on every server restart.
         1. DELETE all rows from match_scores and player_match_points.
         2. Re-ingest every data/matches/*.json file into match_scores.
         3. Recalculate player_match_points from the fresh match_scores.
-        Returns {"files_ingested": int, "pmp_rows": int}.
+        4. Recompute user_selections.week_pts for every row (cap/vc aware).
+        Returns {files_ingested, pmp_rows, week_pts_rows}.
         """
         if json_dir is None:
             json_dir = Path(self._path).parent / "matches"
         json_dir = Path(json_dir)
 
-        # Step 1: Wipe both tables atomically
+        # Step 1: Wipe both scoring tables
         with self._write() as con:
             con.execute("DELETE FROM player_match_points")
             con.execute("DELETE FROM match_scores")
@@ -492,9 +542,13 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"  [rebuild] skip {fp.name}: {e}")
 
-        # Step 3: Recalculate player_match_points from fresh match_scores
+        # Step 3: Recalculate player_match_points
         pmp_rows = self.recalculate_points()
-        return {"files_ingested": files_ingested, "pmp_rows": pmp_rows}
+
+        # Step 4: Push week_pts into user_selections (cap×2, vc×1.5)
+        week_pts_rows = self.update_week_points()
+
+        return {"files_ingested": files_ingested, "pmp_rows": pmp_rows, "week_pts_rows": week_pts_rows}
 
     def hydrate_from_json(self, json_dir="data/matches") -> int:
         json_dir = Path(json_dir)
@@ -561,13 +615,14 @@ class DatabaseManager:
         with self._read() as con:
             current_week = self.get_current_week()
             rows = con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,week_pts
                 FROM user_selections WHERE display_name=? ORDER BY week_no ASC
             """, (name,)).fetchall()
         weeks = [
             {"week_no": r["week_no"], "is_current": r["week_no"]==current_week,
              "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
-             "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]}}
+             "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
+             "week_pts": r["week_pts"]}
             for r in rows
         ]
         return {"name": name, "current_week": current_week, "weeks": weeks, "ok": True}
