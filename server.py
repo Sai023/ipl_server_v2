@@ -1,12 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.8
+IPL Fantasy 2026 — Flask Server                             Golden File v12.0
 ===========================================================================
-v11.8 (this release):
-  1. _ensure_points_calculated() now detects ANY played match_scores rows that
-     are missing from player_match_points (not just the pmp==0 case).  Triggers
-     a full recalculate_points() on startup so the leaderboard is always current
-     even after incremental scraper runs between restarts.
-  2. Per-week scored summary always printed after recalc (not only when pmp > 0).
+v12.0 (this release):
+  1. _rebuild_scores_and_points() replaces _ensure_points_calculated().
+     On EVERY restart: DELETE all match_scores rows, DELETE all
+     player_match_points rows, re-ingest from data/matches/*.json via
+     db_manager.rebuild_scores_and_points(), then recalculate pmp.
+     Both tables are always clean and fully up-to-date after boot.
+v11.8: _ensure_points_calculated() detects ANY played match_scores rows
+       missing from player_match_points and triggers full recalc.
 v11.7: Correct _HISTORY_SEED player IDs, versioned re-seed (_SEED_VERSION),
        draft persistence for week 4.
 v11.6: _audit_player_id_coverage startup diagnostic.
@@ -389,66 +391,38 @@ def _auto_seed_history_if_needed():
         print(f"  [startup] Could not seed history: {e}")
 
 
-# ════ POINTS SANITY CHECK
+# ════ STARTUP: REBUILD SCORES & POINTS
 
-def _ensure_points_calculated():
+def _rebuild_scores_and_points():
     """
-    v11.8: Detects ANY played match_scores row missing from player_match_points
-    (not just the pmp==0 case) and triggers a full recalculate on startup.
-    Guarantees the leaderboard is always up-to-date, even after incremental
-    scraper runs between restarts.
+    v12.0 — Runs on every server restart.
+    Clears match_scores and player_match_points completely, then calls
+    db_manager.rebuild_scores_and_points() to re-ingest all scores from
+    data/matches/*.json and recalculate player_match_points from scratch.
+    Both tables are always clean and fully up-to-date after boot.
     """
     try:
+        print("  [startup] Clearing match_scores and player_match_points — rebuilding from JSON...")
+        result = db.rebuild_scores_and_points(DATA_DIR / "matches")
+        print(
+            f"  [startup] Rebuild complete: {result['files_ingested']} match files ingested, "
+            f"{result['pmp_rows']} player-match-point rows calculated."
+        )
+        # Per-week scored summary
         with db._read() as con:
-            pmp = con.execute("SELECT COUNT(*) FROM player_match_points").fetchone()[0]
-            ms  = con.execute("SELECT COUNT(*) FROM match_scores WHERE played=1").fetchone()[0]
-            # Count played rows that have no corresponding pmp row
-            missing = con.execute("""
-                SELECT COUNT(*) FROM match_scores
-                WHERE played = 1
-                AND NOT EXISTS (
-                    SELECT 1 FROM player_match_points
-                    WHERE player_match_points.match_id  = match_scores.match_id
-                    AND   player_match_points.player_id = match_scores.player_id
-                )
-            """).fetchone()[0]
             week_rows = con.execute(
-                "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
-                "COUNT(DISTINCT pmp2.match_id) AS matches "
-                "FROM player_match_points pmp2 "
-                "JOIN matches m ON m.id=pmp2.match_id "
+                "SELECT m.week_no, COUNT(DISTINCT pmp.player_id) AS players, "
+                "COUNT(DISTINCT pmp.match_id) AS matches "
+                "FROM player_match_points pmp "
+                "JOIN matches m ON m.id=pmp.match_id "
                 "GROUP BY m.week_no ORDER BY m.week_no"
             ).fetchall()
-
-        if ms == 0:
-            print("  [startup] No completed match_scores — run scraper or seed matches with scores.")
-            return
-
-        if pmp == 0 or missing > 0:
-            reason = (
-                f"{ms} played rows but 0 pmp rows" if pmp == 0
-                else f"{missing} played match_score rows missing from player_match_points"
-            )
-            print(f"  [startup] {reason} — recalculating all points...")
-            n = db.recalculate_points()
-            print(f"  [startup] Calculated {n} player-match-point rows.")
-            # Re-fetch week summary after recalc
-            with db._read() as con:
-                week_rows = con.execute(
-                    "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
-                    "COUNT(DISTINCT pmp2.match_id) AS matches "
-                    "FROM player_match_points pmp2 "
-                    "JOIN matches m ON m.id=pmp2.match_id "
-                    "GROUP BY m.week_no ORDER BY m.week_no"
-                ).fetchall()
-        else:
-            print(f"  [startup] Points OK: {pmp} pmp rows from {ms} played scores.")
-
         for wr in week_rows:
-            print(f"  [startup]   W{wr['week_no']}: {wr['players']} players scored across {wr['matches']} matches")
-
+            print(f"  [startup]   W{wr['week_no']}: {wr['players']} players across {wr['matches']} matches")
+        if not week_rows:
+            print("  [startup]   No scored matches found — run scraper or check data/matches/.")
     except Exception as e:
-        print(f"  [startup] Points check failed: {e}")
+        print(f"  [startup] rebuild_scores_and_points failed: {e}")
 
 
 def _audit_player_id_coverage():
@@ -1091,8 +1065,8 @@ if __name__=="__main__":
 
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
-    _auto_seed_history_if_needed()   # v11.7: versioned re-seed with draft preservation
-    _ensure_points_calculated()      # v11.8: detects & fills any pmp gaps before first request
+    _auto_seed_history_if_needed()       # v11.7: versioned re-seed with draft preservation
+    _rebuild_scores_and_points()         # v12.0: clear & rebuild match_scores + pmp on every restart
     _audit_player_id_coverage()
 
     if args.tunnel:
