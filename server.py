@@ -93,14 +93,14 @@ _SEMANTIC_MAP = {
 # while preserving any nw_team_json draft the user has already saved.
 _SEED_VERSION = "2026.v7.correct-ids"
 
-_SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r13","m04","m07","m12"]
+_SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r11","m04","m07","m12"]
 _SAI_W1_CAP  = "k04"   
 _SAI_W1_VC   = "s05" 
 
 
-_SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr04","l11","c09","p03","s04"]
+_SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
 _SAI_W2_CAP  = "c09"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
-_SAI_W2_VC   = "rr14"   # Vaibhav Suryavanshi (RR)
+_SAI_W2_VC   = "rr11"   # Vaibhav Suryavanshi (RR)
 
 
 _MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
@@ -108,7 +108,7 @@ _MOE_W1_CAP  = "r03"
 _MOE_W1_VC   = "s04"    
 
 
-_MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s02","m11","s04","l01"]
+_MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
 _MOE_W2_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
 _MOE_W2_VC   = "s04"    # Ishan Kishan (MI)
 # W2 = same team as W1 (rollover Mar 30 14:00 IST, neither user changed their squad)
