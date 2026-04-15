@@ -204,21 +204,20 @@ PLAYERS = [
     ("rr03", "Adam Milne",           "RR",    5.0, "BOWL"),
     ("rr04", "Shimron Hetmyer",      "RR",    10.0, "BAT"),
     ("rr05", "Tushar Deshpande",     "RR",    7.0, "BOWL"),
-    ("rr06", "Yuzvendra Chahal",     "RR",    8.0, "BOWL")
-    ("rr08", "Dhruv Jurel",          "RR",    7.0, "WK"),
-    ("rr09", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
-    ("rr10", "Jofra Archer",         "RR",   10.0, "BOWL"),
-    ("rr11", "Ravi Bishnoi",         "RR",    9.0, "BOWL"),
-    ("rr12", "Avesh Khan",           "RR",    6.0, "BOWL"),
-    ("rr14", "Vaibhav Suryavanshi",  "RR",    9.0, "BAT"),
-    ("rr15", "Nandre Burger",        "RR",    6.0, "BOWL"),
-    ("rr16", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
-    ("rr17", "Sam Curran",           "RR",    2.0, "AR"),
-    ("rr18", "Donovan Ferreira",     "RR",    3.0, "AR"),
-    ("rr19", "Kunal Rathore",        "RR",    3.0, "BAT"),
-    ("rr20", "Abid Mushtaq",         "RR",    3.0, "BOWL"),
-    ("rr21", "Tanush Kotian",        "RR",    3.0, "AR"),
-    ("rr22", "Ravindra Jadeja",      "RR",   10.0, "AR"),  # traded from CSK
+    ("rr06", "Dhruv Jurel",          "RR",    7.0, "WK"),
+    ("rr07", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
+    ("rr08", "Jofra Archer",         "RR",   10.0, "BOWL"),
+    ("rr09", "Ravi Bishnoi",         "RR",    9.0, "BOWL"),
+    ("rr10", "Avesh Khan",           "RR",    6.0, "BOWL"),
+    ("rr11", "Vaibhav Suryavanshi",  "RR",    9.0, "BAT"),
+    ("rr12", "Nandre Burger",        "RR",    6.0, "BOWL"),
+    ("rr13", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
+    ("rr14", "Sam Curran",           "RR",    2.0, "AR"),
+    ("rr15", "Donovan Ferreira",     "RR",    3.0, "AR"),
+    ("rr16", "Kunal Rathore",        "RR",    3.0, "BAT"),
+    ("rr17", "Abid Mushtaq",         "RR",    3.0, "BOWL"),
+    ("rr18", "Tanush Kotian",        "RR",    3.0, "AR"),
+    ("rr19", "Ravindra Jadeja",      "RR",   10.0, "AR"),  # traded from CSK
 
    # ══ SRH — Sunrisers Hyderabad ══
     ("s01", "Heinrich Klaasen",      "SRH",  13.0, "WK"),   # Retained
