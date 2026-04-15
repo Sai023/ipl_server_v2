@@ -25,24 +25,24 @@ DB_PATH  = BASE_DIR / "data" / "fantasy.db"
 PLAYERS = [
 # ══ CSK — Chennai Super Kings (2026) ══
     ("c01", "Ruturaj Gaikwad",       "CSK",  10.0, "BAT"),  # Captain
-    ("c02", "Shivam Dube",           "CSK",  10.5, "AR"),
+    ("c02", "Shivam Dube",           "CSK",  10.0, "AR"),
     ("c03", "MS Dhoni",              "CSK",   4.0, "WK"),   # Retained (Uncapped)
     ("c04", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
     ("c05", "Anshul Kamboj",         "CSK",   3.4, "BOWL"), # Key 2026 Retention
     ("c06", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
-    ("c07", "Prashant Veer",         "CSK",  14.2, "AR"),   # Record Uncapped Buy
-    ("c08", "Kartik Sharma",         "CSK",  14.2, "WK"),   # Record Uncapped Buy
+    ("c07", "Prashant Veer",         "CSK",  7.0, "AR"),   # Record Uncapped Buy
+    ("c08", "Kartik Sharma",         "CSK",  7.0, "WK"),   # Record Uncapped Buy
     ("c09", "Sanju Samson",          "CSK",  14.0, "WK"),   # Traded from RR
     ("c10", "Ayush Mhatre",          "CSK",   0.3, "BAT"),  # Breakout Young Opener
-    ("c11", "Dewald Brevis",         "CSK",   2.2, "BAT"),  # Key Overseas Signing
+    ("c11", "Dewald Brevis",         "CSK",   8.0, "BAT"),  # Key Overseas Signing
     ("c12", "Noor Ahmad",            "CSK",  10.0, "BOWL"), # Lead Spinner
-    ("c13", "Jamie Overton",         "CSK",   1.5, "AR"),
-    ("c14", "Spencer Johnson",       "CSK",   1.5, "BOWL"), # Injury Replacement
-    ("c15", "Sarfaraz Khan",         "CSK",   0.8, "BAT"),
+    ("c13", "Jamie Overton",         "CSK",   1.0, "AR"),
+    ("c14", "Spencer Johnson",       "CSK",   1.0, "BOWL"), # Injury Replacement
+    ("c15", "Sarfaraz Khan",         "CSK",   7.0, "BAT"),
     ("c16", "Urvil Patel",           "CSK",   0.3, "WK"),
     ("c17", "Ramakrishna Ghosh",     "CSK",   0.3, "AR"),
-    ("c18", "Shreyas Gopal",         "CSK",   0.3, "BOWL"),
-    ("c19", "Matt Henry",            "CSK",   2.0, "BOWL"),
+    ("c18", "Shreyas Gopal",         "CSK",   7.0, "BOWL"),
+    ("c19", "Matt Henry",            "CSK",   9.0, "BOWL"),
     ("c20", "Akeal Hosein",          "CSK",   2.0, "BOWL"),
     ("c21", "Rahul Chahar",          "CSK",   5.2, "BOWL"),
 
