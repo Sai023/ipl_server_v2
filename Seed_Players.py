@@ -33,7 +33,7 @@ PLAYERS = [
     ("c07", "Prashant Veer",         "CSK",  7.0, "AR"),   # Record Uncapped Buy
     ("c08", "Kartik Sharma",         "CSK",  7.0, "WK"),   # Record Uncapped Buy
     ("c09", "Sanju Samson",          "CSK",  14.0, "WK"),   # Traded from RR
-    ("c10", "Ayush Mhatre",          "CSK",   0.3, "BAT"),  # Breakout Young Opener
+    ("c10", "Ayush Mhatre",          "CSK",   7.0, "BAT"),  # Breakout Young Opener
     ("c11", "Dewald Brevis",         "CSK",   8.0, "BAT"),  # Key Overseas Signing
     ("c12", "Noor Ahmad",            "CSK",  10.0, "BOWL"), # Lead Spinner
     ("c13", "Jamie Overton",         "CSK",   1.0, "AR"),
