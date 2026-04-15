@@ -93,38 +93,35 @@ _SEMANTIC_MAP = {
 # while preserving any nw_team_json draft the user has already saved.
 _SEED_VERSION = "2026.v7.correct-ids"
 
-# SAI W1 — verified from Sai_week_1_30_March.jpeg against Seed_Players.py:
-#   Bowlers:  Lungi Ngidi (d22=DC), Yuzvendra Chahal (rr06=RR), Noor Ahmad (g05=GT)
-#   AR:       Shivam Dube (c03=CSK), Rashid Khan (g03=GT)
-#   Batsmen:  Vaibhav Suryavanshi (rr14=RR) VC, Shimron Hetmyer (rr04=RR),
-#             Aiden Markram (s06=SRH)
-#   WK:       Sanju Samson (c25=CSK) C, Prabhsimran Singh (p09=PBKS),
-#             Ishan Kishan (m05=MI)
-_SAI_W1_TEAM = ["d22","p10","c12","c02","g03","rr14","rr04","l11","c09","p03","s04"]
-_SAI_W1_CAP  = "c09"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
-_SAI_W1_VC   = "rr14"   # Vaibhav Suryavanshi (RR)
+_SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r13","m04","m07","m12"]
+_SAI_W1_CAP  = "k04"   
+_SAI_W1_VC   = "s05" 
 
-# MOE W1 — verified from Moe_week_1_30_March.jpeg against Seed_Players.py:
-#   Bowlers:  Jasprit Bumrah (m03=MI), Bhuvneshwar Kumar (s04=SRH),
-#             Harshit Rana (k09=KKR)
-#   AR:       Romario Shepherd (m19=MI), Marco Jansen (s17=SRH)
-#   Batsmen:  Dewald Brevis (m09=MI), Shimron Hetmyer (rr04=RR),
-#             Abhishek Sharma (s02=SRH)
-#   WK:       Ryan Rickelton (m12=MI), Ishan Kishan (m05=MI) VC,
-#             Rishabh Pant (l01=LSG) C  ← Pant moved to LSG in 2026 auction
-_MOE_W1_TEAM = ["m03","s04","k09","m19","s17","m09","rr04","s02","m12","m05","l01"]
-_MOE_W1_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
-_MOE_W1_VC   = "m05"    # Ishan Kishan (MI)
 
+_SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr04","l11","c09","p03","s04"]
+_SAI_W2_CAP  = "c09"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
+_SAI_W2_VC   = "rr14"   # Vaibhav Suryavanshi (RR)
+
+
+_MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
+_MOE_W1_CAP  = "r03"
+_MOE_W1_VC   = "s04"    
+
+
+_MOE_W2_TEAM = ["m03","r05","k09","r16","s17","m09","rr04","s02","m11","s04","l01"]
+_MOE_W2_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
+_MOE_W2_VC   = "s04"    # Ishan Kishan (MI)
 # W2 = same team as W1 (rollover Mar 30 14:00 IST, neither user changed their squad)
 # W3 = same team as W1 (rollover Apr 6 14:00 IST, neither user changed their squad)
 _HISTORY_SEED = [
     ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
     ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
-    ("Sai", 2, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
-    ("Moe", 2, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
-    ("Sai", 3, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
-    ("Moe", 3, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
+    ("Sai", 2, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
+    ("Moe", 2, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
+    ("Sai", 3, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
+    ("Moe", 3, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
+    ("Sai", 4, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
+    ("Moe", 4, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
 ]
 
 
