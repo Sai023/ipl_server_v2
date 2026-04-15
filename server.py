@@ -108,7 +108,7 @@ _MOE_W1_CAP  = "r03"
 _MOE_W1_VC   = "s04"    
 
 
-_MOE_W2_TEAM = ["m03","r05","k09","r16","s17","m09","rr04","s02","m11","s04","l01"]
+_MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s02","m11","s04","l01"]
 _MOE_W2_CAP  = "l01"    # Rishabh Pant (LSG — bought for ₹27 CR in 2026 mega-auction)
 _MOE_W2_VC   = "s04"    # Ishan Kishan (MI)
 # W2 = same team as W1 (rollover Mar 30 14:00 IST, neither user changed their squad)
