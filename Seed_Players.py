@@ -23,28 +23,28 @@ DB_PATH  = BASE_DIR / "data" / "fantasy.db"
 
 # (id, name, team, price, role)
 PLAYERS = [
-    # ══ CSK ══
-    ("c01", "Ruturaj Gaikwad",       "CSK",  10.0, "BAT"),
-    ("c02", "Devon Conway",          "CSK",  10.0, "BAT"),
-    ("c03", "Shivam Dube",           "CSK",  10.5, "AR"),
-    ("c04", "MS Dhoni",              "CSK",   4.0, "WK"),
-    ("c05", "Matheesha Pathirana",   "CSK",  11.0, "BOWL"),
-    ("c06", "Maheesh Theekshana",    "CSK",   8.0, "BOWL"),
-    ("c07", "Deepak Chahar",         "CSK",   9.0, "BOWL"),
-    ("c08", "Rachin Ravindra",       "CSK",  11.0, "AR"),
-    ("c09", "Daryl Mitchell",        "CSK",   9.0, "AR"),
-    ("c10", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
-    ("c11", "Shaik Rasheed",         "CSK",   4.0, "BAT"),
-    ("c12", "Aravind Swaminathan",   "CSK",   3.0, "WK"),
-    ("c13", "Nishant Sindhu",        "CSK",   3.0, "AR"),
-    ("c14", "Sameer Rizvi",          "CSK",   5.0, "BAT"),
-    ("c15", "Mustafizur Rahman",     "CSK",   8.0, "BOWL"),
-    ("c16", "Anuj Rawat",            "CSK",   3.5, "WK"),
-    ("c17", "Vijay Shankar",         "CSK",   4.0, "AR"),
-    ("c18", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
-    ("c19", "Prashant Veer",         "CSK",  6.0, "BOWL"),  # record uncapped buy
-    ("c20", "Kartik Sharma",         "CSK",  6.0, "AR"),
-    ("c21", "Sanju Samson",          "CSK",  14.0, "WK"),   # traded from RR
+# ══ CSK — Chennai Super Kings (2026) ══
+    ("c01", "Ruturaj Gaikwad",       "CSK",  10.0, "BAT"),  # Captain
+    ("c02", "Shivam Dube",           "CSK",  10.5, "AR"),
+    ("c03", "MS Dhoni",              "CSK",   4.0, "WK"),   # Retained (Uncapped)
+    ("c04", "Mukesh Choudhary",      "CSK",   4.0, "BOWL"),
+    ("c05", "Anshul Kamboj",         "CSK",   3.4, "BOWL"), # Key 2026 Retention
+    ("c06", "Khaleel Ahmed",         "CSK",   5.0, "BOWL"),
+    ("c07", "Prashant Veer",         "CSK",  14.2, "AR"),   # Record Uncapped Buy
+    ("c08", "Kartik Sharma",         "CSK",  14.2, "WK"),   # Record Uncapped Buy
+    ("c09", "Sanju Samson",          "CSK",  14.0, "WK"),   # Traded from RR
+    ("c10", "Ayush Mhatre",          "CSK",   0.3, "BAT"),  # Breakout Young Opener
+    ("c11", "Dewald Brevis",         "CSK",   2.2, "BAT"),  # Key Overseas Signing
+    ("c12", "Noor Ahmad",            "CSK",  10.0, "BOWL"), # Lead Spinner
+    ("c13", "Jamie Overton",         "CSK",   1.5, "AR"),
+    ("c14", "Spencer Johnson",       "CSK",   1.5, "BOWL"), # Injury Replacement
+    ("c15", "Sarfaraz Khan",         "CSK",   0.8, "BAT"),
+    ("c16", "Urvil Patel",           "CSK",   0.3, "WK"),
+    ("c17", "Ramakrishna Ghosh",     "CSK",   0.3, "AR"),
+    ("c18", "Shreyas Gopal",         "CSK",   0.3, "BOWL"),
+    ("c19", "Matt Henry",            "CSK",   2.0, "BOWL"),
+    ("c20", "Akeal Hosein",          "CSK",   2.0, "BOWL"),
+    ("c21", "Rahul Chahar",          "CSK",   5.2, "BOWL"),
 
     # ══ DC ══
     ("d01", "KL Rahul",              "DC",   14.0, "WK"),
