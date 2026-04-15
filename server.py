@@ -100,8 +100,8 @@ _SEED_VERSION = "2026.v7.correct-ids"
 #             Aiden Markram (s06=SRH)
 #   WK:       Sanju Samson (c25=CSK) C, Prabhsimran Singh (p09=PBKS),
 #             Ishan Kishan (m05=MI)
-_SAI_W1_TEAM = ["d22","rr06","g05","c03","g03","rr14","rr04","s06","c25","p09","m05"]
-_SAI_W1_CAP  = "c25"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
+_SAI_W1_TEAM = ["d22","p10","c12","c02","g03","rr14","rr04","l11","c09","p03","s04"]
+_SAI_W1_CAP  = "c09"    # Sanju Samson (CSK — traded from RR in 2026 mega-auction)
 _SAI_W1_VC   = "rr14"   # Vaibhav Suryavanshi (RR)
 
 # MOE W1 — verified from Moe_week_1_30_March.jpeg against Seed_Players.py:
