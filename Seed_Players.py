@@ -66,7 +66,7 @@ PLAYERS = [
     ("d17", "Ricky Bhui",            "DC",    3.0, "BAT"),
     ("d18", "Sumit Kumar",           "DC",    3.0, "BOWL"),
     ("d19", "Vipraj Nigam",          "DC",    3.0, "AR"),
-    ("d20", "Harry Brook",           "DC",   12.0, "BAT"),,
+    ("d20", "Harry Brook",           "DC",   12.0, "BAT"),
     ("d22", "Lungi Ngidi",           "DC",    6.5, "BOWL"),
     ("d23", "Pathum Nissanka",       "DC",    6.0, "BAT"),  # IPL debut M5
 
