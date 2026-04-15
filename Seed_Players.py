@@ -111,7 +111,7 @@ PLAYERS = [
     ("k15", "Tim Seifert",           "KKR",   7.0, "WK"),
     ("k17", "Angkrish Raghuvanshi",  "KKR",   6.0, "WK"),
     ("k18", "Blessing Muzarabani",   "KKR",   5.0, "BOWL"),  # IPL debut M2
-    ("k19", "Ajinkya Rahane",        "KKR",   5.0, "BAT"),s
+    ("k19", "Ajinkya Rahane",        "KKR",   5.0, "BAT"),
     ("k20", "Finn Allen",            "KKR",   6.0, "WK"),   # IPL debut M2
     ("k21", "Allah Ghazanfar",       "KKR",   5.0, "BOWL"),  # IPL debut M2
     ("k22", "Lockie Ferguson",       "KKR",   9.0, "BOWL"),
