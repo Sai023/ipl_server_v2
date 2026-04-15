@@ -10,8 +10,8 @@ ID convention:  {team_prefix}{number:02d}
 Roles: BAT, BOWL, AR (all-rounder), WK (wicketkeeper)
 
 Usage:
-    python Seed_Players.py          # seed/update players
-    python Seed_Players.py --reset  # wipe + re-seed
+    python Seed_Players.py          # wipe players + reseed (default)
+    python Seed_Players.py --reset  # wipe players + match data + reseed
 """
 
 import argparse
@@ -100,7 +100,7 @@ PLAYERS = [
     ("k04", "Varun Chakravarthy",    "KKR",  10.0, "BOWL"),
     ("k05", "Rahul Tripathi",        "KKR",   8.0, "BAT"),
     ("k06", "Umran Malik",           "KKR",   7.0, "BOWL"),
-    ("k07", "Rachin Ravindra",       "PBKS", 9.0, "AR"),
+    ("k07", "Rachin Ravindra",       "PBKS",  9.0, "AR"),
     ("k08", "Rovman Powell",         "KKR",   7.0, "BAT"),
     ("k09", "Harshit Rana",          "KKR",   7.0, "BOWL"),
     ("k10", "Ramandeep Singh",       "KKR",   4.0, "AR"),
@@ -178,31 +178,31 @@ PLAYERS = [
 # ══ RCB — Royal Challengers Bengaluru (2026) ══
     ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),  # Star Retainer
     ("r02", "Rajat Patidar",         "RCB",  11.0, "BAT"), # Captain
-    ("r03", "Phil Salt",             "RCB",  11.0, "WK"),   
-    ("r04", "Jitesh Sharma",         "RCB",  10.0, "WK"),   
-    ("r05", "Bhuvneshwar Kumar",     "RCB",  10.0, "BOWL"), 
-    ("r06", "Josh Hazlewood",        "RCB",  12.0, "BOWL"), 
-    ("r07", "Venkatesh Iyer",        "RCB",   9.0, "AR"),   
-    ("r08", "Rasikh Salam",          "RCB",   7.0, "BOWL"), 
-    ("r09", "Krunal Pandya",         "RCB",   8.0, "AR"),   
-    ("r10", "Mangesh Yadav",         "RCB",   6.0, "AR"),   
-    ("r11", "Yash Dayal",            "RCB",   7.0, "BOWL"), 
-    ("r12", "Tim David",             "RCB",   8.0, "AR"),  
+    ("r03", "Phil Salt",             "RCB",  11.0, "WK"),
+    ("r04", "Jitesh Sharma",         "RCB",  10.0, "WK"),
+    ("r05", "Bhuvneshwar Kumar",     "RCB",  10.0, "BOWL"),
+    ("r06", "Josh Hazlewood",        "RCB",  12.0, "BOWL"),
+    ("r07", "Venkatesh Iyer",        "RCB",   9.0, "AR"),
+    ("r08", "Rasikh Salam",          "RCB",   7.0, "BOWL"),
+    ("r09", "Krunal Pandya",         "RCB",   8.0, "AR"),
+    ("r10", "Mangesh Yadav",         "RCB",   6.0, "AR"),
+    ("r11", "Yash Dayal",            "RCB",   7.0, "BOWL"),
+    ("r12", "Tim David",             "RCB",   8.0, "AR"),
     ("r13", "Jacob Duffy",           "RCB",   6.0, "BOWL"),
-    ("r14", "Devdutt Padikkal",      "RCB",   5.0, "BAT"),  
-    ("r15", "Jacob Bethell",         "RCB",   5.0, "AR"),   
-    ("r16", "Romario Shepherd",      "RCB",   6.0, "AR"),   
-    ("r17", "Nuwan Thushara",        "RCB",   6.0, "BOWL"), 
-    ("r18", "Suyash Sharma",         "RCB",   5.0, "BOWL"), 
-    ("r19", "Jordan Cox",            "RCB",   4.0, "WK"),   
-    ("r20", "Swapnil Singh",         "RCB",   3.0, "AR"),   
-    ("r21", "Abhinandan Singh",      "RCB",   3.0, "BOWL"), 
+    ("r14", "Devdutt Padikkal",      "RCB",   5.0, "BAT"),
+    ("r15", "Jacob Bethell",         "RCB",   5.0, "AR"),
+    ("r16", "Romario Shepherd",      "RCB",   6.0, "AR"),
+    ("r17", "Nuwan Thushara",        "RCB",   6.0, "BOWL"),
+    ("r18", "Suyash Sharma",         "RCB",   5.0, "BOWL"),
+    ("r19", "Jordan Cox",            "RCB",   4.0, "WK"),
+    ("r20", "Swapnil Singh",         "RCB",   3.0, "AR"),
+    ("r21", "Abhinandan Singh",      "RCB",   3.0, "BOWL"),
 
     # ══ RR ══
     ("rr01", "Riyan Parag",          "RR",    9.0, "AR"),   # captain 2026
     ("rr02", "Yashasvi Jaiswal",     "RR",   14.0, "BAT"),
     ("rr03", "Adam Milne",           "RR",    5.0, "BOWL"),
-    ("rr04", "Shimron Hetmyer",      "RR",    10.0, "BAT"),
+    ("rr04", "Shimron Hetmyer",      "RR",   10.0, "BAT"),
     ("rr05", "Tushar Deshpande",     "RR",    7.0, "BOWL"),
     ("rr06", "Dhruv Jurel",          "RR",    7.0, "WK"),
     ("rr07", "Sandeep Sharma",       "RR",    4.0, "BOWL"),
@@ -251,17 +251,20 @@ def seed(reset: bool = False):
     conn.execute("PRAGMA journal_mode = WAL")
 
     if reset:
-        print("  Clearing existing players...")
+        print("  Clearing match data (player_match_points, match_scores)...")
         conn.execute("DELETE FROM player_match_points")
         conn.execute("DELETE FROM match_scores")
-        conn.execute("DELETE FROM players")
-        conn.commit()
+
+    # Always wipe the players table before reseeding to remove stale/duplicate data
+    print("  Clearing players table...")
+    conn.execute("DELETE FROM players")
+    conn.commit()
 
     inserted = skipped = 0
     for pid, name, team, price, role in PLAYERS:
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO players (id, name, team, price, role) VALUES (?,?,?,?,?)",
+                "INSERT INTO players (id, name, team, price, role) VALUES (?,?,?,?,?)",
                 (pid, name, team, price, role)
             )
             inserted += 1
@@ -278,7 +281,8 @@ def seed(reset: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed IPL 2026 player roster")
-    parser.add_argument("--reset", action="store_true")
+    parser.add_argument("--reset", action="store_true",
+                        help="Also wipe match_scores and player_match_points")
     args = parser.parse_args()
     print("\n--- IPL 2026 Player Roster Seeder ---")
     seed(reset=args.reset)
