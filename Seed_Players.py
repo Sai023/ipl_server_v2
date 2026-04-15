@@ -119,21 +119,21 @@ PLAYERS = [
     # ══ LSG ══
     ("l01", "Rishabh Pant",          "LSG",  14.0, "WK"),   # Captain
     ("l02", "Nicholas Pooran",       "LSG",  11.0, "WK"),   # Vice-Captain
-    ("l11", "Mayank Yadav",          "LSG",   8.0, "BOWL"), # Retention
-    ("l21", "Mitchell Marsh",        "LSG",   9.0, "AR"),   # Retention
-    ("l06", "Ayush Badoni",          "LSG",   6.0, "BAT"),
-    ("l05", "Mohsin Khan",           "LSG",   5.0, "BOWL"),
-    ("l22", "Mohammed Shami",        "LSG",   8.0, "BOWL"), # Traded from SRH
-    ("l23", "Anrich Nortje",         "LSG",   7.0, "BOWL"), # Auction Buy
-    ("l24", "Wanindu Hasaranga",     "LSG",   7.0, "AR"),   # Auction Buy
-    ("l25", "Josh Inglis",           "LSG",   6.0, "WK"),   # Auction Buy
-    ("l26", "Aiden Markram",         "LSG",   5.0, "BAT"), # Retention
-    ("l20", "Shahbaz Ahmed",         "LSG",   4.0, "AR"),
-    ("l12", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
-    ("l17", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
-    ("l27", "Arjun Tendulkar",       "LSG",   3.0, "BOWL"), # Traded from MI
-    ("l28", "Mukul Choudhary",       "LSG",   3.0, "WK"),   # Auction Buy
-    ("l29", "Abdul Samad",           "LSG",   3.0, "BAT"),
+    ("l03", "Mayank Yadav",          "LSG",   8.0, "BOWL"), # Retention
+    ("l04", "Mitchell Marsh",        "LSG",   9.0, "AR"),   # Retention
+    ("l05", "Ayush Badoni",          "LSG",   6.0, "BAT"),
+    ("l06", "Mohsin Khan",           "LSG",   5.0, "BOWL"),
+    ("l07", "Mohammed Shami",        "LSG",   8.0, "BOWL"), # Traded from SRH
+    ("l08", "Anrich Nortje",         "LSG",   7.0, "BOWL"), # Auction Buy
+    ("l09", "Wanindu Hasaranga",     "LSG",   7.0, "AR"),   # Auction Buy
+    ("l10", "Josh Inglis",           "LSG",   6.0, "WK"),   # Auction Buy
+    ("l11", "Aiden Markram",         "LSG",   5.0, "BAT"), # Retention
+    ("l12", "Shahbaz Ahmed",         "LSG",   4.0, "AR"),
+    ("l13", "Arshin Kulkarni",       "LSG",   3.5, "BAT"),
+    ("l14", "Manimaran Siddharth",   "LSG",   3.0, "BOWL"),
+    ("l15", "Arjun Tendulkar",       "LSG",   3.0, "BOWL"), # Traded from MI
+    ("l16", "Mukul Choudhary",       "LSG",   3.0, "WK"),   # Auction Buy
+    ("l17", "Abdul Samad",           "LSG",   3.0, "BAT"),
 
 # ══ MI — Mumbai Indians ══
     ("m01", "Rohit Sharma",          "MI",   14.0, "BAT"),  # Retained
