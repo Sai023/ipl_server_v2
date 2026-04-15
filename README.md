@@ -76,6 +76,13 @@ You'll see:
 +=========================================================+
 ```
 
+**On every startup**, the server automatically:
+- Detects any completed match scores that have not yet been converted to fantasy points
+- Recalculates `player_match_points` for all missing rows before accepting any requests
+- Logs a per-week summary so you can confirm all weeks are scored correctly
+
+This means the leaderboard is always accurate the moment the server starts, even if `scraper.py` ran while the server was offline.
+
 ### Step 7 — Share with friends via public tunnel
 ```bash
 python server.py --tunnel
@@ -117,7 +124,22 @@ ipl_glue.js       ──▶  Frontend polling + auto-rollover
 3. **Scores**: `scraper.py` → Cricbuzz JSON → fuzzy-match names to player IDs → `match_scores`
 4. **Points**: `db_manager.calc_pts()` → `player_match_points` (base points per player per match)
 5. **Selections**: Users pick teams via UI → `user_selections` (this_week + next_week)
-6. **Leaderboard**: SQL joins selections × points with cap/VC multipliers
+6. **Leaderboard**: SQL joins selections × points with cap/VC multipliers — cumulative across all weeks
+
+## Database Schema
+
+| Table | Purpose |
+|-------|---------|
+| `players` | Player roster (id, name, team, role, price) |
+| `matches` | Match schedule and status (id, week_no, title, status, scorecard_url) |
+| `match_scores` | Raw per-player stats per match (runs, wickets, etc.) from scraper |
+| `player_match_points` | Calculated fantasy points per player per match (base_pts, week_no) |
+| `user_selections` | Weekly team picks (tw_team_json / nw_team_json, cap, vc) per user per week |
+| `meta` | Key/value store for timestamps, seed version, rollover tracking |
+
+**Points calculation flow:**  
+`match_scores` (raw stats) → `calc_pts()` → `player_match_points.base_pts`  
+Leaderboard applies cap (×2) / VC (×1.5) multipliers at query time from `_LEADERBOARD_SQL`.
 
 ## Weekly Rollover
 
@@ -193,12 +215,18 @@ Both use the same numeric ID. Seed_Matches.py discovers IDs from the first patte
 | GET | `/api/ping` | Health check + config |
 | GET | `/api/state` | Full app state |
 | GET | `/api/players` | Player roster |
-| GET | `/api/leaderboard` | Rankings |
+| GET | `/api/leaderboard` | Cumulative rankings (all weeks) |
+| GET | `/api/leaderboard?week=N` | Rankings for a specific week |
 | GET | `/api/current-week` | Current week number |
-| GET | `/api/history/<n>` | User's week history |
-| POST | `/api/save-next-week/<n>` | Save next week team |
-| POST | `/api/rollover` | Trigger rollover |
-| POST | `/api/resolve-player` | Test fuzzy matching |
+| GET | `/api/history/<n>` | User's week-by-week team history |
+| GET | `/api/player-points/<n>` | Per-player points breakdown for user |
+| GET | `/api/debug-points/<n>` | Full debug: teams, caps, weekly totals |
+| GET | `/api/matches-status` | All match IDs, weeks, and statuses |
+| POST | `/api/save-next-week/<n>` | Save next week team draft |
+| POST | `/api/rollover` | Trigger weekly rollover |
+| POST | `/api/recalculate-points` | Force full points recalculation |
+| POST | `/api/update-match-url` | Set/update a Cricbuzz scorecard URL |
+| POST | `/api/resolve-player` | Test fuzzy player name matching |
 
 ## Configuration
 
@@ -219,6 +247,7 @@ Both use the same numeric ID. Seed_Matches.py discovers IDs from the first patte
 | "no valid Cricbuzz ID" | Run `python Seed_Matches.py` to auto-discover IDs |
 | Seed_Matches shows "Found 0 matches" | Cricbuzz blocked the request — use `--no-live` flag, then add IDs manually |
 | Scraper returns no scorecard data | Test with `python Seed_Matches.py --verify 149618` |
-| Leaderboard shows 0 | Check player IDs match between selections and match_scores |
+| Leaderboard shows 0 | Check player IDs match between selections and match_scores; startup will log any ghosts |
+| Points not updating after scraper run | Restart server — startup auto-detects and recalculates any missing pmp rows |
 | Server won't start | Check `data/fantasy.db` exists and isn't locked |
 | Tunnel not starting | Install cloudflared: https://github.com/cloudflare/cloudflared/releases |

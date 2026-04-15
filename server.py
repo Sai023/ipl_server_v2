@@ -1,26 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v11.7
+IPL Fantasy 2026 — Flask Server                             Golden File v11.8
 ===========================================================================
-v11.7 (this release):
-  1. Correct _HISTORY_SEED player IDs from actual screenshots (Seed_Players.py):
-       SAI W1 (Sai_week_1_30_March):
-         Ngidi(d22) Chahal(rr06) NoorAhmad(g05) Dube(c03) Rashid(g03)
-         Suryavanshi(rr14-VC) Hetmyer(rr04) Markram(s06)
-         Samson(c25-C) Prabhsimran(p09) Kishan(m05)
-       MOE W1 (Moe_week_1_30_March):
-         Bumrah(m03) Bhuvneshwar(s04) H.Rana(k09) Shepherd(m19) Jansen(s17)
-         Brevis(m09) Hetmyer(rr04) A.Sharma(s02) Rickelton(m12)
-         Kishan(m05-VC) Pant(l01-C, LSG 2026)
-       W2 = W1 (no changes made), W3 = W1 (no changes made).
-  2. _SEED_VERSION versioned re-seed: whenever _HISTORY_SEED changes, bump
-     _SEED_VERSION and the startup function force-replaces stale tw_team rows
-     while preserving any user-saved nw_team_json draft for the current week.
-     Fixes the core bug: _looks_like_ids() returned True for ghost IDs (valid
-     format but wrong players) so old bad seeds were never replaced.
-  3. Draft persistence for week 4: save_next_week correctly stores to
-     nw_team_json and the seed never overwrites it, so "Save Draft" survives
-     server restarts. After Monday 14:00 rollover, nw becomes the new tw for
-     week 4 and the user can keep editing their next draft from where they left.
+v11.8 (this release):
+  1. _ensure_points_calculated() now detects ANY played match_scores rows that
+     are missing from player_match_points (not just the pmp==0 case).  Triggers
+     a full recalculate_points() on startup so the leaderboard is always current
+     even after incremental scraper runs between restarts.
+  2. Per-week scored summary always printed after recalc (not only when pmp > 0).
+v11.7: Correct _HISTORY_SEED player IDs, versioned re-seed (_SEED_VERSION),
+       draft persistence for week 4.
 v11.6: _audit_player_id_coverage startup diagnostic.
 v11.5: BatchMode=yes SSH tunnel fix.
 v11.4: UTF-8 encoding, cloudflared local lookup, route param fix, points check.
@@ -404,10 +392,26 @@ def _auto_seed_history_if_needed():
 # ════ POINTS SANITY CHECK
 
 def _ensure_points_calculated():
+    """
+    v11.8: Detects ANY played match_scores row missing from player_match_points
+    (not just the pmp==0 case) and triggers a full recalculate on startup.
+    Guarantees the leaderboard is always up-to-date, even after incremental
+    scraper runs between restarts.
+    """
     try:
         with db._read() as con:
             pmp = con.execute("SELECT COUNT(*) FROM player_match_points").fetchone()[0]
             ms  = con.execute("SELECT COUNT(*) FROM match_scores WHERE played=1").fetchone()[0]
+            # Count played rows that have no corresponding pmp row
+            missing = con.execute("""
+                SELECT COUNT(*) FROM match_scores
+                WHERE played = 1
+                AND NOT EXISTS (
+                    SELECT 1 FROM player_match_points
+                    WHERE player_match_points.match_id  = match_scores.match_id
+                    AND   player_match_points.player_id = match_scores.player_id
+                )
+            """).fetchone()[0]
             week_rows = con.execute(
                 "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
                 "COUNT(DISTINCT pmp2.match_id) AS matches "
@@ -415,16 +419,34 @@ def _ensure_points_calculated():
                 "JOIN matches m ON m.id=pmp2.match_id "
                 "GROUP BY m.week_no ORDER BY m.week_no"
             ).fetchall()
-        if ms > 0 and pmp == 0:
-            print(f"  [startup] {ms} match_score rows but 0 pmp rows — recalculating points...")
+
+        if ms == 0:
+            print("  [startup] No completed match_scores — run scraper or seed matches with scores.")
+            return
+
+        if pmp == 0 or missing > 0:
+            reason = (
+                f"{ms} played rows but 0 pmp rows" if pmp == 0
+                else f"{missing} played match_score rows missing from player_match_points"
+            )
+            print(f"  [startup] {reason} — recalculating all points...")
             n = db.recalculate_points()
             print(f"  [startup] Calculated {n} player-match-point rows.")
-        elif ms > 0:
-            print(f"  [startup] Points OK: {pmp} pmp rows from {ms} played scores.")
-            for wr in week_rows:
-                print(f"  [startup]   W{wr['week_no']}: {wr['players']} players scored across {wr['matches']} matches")
+            # Re-fetch week summary after recalc
+            with db._read() as con:
+                week_rows = con.execute(
+                    "SELECT m.week_no, COUNT(DISTINCT pmp2.player_id) AS players, "
+                    "COUNT(DISTINCT pmp2.match_id) AS matches "
+                    "FROM player_match_points pmp2 "
+                    "JOIN matches m ON m.id=pmp2.match_id "
+                    "GROUP BY m.week_no ORDER BY m.week_no"
+                ).fetchall()
         else:
-            print("  [startup] No match_scores found — run scraper or seed matches with scores.")
+            print(f"  [startup] Points OK: {pmp} pmp rows from {ms} played scores.")
+
+        for wr in week_rows:
+            print(f"  [startup]   W{wr['week_no']}: {wr['players']} players scored across {wr['matches']} matches")
+
     except Exception as e:
         print(f"  [startup] Points check failed: {e}")
 
@@ -1070,7 +1092,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()   # v11.7: versioned re-seed with draft preservation
-    _ensure_points_calculated()
+    _ensure_points_calculated()      # v11.8: detects & fills any pmp gaps before first request
     _audit_player_id_coverage()
 
     if args.tunnel:
