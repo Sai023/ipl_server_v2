@@ -97,7 +97,7 @@ PLAYERS = [
     # ══ KKR ══
     ("k01", "Sunil Narine",          "KKR",  12.0, "AR"),
     ("k03", "Rinku Singh",           "KKR",  10.0, "BAT"),
-    ("k04", "Varun Chakravarthy",    "KKR",  10.0, "BOWL"),m
+    ("k04", "Varun Chakravarthy",    "KKR",  10.0, "BOWL"),
     ("k05", "Rahul Tripathi",        "KKR",   8.0, "BAT"),
     ("k06", "Umran Malik",           "KKR",   7.0, "BOWL"),
     ("k07", "Rachin Ravindra",       "PBKS", 9.0, "AR"),
@@ -139,8 +139,8 @@ PLAYERS = [
     ("m01", "Rohit Sharma",          "MI",   14.0, "BAT"),  # Retained
     ("m02", "Suryakumar Yadav",      "MI",   14.0, "BAT"),  # Retained
     ("m03", "Jasprit Bumrah",        "MI",   15.0, "BOWL"), # Lead Retainer
-    ("m04", "Hardik Pandya",         "MI",   14.0, "AR"),m   # Captain
-    ("m07", "Tilak Varma",           "MI",   10.0, "BAT"),m  # Retained
+    ("m04", "Hardik Pandya",         "MI",   14.0, "AR"),   # Captain
+    ("m07", "Tilak Varma",           "MI",   10.0, "BAT"),  # Retained
     ("m08", "Naman Dhir",            "MI",    5.0, "AR"),   # Updated Role: All-Rounder
     ("m10", "Trent Boult",           "MI",   10.0, "BOWL"), # Retained (Back since 2025)
     ("m11", "Ryan Rickelton",        "MI",    9.0, "WK"),   # Retained
@@ -149,7 +149,7 @@ PLAYERS = [
     ("m14", "Quinton de Kock",       "MI",   11.0, "WK"),   # Back with MI 2026 (Auction)
     ("m15", "Mitchell Santner",      "MI",    4.0, "AR"),   # Retained
     ("m16", "Shardul Thakur",        "MI",    4.0, "AR"),   # Traded from LSG
-    ("m17", "Sherfane Rutherford",   "MI",    4.0, "BAT"),m  # Traded from GT
+    ("m17", "Sherfane Rutherford",   "MI",    4.0, "BAT"),  # Traded from GT
     ("m18", "Mayank Markande",       "MI",    4.0, "BOWL"), # Traded from KKR
     ("m19", "Robin Minz",            "MI",    3.0, "WK"),   # Retained
     ("m20", "Allah Ghazanfar",       "MI",    3.0, "BOWL"), # Retained
@@ -176,9 +176,9 @@ PLAYERS = [
 
 
 # ══ RCB — Royal Challengers Bengaluru (2026) ══
-    ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),s  # Star Retainer
-    ("r02", "Rajat Patidar",         "RCB",  11.0, "BAT"),m  # Captain
-    ("r03", "Phil Salt",             "RCB",  11.0, "WK"),sm   
+    ("r01", "Virat Kohli",           "RCB",  15.0, "BAT"),  # Star Retainer
+    ("r02", "Rajat Patidar",         "RCB",  11.0, "BAT"), # Captain
+    ("r03", "Phil Salt",             "RCB",  11.0, "WK"),   
     ("r04", "Jitesh Sharma",         "RCB",  10.0, "WK"),   
     ("r05", "Bhuvneshwar Kumar",     "RCB",  10.0, "BOWL"), 
     ("r06", "Josh Hazlewood",        "RCB",  12.0, "BOWL"), 
@@ -187,8 +187,8 @@ PLAYERS = [
     ("r09", "Krunal Pandya",         "RCB",   8.0, "AR"),   
     ("r10", "Mangesh Yadav",         "RCB",   6.0, "AR"),   
     ("r11", "Yash Dayal",            "RCB",   7.0, "BOWL"), 
-    ("r12", "Tim David",             "RCB",   8.0, "AR"),m   
-    ("r13", "Jacob Duffy",           "RCB",   6.0, "BOWL"),s 
+    ("r12", "Tim David",             "RCB",   8.0, "AR"),  
+    ("r13", "Jacob Duffy",           "RCB",   6.0, "BOWL"),
     ("r14", "Devdutt Padikkal",      "RCB",   5.0, "BAT"),  
     ("r15", "Jacob Bethell",         "RCB",   5.0, "AR"),   
     ("r16", "Romario Shepherd",      "RCB",   6.0, "AR"),   
@@ -197,8 +197,6 @@ PLAYERS = [
     ("r19", "Jordan Cox",            "RCB",   4.0, "WK"),   
     ("r20", "Swapnil Singh",         "RCB",   3.0, "AR"),   
     ("r21", "Abhinandan Singh",      "RCB",   3.0, "BOWL"), 
-
-
 
     # ══ RR ══
     ("rr01", "Riyan Parag",          "RR",    9.0, "AR"),   # captain 2026
