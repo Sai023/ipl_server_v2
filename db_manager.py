@@ -1,6 +1,11 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.4
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.5
 ===========================================================================
+v5.5: _LEADERBOARD_SQL now derives total_pts from SUM(week_pts) per user
+      (pre-computed, cap/vc-aware) rather than re-aggregating from
+      player_match_points on the fly. MVP player is still resolved via pmp.
+      get_leaderboard() now fetches a per-week breakdown and includes a
+      weekly[] list in each standings row for the UI to render columns.
 v5.4: Add week_pts column to user_selections.
       New update_week_points() computes per (display_name, week_no):
         SUM(base_pts * multiplier) from player_match_points for that week's
@@ -111,33 +116,35 @@ CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, pla
 """
 
 
-# v5.2: Each week's team only scores in matches whose week_no matches the selection week.
+# v5.5: total_pts sourced from pre-computed week_pts; MVP still via player_match_points.
 _LEADERBOARD_SQL = """
 WITH
-all_picks AS (
-    SELECT us.display_name, us.week_no AS selection_week,
-           je.value AS player_id, us.tw_cap_id AS cap_id, us.tw_vc_id AS vc_id
-    FROM  user_selections us, JSON_EACH(us.tw_team_json) AS je
+user_totals AS (
+    SELECT us.display_name,
+           COALESCE(SUM(us.week_pts), 0) AS total_pts,
+           SUM(CASE WHEN us.week_pts > 0 THEN 1 ELSE 0 END) AS matches_counted
+    FROM  user_selections us
     WHERE (CAST(:week_no AS INTEGER) IS NULL OR us.week_no = CAST(:week_no AS INTEGER))
+    GROUP BY us.display_name
 ),
 scored_points AS (
-    SELECT cp.display_name, pmp.match_id, cp.player_id, pmp.base_pts,
-           CASE WHEN cp.player_id = cp.cap_id THEN ROUND(pmp.base_pts * 2.0)
-                WHEN cp.player_id = cp.vc_id  THEN ROUND(pmp.base_pts * 1.5)
+    SELECT us.display_name, pmp.match_id, je.value AS player_id, pmp.base_pts,
+           CASE WHEN je.value = us.tw_cap_id THEN ROUND(pmp.base_pts * 2.0)
+                WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
                 ELSE pmp.base_pts END AS awarded_pts
-    FROM  all_picks cp
-    INNER JOIN player_match_points pmp ON pmp.player_id = cp.player_id
-        AND pmp.week_no = cp.selection_week
+    FROM  user_selections us, JSON_EACH(us.tw_team_json) AS je
+    INNER JOIN player_match_points pmp ON pmp.player_id = je.value
+        AND pmp.week_no = us.week_no
+    WHERE (CAST(:week_no AS INTEGER) IS NULL OR us.week_no = CAST(:week_no AS INTEGER))
 ),
-user_totals AS (
-    SELECT display_name, SUM(awarded_pts) AS total_pts,
-           COUNT(DISTINCT match_id) AS matches_counted, MAX(awarded_pts) AS mvp_awarded_pts
+mvp_data AS (
+    SELECT display_name, MAX(awarded_pts) AS mvp_awarded_pts
     FROM  scored_points GROUP BY display_name
 ),
 mvp_resolve AS (
     SELECT sp.display_name, MIN(sp.player_id) AS mvp_player_id, sp.awarded_pts AS mvp_pts
     FROM  scored_points sp
-    INNER JOIN user_totals ut ON ut.display_name=sp.display_name AND sp.awarded_pts=ut.mvp_awarded_pts
+    INNER JOIN mvp_data md ON md.display_name=sp.display_name AND sp.awarded_pts=md.mvp_awarded_pts
     GROUP BY sp.display_name, sp.awarded_pts
 ),
 ranked AS (
@@ -580,6 +587,21 @@ class DatabaseManager:
     def get_leaderboard(self, week_no=None) -> dict:
         with self._read() as con:
             rows = con.execute(_LEADERBOARD_SQL, {"week_no": week_no}).fetchall()
+            # v5.5: fetch per-week breakdown for each user
+            if week_no is None:
+                wk_rows = con.execute(
+                    "SELECT display_name, week_no, week_pts FROM user_selections ORDER BY week_no"
+                ).fetchall()
+            else:
+                wk_rows = con.execute(
+                    "SELECT display_name, week_no, week_pts FROM user_selections WHERE week_no=?",
+                    (week_no,)
+                ).fetchall()
+            weekly = {}
+            for wr in wk_rows:
+                weekly.setdefault(wr["display_name"], []).append(
+                    {"week_no": wr["week_no"], "pts": wr["week_pts"]}
+                )
         if not rows:
             empty = {"league_avg": 0.0, "top_score": 0, "member_count": 0}
             return {"week_no": week_no, "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -589,6 +611,7 @@ class DatabaseManager:
         standings = [
             {"rank": r["rank"], "name": r["display_name"], "total_pts": r["total_pts"],
              "matches_counted": r["matches_counted"],
+             "weekly": weekly.get(r["display_name"], []),
              "mvp": {"player_id": r["mvp_player_id"], "player_name": r["mvp_player_name"], "pts": r["mvp_pts"]}}
             for r in rows
         ]
