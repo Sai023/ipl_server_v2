@@ -1,17 +1,17 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.1
+IPL Fantasy 2026 — Flask Server                             Golden File v12.2
 ===========================================================================
-v12.1 (this release):
-  _rebuild_scores_and_points() now logs week_pts_rows — the number of
-  user_selections rows updated with accurate weekly points (cap×2, vc×1.5)
-  by db_manager.rebuild_scores_and_points() → update_week_points().
-v12.0: _rebuild_scores_and_points() — clear & rebuild match_scores + pmp
-       on every restart.
+v12.2 (this release):
+  Added /api/audit-scores/<n>  — full calculation trace per user per week.
+    Returns stored_week_pts vs computed_week_pts, raw match stats, and
+    per-player per-match breakdown so Audit_Scores.ps1 can validate data.
+  Added /api/clean-scores      — clears match_scores, player_match_points,
+    resets week_pts=0. Pass ?delete_json=1 to also wipe cached JSON files
+    so the scraper re-fetches everything fresh from Cricbuzz.
+v12.1: _rebuild_scores_and_points() now logs week_pts_rows.
+v12.0: Rebuild match_scores + pmp on every restart.
 v11.8: _ensure_points_calculated() gap detection.
 v11.7: Versioned history seed, draft preservation.
-v11.6: _audit_player_id_coverage startup diagnostic.
-v11.5: BatchMode=yes SSH tunnel fix.
-v11.4: UTF-8 encoding, cloudflared local lookup, route param fix.
 """
 
 import collections
@@ -734,7 +734,7 @@ def api_debug_points(n):
                         ids+[wn]).fetchall()
                 scored_pids={r["player_id"] for r in pmp_rows}
                 missing=[pid for pid in ids if pid not in scored_pids]
-                wk_pts=sel["week_pts"]  # use pre-computed value
+                wk_pts=sel["week_pts"]
                 total_pts+=wk_pts
                 out.append({
                     "week_no":wn,"cap":cap,"vc":vc,"team":ids,
@@ -807,6 +807,116 @@ def api_recalculate_points():
                         "message":f"Recalculated points for {n} player-match rows, {wp} week_pts rows."})
     except Exception as e:
         _log(f"POST /api/recalculate-points: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@app.route("/api/audit-scores/<n>",methods=["GET"])
+def api_audit_scores(n):
+    """
+    Full calculation trace per user per week — powers Audit_Scores.ps1.
+    Returns stored_week_pts vs recomputed value, raw match stats, and
+    a per-player per-match breakdown. Flags base_pts > 200 in one match
+    as a potential bad-scrape warning.
+    """
+    try:
+        if not n or len(n)>30:
+            return jsonify({"error":"invalid name","code":400}),400
+        from db_manager import calc_pts as _calc_pts
+        with db._read() as con:
+            con.row_factory=sqlite3.Row
+            sels=con.execute(
+                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts "
+                "FROM user_selections WHERE display_name=? ORDER BY week_no",(n,)
+            ).fetchall()
+            if not sels:
+                return jsonify({"ok":True,"name":n,"weeks":[],"total_stored":0,"total_computed":0})
+            weeks_out=[]
+            for sel in sels:
+                wn=sel["week_no"]; ids=_json.loads(sel["tw_team_json"] or "[]")
+                cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]; stored=sel["week_pts"]
+                week_matches=con.execute(
+                    "SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)
+                ).fetchall()
+                player_details=[]; computed_total=0
+                for pid in ids:
+                    mult=2.0 if pid==cap else(1.5 if pid==vc else 1.0)
+                    pr=con.execute("SELECT name,team,role FROM players WHERE id=?",(pid,)).fetchone()
+                    p_name=pr["name"] if pr else pid
+                    match_entries=[]
+                    for wm in week_matches:
+                        ms=con.execute(
+                            "SELECT runs,balls,fours,sixes,got_out,duck,overs,runs_conceded,"
+                            "wickets,maidens,lbw_bowled,catches,stumpings,run_out_direct,"
+                            "run_out_assist,played,raw_score_json "
+                            "FROM match_scores WHERE match_id=? AND player_id=?",(wm["id"],pid)
+                        ).fetchone()
+                        if ms:
+                            sc=_json.loads(ms["raw_score_json"] or "{}")
+                            bp=_calc_pts(sc); fp=round(bp*mult); computed_total+=fp
+                            match_entries.append({
+                                "match_id":wm["id"],"match_title":wm["title"],
+                                "suspicious":bp>200,
+                                "raw":{"runs":ms["runs"],"balls":ms["balls"],"fours":ms["fours"],
+                                       "sixes":ms["sixes"],"overs":ms["overs"],"wickets":ms["wickets"],
+                                       "runs_conceded":ms["runs_conceded"],"catches":ms["catches"],
+                                       "duck":ms["duck"],"maidens":ms["maidens"],
+                                       "lbw_bowled":ms["lbw_bowled"],"stumpings":ms["stumpings"]},
+                                "base_pts":bp,"multiplier":mult,"final_pts":fp,
+                            })
+                    player_details.append({
+                        "id":pid,"name":p_name,"is_cap":pid==cap,"is_vc":pid==vc,
+                        "multiplier":mult,"matches":match_entries,
+                        "player_total":sum(m["final_pts"] for m in match_entries),
+                    })
+                weeks_out.append({
+                    "week_no":wn,"cap":cap,"vc":vc,
+                    "stored_week_pts":stored,"computed_week_pts":computed_total,
+                    "pts_match":stored==computed_total,
+                    "matches_in_week":[{"id":m["id"],"title":m["title"],"status":m["status"]} for m in week_matches],
+                    "players":player_details,
+                })
+        return jsonify({
+            "ok":True,"name":n,"weeks":weeks_out,
+            "total_stored":sum(w["stored_week_pts"] for w in weeks_out),
+            "total_computed":sum(w["computed_week_pts"] for w in weeks_out),
+        })
+    except Exception as e:
+        _log(f"GET /api/audit-scores/{n}: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@app.route("/api/clean-scores",methods=["POST"])
+def api_clean_scores():
+    """
+    Clear match_scores, player_match_points, reset week_pts to 0.
+    Pass ?delete_json=1 to also wipe cached data/matches/*.json files
+    so the scraper re-fetches everything fresh from Cricbuzz.
+    """
+    re_=_check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        delete_json=request.args.get("delete_json","").strip().lower() in ("1","true","yes")
+        with db._write() as con:
+            con.execute("DELETE FROM player_match_points")
+            con.execute("DELETE FROM match_scores")
+            con.execute("UPDATE user_selections SET week_pts=0")
+        deleted_files=0
+        if delete_json:
+            matches_dir=DATA_DIR/"matches"
+            if matches_dir.exists():
+                for f in matches_dir.glob("*.json"):
+                    try: f.unlink(); deleted_files+=1
+                    except Exception as e2: _log(f"[clean] {f}: {e2}","warning")
+        _log(f"[clean-scores] Cleared match_scores+pmp+week_pts. JSON deleted: {deleted_files}")
+        return jsonify({
+            "ok":True,
+            "cleared":["match_scores","player_match_points","week_pts"],
+            "json_files_deleted":deleted_files,
+            "next_steps":["Run scraper.py to re-scrape match data",
+                          "Restart server or POST /api/recalculate-points to rebuild"]
+        })
+    except Exception as e:
+        _log(f"POST /api/clean-scores: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
