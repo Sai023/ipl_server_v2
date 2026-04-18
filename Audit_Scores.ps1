@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    #IPL Fantasy 2026—Score Audit & Validation Tool
+    IPL Fantasy 2026—Score Audit & Validation Tool
 
 .DESCRIPTION
     Calls /api/audit-scores/{user} to fetch a full calculation trace for Sai and Moe.
