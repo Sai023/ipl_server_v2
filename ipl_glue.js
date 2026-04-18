@@ -1,7 +1,14 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.1
  * =========================================================================
- * CHANGES vs v6:
+ * v7.1 (this release):
+ *   • _buildHistoryTab()    — overrides inline version; adds a teal pts chip
+ *     showing week_pts for the selected week.
+ *   • _buildLeaderboardCard() — overrides inline version; adds per-week
+ *     columns (W1, W2, … ) before the Total column so the leaderboard
+ *     shows a full weekly breakdown sourced from user_selections.week_pts.
+ *
+ * CHANGES vs v7:
  *   • IplConfig gains current_week (hydrated on init + after every rollover)
  *   • IplApi.rollover() dispatches "ipl:week-changed" with { week_no, max_weeks }
  *     after a successful roll, so any UI panel can update without page refresh.
@@ -14,8 +21,8 @@
  *   window.addEventListener("ipl:leaderboard-updated", e => renderLb(e.detail));
  *   window.addEventListener("ipl:players-updated",     e => setPlayers(e.detail));
  *   window.addEventListener("ipl:rollover-triggered",  e => onRollover(e.detail));
- *   window.addEventListener("ipl:week-changed",        e => onWeekChange(e.detail));  // NEW v7
- *   window.addEventListener("ipl:season-complete",     e => onSeasonEnd(e.detail));   // NEW v7
+ *   window.addEventListener("ipl:week-changed",        e => onWeekChange(e.detail));
+ *   window.addEventListener("ipl:season-complete",     e => onSeasonEnd(e.detail));
  *   window.addEventListener("ipl:error",               e => console.error(e.detail));
  *
  * ── Exported globals ───────────────────────────────────────────────────────
@@ -479,3 +486,100 @@
   window.normaliseLeaderboard = normaliseLeaderboard;
 
 }(window));
+
+
+// ── v7.1 UI OVERRIDES ────────────────────────────────────────────────────────
+// Loaded after the inline script so these replace the original functions.
+// Globals used (defined in index.html inline script):
+//   _historyData, _historyViewWk, _currentWeek, _username, esc, _buildXiGrid
+
+// Task 1: History tab — teal weekly-points chip above the XI grid
+_buildHistoryTab = function () {
+  if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
+    return (_username && !_historyData)
+      ? '<div class="card"><p class="empty">History loading\u2026</p></div>'
+      : '<div class="card"><div class="history-empty"><strong>No history yet</strong>Your weekly XIs will appear here once you\'ve set and locked a team.</div></div>';
+  }
+  var weeks   = _historyData.weeks;
+  var viewWk  = (_historyViewWk === null) ? _currentWeek : _historyViewWk;
+  var h = '<div class="history-bar"><label>\uD83D\uDCD6 Browse:</label>'
+        + '<select onchange="_selectHistoryWeek(parseInt(this.value))">';
+  weeks.forEach(function (w) {
+    var lbl = "Week " + w.week_no + (w.week_no === 0 ? " (Pre-season)" : w.is_current ? " (Current)" : " (Archive)");
+    h += '<option value="' + w.week_no + '"' + (w.week_no === viewWk ? " selected" : "") + ">" + esc(lbl) + "</option>";
+  });
+  h += "</select>";
+  var selRow = null;
+  for (var i = 0; i < weeks.length; i++) { if (weeks[i].week_no === viewWk) { selRow = weeks[i]; break; } }
+  if (selRow && !selRow.is_current) h += '<span class="ro-note">\uD83D\uDD12 Read-only archive</span>';
+  h += "</div>";
+  if (!selRow) return h + '<div class="card"><p class="empty">No data for selected week.</p></div>';
+  var tw = selRow.this_week;
+  h += '<div class="card' + (selRow.is_current ? "" : " card-locked") + '">'
+     + '<div class="week-label">Week ' + selRow.week_no
+     + (selRow.week_no === 0 ? " \u2014 Pre-season" : selRow.is_current ? "" : ' &nbsp;<span class="badge-lock">Archive</span>')
+     + '</div><h3 class="section-title">\u26A1 This Week\'s XI</h3>';
+  // v7.1: weekly points chip
+  h += '<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(0,212,170,.1);'
+     + 'border:1px solid rgba(0,212,170,.25);border-radius:8px;padding:6px 14px;margin-bottom:12px;">'
+     + '<span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
+     + 'Week ' + selRow.week_no + ' Points</span>'
+     + '<span style="font-size:20px;font-weight:900;color:var(--teal)">' + (selRow.week_pts || 0) + '</span>'
+     + '</div>';
+  if (tw && tw.team && tw.team.length > 0) {
+    h += _buildXiGrid(tw.team, tw.cap, tw.vc);
+    h += '<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 pts</span>'
+       + '<span><span class="badge badge-vc">VC</span> \xd71.5 pts</span></div>';
+  } else {
+    h += '<p class="empty">No XI recorded for this week.</p>';
+  }
+  return h + "</div>";
+};
+
+// Task 2: Leaderboard — per-week columns (W1, W2, …) then Total, then MVP
+_buildLeaderboardCard = function (lb) {
+  var h = '<div class="card">';
+  if (!lb || !lb.rankings || lb.rankings.length === 0) {
+    h += '<h3 class="section-title">\uD83C\uDFC6 Leaderboard</h3>'
+       + '<p class="empty">No scores yet \u2014 check back after the first match.</p></div>';
+    return h;
+  }
+  h += '<h3 class="section-title">\uD83C\uDFC6 Leaderboard' + (lb.week_no ? " \u2014 Week " + lb.week_no : "") + "</h3>";
+  h += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">'
+     + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
+     + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
+     + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members</p>';
+  // Gather distinct weeks across all users, sorted ascending
+  var allWeeks = [], weekSet = {};
+  lb.rankings.forEach(function (r) {
+    (r.weekly || []).forEach(function (w) {
+      if (!weekSet[w.week_no]) { weekSet[w.week_no] = true; allWeeks.push(w.week_no); }
+    });
+  });
+  allWeeks.sort(function (a, b) { return a - b; });
+  // Table header
+  h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
+  allWeeks.forEach(function (wk) {
+    h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>';
+  });
+  h += '<th style="text-align:right">Total</th><th>MVP</th></tr></thead><tbody>';
+  // Rows
+  lb.rankings.forEach(function (row) {
+    var isMe = row.name === _username;
+    var weekMap = {};
+    (row.weekly || []).forEach(function (w) { weekMap[w.week_no] = w.pts; });
+    h += '<tr' + (isMe ? ' class="me"' : "") + '>'
+       + '<td class="rank">' + row.rank + '</td>'
+       + '<td>' + esc(row.name) + (isMe ? ' <span style="color:var(--gold);font-size:11px">(you)</span>' : "") + '</td>';
+    allWeeks.forEach(function (wk) {
+      var pts = weekMap[wk];
+      h += '<td style="text-align:right;font-size:12px;color:' + (pts > 0 ? 'var(--teal)' : 'var(--dim)') + '">'
+         + (pts != null ? pts : '\u2014') + '</td>';
+    });
+    h += '<td class="pts">' + (row.total_pts || 0) + '</td>'
+       + '<td class="mvp">' + (row.mvp && row.mvp.player_name ? esc(row.mvp.player_name) + ' (' + row.mvp.pts + ')' : '\u2014') + '</td>'
+       + '</tr>';
+  });
+  h += '</tbody></table></div>';
+  return h;
+};
