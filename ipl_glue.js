@@ -1,19 +1,18 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7.1
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.2
  * =========================================================================
- * v7.1 (this release):
- *   • _buildHistoryTab()    — overrides inline version; adds a teal pts chip
- *     showing week_pts for the selected week.
- *   • _buildLeaderboardCard() — overrides inline version; adds per-week
- *     columns (W1, W2, … ) before the Total column so the leaderboard
- *     shows a full weekly breakdown sourced from user_selections.week_pts.
+ * v7.2 (this release):
+ *   • _buildPointsTab() — overrides inline version; fixes matchCount to count
+ *     unique matches across ALL players, not just d.players[0].matches.length.
+ *
+ * v7.1:
+ *   • _buildHistoryTab()    — teal pts chip showing week_pts for selected week.
+ *   • _buildLeaderboardCard() — per-week columns (W1, W2, …) before Total.
  *
  * CHANGES vs v7:
  *   • IplConfig gains current_week (hydrated on init + after every rollover)
  *   • IplApi.rollover() dispatches "ipl:week-changed" with { week_no, max_weeks }
- *     after a successful roll, so any UI panel can update without page refresh.
- *   • IplApi.rollover() dispatches "ipl:season-complete" when the season cap
- *     is reached (season_complete === true).
+ *   • IplApi.rollover() dispatches "ipl:season-complete"
  *   • _init() calls IplApi.getCurrentWeek() to prime IplConfig.current_week.
  *
  * Wire events:
@@ -336,18 +335,6 @@
       });
     },
 
-    /**
-     * POST /api/rollover[?force=1]
-     *
-     * On success (rolled === true):
-     *   1. Fetches /api/current-week and updates IplConfig.current_week.
-     *   2. Dispatches "ipl:week-changed"   { week_no, max_weeks }
-     *   3. Dispatches "ipl:rollover-triggered" { ...server response }
-     *   4. Busts ETag so next poll fetches fresh state + leaderboard.
-     *
-     * On season_complete === true:
-     *   Dispatches "ipl:season-complete" in addition to the above.
-     */
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
       return _fetchJson(url, { method: "POST" }).then(function (data) {
@@ -359,7 +346,6 @@
         }
 
         if (data.rolled) {
-          // Re-fetch current week from server and update IplConfig
           _fetchJson("/api/current-week").then(function (wk) {
             if (wk && wk.week_no != null) {
               IplConfig.current_week = wk.week_no;
@@ -369,7 +355,6 @@
             }
           }).catch(function () {});
 
-          // Bust ETag → next poll cycle will pull fresh state + leaderboard
           _lastStateEtag = null;
           window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
         }
@@ -434,10 +419,8 @@
   // ──────────────────────────────────────────────────────────────────────────
 
   function _init() {
-    // Hydrate IplConfig from server
     IplApi.ping().catch(function () {});
 
-    // Prime current_week synchronously for components that read IplConfig early
     IplApi.getCurrentWeek().then(function (wk) {
       if (wk && wk.week_no != null) {
         IplConfig.current_week = wk.week_no;
@@ -488,10 +471,8 @@
 }(window));
 
 
-// ── v7.1 UI OVERRIDES ────────────────────────────────────────────────────────
-// Loaded after the inline script so these replace the original functions.
-// Globals used (defined in index.html inline script):
-//   _historyData, _historyViewWk, _currentWeek, _username, esc, _buildXiGrid
+// ── v7.1 / v7.2 UI OVERRIDES ─────────────────────────────────────────────────
+// Loaded after the inline script — these replace the original functions.
 
 // Task 1: History tab — teal weekly-points chip above the XI grid
 _buildHistoryTab = function () {
@@ -519,7 +500,6 @@ _buildHistoryTab = function () {
      + '<div class="week-label">Week ' + selRow.week_no
      + (selRow.week_no === 0 ? " \u2014 Pre-season" : selRow.is_current ? "" : ' &nbsp;<span class="badge-lock">Archive</span>')
      + '</div><h3 class="section-title">\u26A1 This Week\'s XI</h3>';
-  // v7.1: weekly points chip
   h += '<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(0,212,170,.1);'
      + 'border:1px solid rgba(0,212,170,.25);border-radius:8px;padding:6px 14px;margin-bottom:12px;">'
      + '<span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
@@ -549,7 +529,6 @@ _buildLeaderboardCard = function (lb) {
      + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
      + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
      + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members</p>';
-  // Gather distinct weeks across all users, sorted ascending
   var allWeeks = [], weekSet = {};
   lb.rankings.forEach(function (r) {
     (r.weekly || []).forEach(function (w) {
@@ -557,13 +536,11 @@ _buildLeaderboardCard = function (lb) {
     });
   });
   allWeeks.sort(function (a, b) { return a - b; });
-  // Table header
   h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
   allWeeks.forEach(function (wk) {
     h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>';
   });
   h += '<th style="text-align:right">Total</th><th>MVP</th></tr></thead><tbody>';
-  // Rows
   lb.rankings.forEach(function (row) {
     var isMe = row.name === _username;
     var weekMap = {};
@@ -582,4 +559,74 @@ _buildLeaderboardCard = function (lb) {
   });
   h += '</tbody></table></div>';
   return h;
+};
+
+// Task 3: Fix matchCount — count unique match IDs across ALL players, not just first player
+_buildPointsTab = function () {
+  var h = '<div class="card">';
+  h += '<div class="user-header-bar" style="margin-bottom:14px">';
+  h += '<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
+  h += '</div>';
+
+  if (_ptsLoading) {
+    return h + '<div class="pts-loading">\u23F3 Loading points data\u2026</div></div>';
+  }
+  if (!_ptsData || !_ptsData.players || _ptsData.players.length === 0) {
+    return h + '<div class="pts-loading">No points data yet. Run the scraper after matches complete, then click Reload.</div></div>';
+  }
+
+  var d = _ptsData;
+  // v7.2 FIX: unique match IDs across all players, not just d.players[0].matches.length
+  var _ms = {};
+  d.players.forEach(function(p) {
+    (p.matches || []).forEach(function(m) { _ms[m.match_id] = true; });
+  });
+  var matchCount = Object.keys(_ms).length;
+
+  h += '<div class="pts-summary">';
+  h += '<div class="pts-stat"><div class="val">' + d.total_pts + '</div><div class="lbl">Total Pts</div></div>';
+  h += '<div class="pts-stat"><div class="val">' + d.players.length + '</div><div class="lbl">Players</div></div>';
+  h += '<div class="pts-stat"><div class="val">' + matchCount + '</div><div class="lbl">Matches</div></div>';
+  if (matchCount > 0) h += '<div class="pts-stat"><div class="val">' + Math.round(d.total_pts / matchCount) + '</div><div class="lbl">Avg/Match</div></div>';
+  h += '</div>';
+
+  h += '<table class="pts-table"><thead><tr><th>Player</th><th>Team</th><th>Role</th><th style="text-align:right">Pts</th><th></th></tr></thead><tbody>';
+  d.players.forEach(function(p, idx) {
+    var rowId  = "pts-row-" + idx;
+    var badge  = p.is_cap ? '<span class="badge badge-c" style="margin-left:4px">C</span>'
+               : p.is_vc  ? '<span class="badge badge-vc" style="margin-left:4px">VC</span>' : '';
+    var mult   = p.is_cap ? " (\xd72)" : p.is_vc ? " (\xd71.5)" : "";
+    var avC    = _avClass(p.team);
+    h += '<tr>';
+    h += '<td><div style="display:flex;align-items:center;gap:8px">'
+       + '<div class="prow-avatar ' + avC + '">' + esc(_initials(p.name || p.id)) + '</div>'
+       + '<div><div style="font-size:13px;font-weight:600">' + esc(p.name || p.id) + badge + '</div>'
+       + '<div style="font-size:10px;color:var(--muted)">' + esc(p.id) + '</div></div></div></td>';
+    h += '<td style="font-size:11px;color:var(--muted)">' + esc(p.team || '\u2014') + '</td>';
+    h += '<td>' + _roleBadge(p.role) + '</td>';
+    h += '<td class="pts-cell">' + p.total_pts + esc(mult) + '</td>';
+    h += '<td>';
+    if (p.matches && p.matches.length > 0) {
+      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()">Details</button>';
+    }
+    h += '</td></tr>';
+    if (p.matches && p.matches.length > 0) {
+      h += '<tr><td colspan="5" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
+      p.matches.forEach(function(m) {
+        var multStr = m.multiplier > 1 ? (m.multiplier === 2
+          ? '<span class="m-mult">\xd72</span>'
+          : '<span class="m-mult">\xd71.5</span>') : '';
+        h += '<div class="pts-match-row">'
+           + '<div class="m-title">' + esc(m.title || m.match_id) + '</div>'
+           + '<div style="display:flex;align-items:center">'
+           + '<span style="font-size:10px;color:var(--muted);margin-right:6px">W' + m.week_no + '</span>'
+           + multStr + '<span class="m-pts">' + m.final_pts + '</span>'
+           + '</div></div>';
+      });
+      h += '</div></td></tr>';
+    }
+  });
+  h += '</tbody></table>';
+  return h + '</div>';
 };
