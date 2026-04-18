@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.2
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.3
 ================================================
+v10.3:
+  FIX-007: After recalculate_points(), also call update_week_points() so
+            user_selections.week_pts is always fresh after a scrape run.
+            Previously week_pts stayed stale until server restart.
 v10.2 fix:
   FIX-006: Match number regex was r'(\d+)' on 'ipl26_m02' which matched '26'
             (from the season year), not '02' (the match number). All 17 matches
@@ -65,11 +69,6 @@ def _normalise_overs(raw: float) -> float:
 
 
 # ════ MATCH ID DISCOVERY: POSITION-BASED
-#
-# Cricbuzz series page lists matches chronologically.
-# _ORDERED_CB_IDS[0] = Match 1 (index 0), _ORDERED_CB_IDS[N-1] = Match N.
-# FIX-006: match number is parsed via _MATCH_NO_RE (anchored to '_m'),
-# so ipl26_m02 correctly gives match_no=2 -> index 1.
 
 _ORDERED_CB_IDS: list = []
 
@@ -407,7 +406,7 @@ def _extract_meta(data: dict, iid: str, wk: int) -> dict:
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.2 (FIX-006 regex) ---")
+    print("\n--- IPL 2026 SCRAPER v10.3 (FIX-006 regex, FIX-007 week_pts) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -497,6 +496,9 @@ def main():
         print(f"\n  Recalculating fantasy points...")
         n = db.recalculate_points()
         print(f"  Points recalculated: {n} rows.")
+        # FIX-007: always refresh week_pts after a scrape so leaderboard stays current
+        wp = db.update_week_points()
+        print(f"  Week points updated: {wp} user-week rows.")
     print(f"\n--- COMPLETE: {processed} ok, {failed} failed ---")
 
 
