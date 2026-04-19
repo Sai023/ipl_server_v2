@@ -39,7 +39,7 @@ PLAYERS = [
     ("c09", "Sanju Samson",          "CSK",  10.0, "WK"),   # Traded from RR
     ("c10", "Ayush Mhatre",          "CSK",   8.0, "BAT"),  # Breakout Young Opener
     ("c11", "Dewald Brevis",         "CSK",   9.0, "BAT"),  # Key Overseas Signing (price corrected)
-    ("c12", "Noor Ahmed",            "CSK",  10.0, "BOWL"), # Lead Spinner
+    ("c12", "Noor Ahmad",            "CSK",  10.0, "BOWL"), # Lead Spinner
     ("c13", "Jamie Overton",         "CSK",   1.5, "AR"),
     ("c14", "Spencer Johnson",       "CSK",   1.5, "BOWL"), # Injury Replacement
     ("c15", "Sarfaraz Khan",         "CSK",   1.0, "BAT"),
