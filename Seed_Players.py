@@ -12,6 +12,10 @@ Roles: BAT, BOWL, AR (all-rounder), WK (wicketkeeper)
 Usage:
     python Seed_Players.py          # wipe players + reseed (default)
     python Seed_Players.py --reset  # wipe players + match data + reseed
+
+v2 changes:
+  rr11: "Vaibhav Suryavanshi" -> "Vaibhav Sooryavanshi" (Cricbuzz/Cricinfo spelling)
+  c11:  price 2.2 -> 8.0 (Dewald Brevis corrected)
 """
 
 import argparse
@@ -34,7 +38,7 @@ PLAYERS = [
     ("c08", "Kartik Sharma",         "CSK",  14.2, "WK"),   # Record Uncapped Buy
     ("c09", "Sanju Samson",          "CSK",  14.0, "WK"),   # Traded from RR
     ("c10", "Ayush Mhatre",          "CSK",   0.3, "BAT"),  # Breakout Young Opener
-    ("c11", "Dewald Brevis",         "CSK",   2.2, "BAT"),  # Key Overseas Signing
+    ("c11", "Dewald Brevis",         "CSK",   8.0, "BAT"),  # Key Overseas Signing (price corrected)
     ("c12", "Noor Ahmad",            "CSK",  10.0, "BOWL"), # Lead Spinner
     ("c13", "Jamie Overton",         "CSK",   1.5, "AR"),
     ("c14", "Spencer Johnson",       "CSK",   1.5, "BOWL"), # Injury Replacement
@@ -107,13 +111,13 @@ PLAYERS = [
     ("k11", "Angkrish Raghuvanshi",  "KKR",   5.0, "BAT"),
     ("k12", "Manish Pandey",         "KKR",   4.0, "BAT"),
     ("k13", "Vaibhav Arora",         "KKR",   4.0, "BOWL"),
-    ("k14", "Cameron Green",         "KKR",  11.0, "AR"),  # most expensive overseas IPL 2026
+    ("k14", "Cameron Green",         "KKR",  11.0, "AR"),
     ("k15", "Tim Seifert",           "KKR",   7.0, "WK"),
     ("k17", "Angkrish Raghuvanshi",  "KKR",   6.0, "WK"),
-    ("k18", "Blessing Muzarabani",   "KKR",   5.0, "BOWL"),  # IPL debut M2
+    ("k18", "Blessing Muzarabani",   "KKR",   5.0, "BOWL"),
     ("k19", "Ajinkya Rahane",        "KKR",   5.0, "BAT"),
-    ("k20", "Finn Allen",            "KKR",   6.0, "WK"),   # IPL debut M2
-    ("k21", "Allah Ghazanfar",       "KKR",   5.0, "BOWL"),  # IPL debut M2
+    ("k20", "Finn Allen",            "KKR",   6.0, "WK"),
+    ("k21", "Allah Ghazanfar",       "KKR",   5.0, "BOWL"),
     ("k22", "Lockie Ferguson",       "KKR",   9.0, "BOWL"),
 
     # ══ LSG ══
@@ -209,7 +213,7 @@ PLAYERS = [
     ("rr08", "Jofra Archer",         "RR",   10.0, "BOWL"),
     ("rr09", "Ravi Bishnoi",         "RR",    9.0, "BOWL"),
     ("rr10", "Avesh Khan",           "RR",    6.0, "BOWL"),
-    ("rr11", "Vaibhav Suryavanshi",  "RR",    9.0, "BAT"),
+    ("rr11", "Vaibhav Sooryavanshi", "RR",    9.0, "BAT"),  # Cricbuzz/Cricinfo: Sooryavanshi (double-o)
     ("rr12", "Nandre Burger",        "RR",    6.0, "BOWL"),
     ("rr13", "Tom Kohler-Cadmore",   "RR",    4.0, "WK"),
     ("rr14", "Sam Curran",           "RR",    2.0, "AR"),

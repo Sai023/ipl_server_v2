@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.3
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.4
 ================================================
+v10.4:
+  FIX-008: _build_player_index now tracks name_conflicts and by_name_team so
+            _fuzzy_match can use team_hint to disambiguate players with identical
+            names (e.g. Noor Ahmad c12/CSK vs g05/GT).
+            process_cricbuzz_scorecard passes bat_code/bowl_code as team_hint
+            for all batter and bowler lookups — kills the ghost-ID problem.
 v10.3:
-  FIX-007: After recalculate_points(), also call update_week_points() so
-            user_selections.week_pts is always fresh after a scrape run.
-            Previously week_pts stayed stale until server restart.
-v10.2 fix:
-  FIX-006: Match number regex was r'(\d+)' on 'ipl26_m02' which matched '26'
-            (from the season year), not '02' (the match number). All 17 matches
-            were trying ids[25] which is out-of-range on a 24-entry list.
-            Fixed to r'_m(\d+)' so 'ipl26_m02' -> '02' -> position index 1.
+  FIX-007: After recalculate_points(), also call update_week_points().
+v10.2:
+  FIX-006: _m anchor regex so ipl26_m02 -> match 2, not 26.
 """
 
 import json
@@ -39,7 +40,6 @@ MAX_RETRIES = 3
 RETRY_DELAY = 3
 
 _ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
-# FIX-006: must anchor to '_m' so we don't accidentally grab '26' from 'ipl26'
 _MATCH_NO_RE = re.compile(r'_m(\d+)', re.IGNORECASE)
 
 HEADERS = {
@@ -100,7 +100,6 @@ def _fetch_ordered_ids() -> list:
 
 
 def _match_no_from_id(iid: str) -> int:
-    """Extract match number from match id like 'ipl26_m02' -> 2."""
     m = _MATCH_NO_RE.search(iid)
     return int(m.group(1)) if m else 0
 
@@ -137,6 +136,7 @@ def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
     player = {"id": new_id, "name": name, "team": team_code.upper(), "role": "AR"}
     pidx["all"].append(player)
     pidx["by_name"][n] = player
+    pidx["by_name_team"][(n, team_code.upper())] = player
     parts = n.split()
     if parts:
         pidx["by_surname"].setdefault(parts[-1], []).append(player)
@@ -236,21 +236,41 @@ def _norm(s: str) -> str:
 
 
 def _build_player_index(con: sqlite3.Connection) -> dict:
+    """
+    v10.4: Builds by_name_team dict (keyed by (norm_name, TEAM)) and
+    name_conflicts set so _fuzzy_match can use team_hint to pick the right
+    player when two roster entries share the same name (e.g. Noor Ahmad
+    for both CSK c12 and GT g05).
+    """
     rows    = con.execute("SELECT id, name, team, role FROM players").fetchall()
     players = [{"id": r[0], "name": r[1], "team": r[2], "role": r[3]} for r in rows]
-    by_name = {}; by_surname = {}
+    by_name = {}; by_surname = {}; by_name_team = {}; name_conflicts = set()
     for p in players:
         n = _norm(p["name"])
+        if n in by_name:
+            name_conflicts.add(n)  # two different players share this normalised name
         by_name[n] = p
+        by_name_team[(n, p["team"].upper())] = p
         parts = n.split()
         if parts:
             by_surname.setdefault(parts[-1], []).append(p)
-    return {"by_name": by_name, "by_surname": by_surname, "all": players}
+    return {
+        "by_name": by_name, "by_surname": by_surname, "all": players,
+        "by_name_team": by_name_team, "name_conflicts": name_conflicts,
+    }
 
 
-def _fuzzy_match(name: str, idx: dict) -> str | None:
+def _fuzzy_match(name: str, idx: dict, team_hint: str = None) -> str | None:
+    """
+    v10.4: team_hint (e.g. 'CSK') is used first when the normalised name
+    appears in name_conflicts — this ensures we always pick the right Noor Ahmad.
+    """
     n = _norm(name)
     if not n: return None
+    # Prefer team-specific exact match for ambiguous names
+    if team_hint and n in idx.get("name_conflicts", set()):
+        p = idx.get("by_name_team", {}).get((n, team_hint.upper()))
+        if p: return p["id"]
     p = idx["by_name"].get(n)
     if p: return p["id"]
     parts   = n.split()
@@ -318,7 +338,8 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
         for _, b in bat_team.get("batsmenData", {}).items():
             cb = (b.get("batName") or "").strip()
             if not cb: continue
-            pid = _fuzzy_match(cb, pidx)
+            # v10.4: pass bat_code so duplicate-name collisions resolve to correct team
+            pid = _fuzzy_match(cb, pidx, team_hint=bat_code)
             if not pid:
                 pid = _auto_add_player(cb, bat_code, pidx) if bat_code else _norm(cb).replace(" ", "_")
             _ep(pid)
@@ -360,7 +381,8 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
         for _, bw in bowl_team.get("bowlersData", {}).items():
             cb = (bw.get("bowlName") or "").strip()
             if not cb: continue
-            pid = _fuzzy_match(cb, pidx)
+            # v10.4: pass bowl_code so bowlers resolve to the correct team
+            pid = _fuzzy_match(cb, pidx, team_hint=bowl_code)
             if not pid:
                 pid = _auto_add_player(cb, bowl_code, pidx) if bowl_code else _norm(cb).replace(" ", "_")
             _ep(pid)
@@ -406,7 +428,7 @@ def _extract_meta(data: dict, iid: str, wk: int) -> dict:
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.3 (FIX-006 regex, FIX-007 week_pts) ---")
+    print("\n--- IPL 2026 SCRAPER v10.4 (FIX-008 team-aware fuzzy match) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -414,6 +436,8 @@ def main():
         con.row_factory = sqlite3.Row
         pidx    = _build_player_index(con)
         print(f"  Player index: {len(pidx['all'])} players loaded")
+        if pidx["name_conflicts"]:
+            print(f"  Name conflicts (team-resolved): {sorted(pidx['name_conflicts'])}")
         if not pidx["all"]:
             print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
             sys.exit(1)
@@ -435,14 +459,12 @@ def main():
         iid   = m["id"]
         wk    = m.get("week_no", 1)
         url   = m.get("scorecard_url", "")
-        title = m.get("title", "")
 
         last_seg = url.split("/")[-1] if url else ""
         cb_m     = re.search(r'(\d+)', last_seg)
         cb_id    = cb_m.group(1) if cb_m else "0"
 
         if not cb_m or int(cb_id) == 0:
-            # FIX-006: use _match_no_from_id (anchored to _m)
             mno  = _match_no_from_id(iid)
             ids  = _fetch_ordered_ids()
             discovered = ids[mno - 1] if 0 < mno <= len(ids) else None
@@ -461,7 +483,6 @@ def main():
                 print(f"  SKIP: {iid} — match #{mno} not in series page ({len(ids)} found)")
                 continue
 
-        # FIX-006: also use _match_no_from_id for the output filename
         mno = _match_no_from_id(iid)
         mns = str(mno).zfill(2) if mno else re.sub(r'[^\d]', '', iid).zfill(2)
         jp  = MATCHES_DIR / f"match_{mns}.json"
@@ -496,7 +517,6 @@ def main():
         print(f"\n  Recalculating fantasy points...")
         n = db.recalculate_points()
         print(f"  Points recalculated: {n} rows.")
-        # FIX-007: always refresh week_pts after a scrape so leaderboard stays current
         wp = db.update_week_points()
         print(f"  Week points updated: {wp} user-week rows.")
     print(f"\n--- COMPLETE: {processed} ok, {failed} failed ---")
