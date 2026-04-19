@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.7
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.8
 ================================================
+v10.8:
+  FIX-014: Per-match atomic point update.
+            Immediately after _upsert_match() writes scores for a match,
+            the scraper now calls:
+              1. db.recalculate_points(match_id=iid)
+                 — computes base_pts in player_match_points for this match only.
+              2. db.update_week_points()
+                 — updates user_match_points, user_selections.week_pts,
+                   user_selections.points_per_match, and players.points
+                   for every user whose active week contains this match.
+            This means user_selections is fully current before the scraper
+            moves to the next match.
+            A final db.update_player_season_pts() pass runs at the end to
+            keep players.season_pts (base, no multiplier) accurate.
 v10.7:
-  FIX-012: No-result/abandoned matches — if Cricbuzz state is "no result"
-            or "abandoned", persist the match with empty scores so 0 points
-            are awarded. Rain-affected matches WITH a result still scrape
-            normally regardless of overs played.
-  FIX-013: "catch: 'and'" dropped fielding — "c and b X" (caught-and-bowled
-            spelled out instead of c&b) now handled in _parse_dismissal.
-            The regex now matches c&b, c & b, AND c and b.
+  FIX-012: No-result/abandoned → empty scores, 0 pts.
+  FIX-013: c and b dismissal variant handled.
 v10.6:
   FIX-010: teams_json column name fix.
   FIX-011: SyntaxWarning escape sequences.
@@ -62,10 +71,8 @@ _TEAM_PREFIX = {
     "RR": "rr", "SRH": "s",
 }
 
-# Known valid IPL 2026 team short-names as returned by Cricbuzz
 _IPL_TEAMS = frozenset(_TEAM_PREFIX.keys())
 
-# FIX-012: Match states that mean no result — persist with empty scores
 _NO_RESULT_STATES = frozenset({
     "no result", "match abandoned", "abandoned", "cancelled", "match cancelled"
 })
@@ -175,13 +182,12 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
             inner_start = chunk.find('"') + 1
             end_idx = chunk.find('"]\'\n', inner_start)
             if end_idx == -1:
-                end_idx = chunk.find('\'"]\')', inner_start)
+                end_idx = chunk.find('\'"]\')' , inner_start)
             if end_idx == -1:
-                end_idx = chunk.find('"]\')', inner_start)
+                end_idx = chunk.find('"]\')' , inner_start)
             if end_idx == -1:
                 end_idx = chunk.find('\'"]\'\n', inner_start)
-            # fallback: find closing pattern robustly
-            for pat in ['"]\'\n', '\'"]\')', '"]\')', '\'"]\'\n', '\'"]\'\r\n']:
+            for pat in ['"]\'\n', '\'"]\')' , '"]\')' , '\'"]\'\n', '\'"]\'\r\n']:
                 ei = chunk.find(pat, inner_start)
                 if ei != -1:
                     end_idx = ei
@@ -223,7 +229,6 @@ def _parse_dismissal(out_desc: str) -> dict:
         result["is_lbw_bowled"] = True
         result["bowler"]        = re.sub(r"^b\s+", "", desc, flags=re.I).strip()
     elif dl.startswith("c ") or dl.startswith("c&"):
-        # FIX-013: Handle c&b, c & b, AND c and b (caught-and-bowled variants)
         cb = re.match(r"c\s*(?:&|and)\s*b\s+(.+)", desc, re.I)
         if cb:
             n = cb.group(1).strip()
@@ -324,7 +329,7 @@ def _fuzzy_fielder(name: str, idx: dict, bowling_team: str = None) -> str | None
         if len(cands2) == 1: return cands2[0]["id"]
         if len(cands2) > 1 and bowling_team:
             tf = [c for c in cands2 if c["team"].upper() == bowling_team.upper()]
-            if len(tf) == 1: return tf[0]["id"]
+            if len(tf) == 1: return tf[0][" id"]
     return None
 
 
@@ -423,19 +428,17 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
 def _extract_meta(data: dict, iid: str, wk: int) -> tuple[dict, bool]:
     """
     Returns (meta_dict, is_no_result).
-    is_no_result=True for abandoned/no-result matches — caller skips scoring.
-    Rain-affected matches with a result return is_no_result=False.
+    is_no_result=True for abandoned/no-result — caller writes empty scores.
     """
     h     = data.get("matchHeader", {})
     teams = []
     for inn in data.get("scoreCard", []):
         t = inn.get("batTeamDetails", {}).get("batTeamShortName", "")
         if t and t not in teams: teams.append(t)
-    title = h.get("matchDescription", "")
+    title     = h.get("matchDescription", "")
     raw_state = (h.get("state", "") or "").strip()
-    st = raw_state.lower()
+    st        = raw_state.lower()
 
-    # FIX-012: detect no-result vs result
     is_no_result = st in _NO_RESULT_STATES
 
     if st in ("complete", "mom complete", "result", "abandoned", "no result",
@@ -452,7 +455,7 @@ def _extract_meta(data: dict, iid: str, wk: int) -> tuple[dict, bool]:
 
 
 def _reset_url(iid: str) -> None:
-    """Reset scorecard URL to /00000 so next run retries discovery at this position."""
+    """Reset scorecard URL to /00000 so next run retries discovery."""
     try:
         conn = sqlite3.connect(str(DB_PATH), timeout=30)
         conn.execute("PRAGMA busy_timeout = 30000")
@@ -463,10 +466,34 @@ def _reset_url(iid: str) -> None:
         print(f"    \u26a0 Could not reset URL for {iid}: {e}")
 
 
+def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
+    """
+    FIX-014: Atomic per-match point pipeline.
+
+    Called immediately after _upsert_match() so user_selections is fully
+    current (week_pts, points_per_match, players.points) before the scraper
+    moves to the next match.
+
+    Steps:
+      1. recalculate_points(match_id)  — insert/update player_match_points
+                                         for exactly this match.
+      2. update_week_points()          — recompute user_match_points,
+                                         user_selections.{week_pts, points_per_match},
+                                         and players.points for every user
+                                         whose active week_no == wk.
+    """
+    try:
+        pmp_rows = db.recalculate_points(match_id=iid)
+        db.update_week_points()
+        print(f"  \u26a1 Points updated: {iid} (W{wk}) \u2014 {pmp_rows} player rows recalculated")
+    except Exception as e:
+        print(f"  \u26a0 Point update failed for {iid}: {e}")
+
+
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.7 (FIX-012 no-result, FIX-013 c-and-b) ---")
+    print("\n--- IPL 2026 SCRAPER v10.8 (FIX-014 per-match atomic point update) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -479,7 +506,6 @@ def main():
         if not pidx["all"]:
             print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
             sys.exit(1)
-        # FIX-010: correct column name is teams_json
         sched_teams = {}
         for row in con.execute("SELECT id, teams_json FROM matches").fetchall():
             if row["teams_json"]:
@@ -499,6 +525,7 @@ def main():
         _fetch_ordered_ids()
 
     processed = 0; failed = 0; skipped_non_ipl = 0; no_result_count = 0
+
     for m in targets:
         iid   = m["id"]
         wk    = m.get("week_no", 1)
@@ -541,7 +568,7 @@ def main():
 
         meta, is_no_result = _extract_meta(data, iid, wk)
 
-        # Validate teams are IPL 2026 teams (skip for no-result — might have 0 teams in scorecard)
+        # Validate IPL teams (skip validation for no-result matches)
         if not is_no_result:
             unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
             if unknown or len(meta["teams"]) < 2:
@@ -553,7 +580,6 @@ def main():
                 skipped_non_ipl += 1; failed += 1
                 continue
 
-            # Cross-validate against scheduled teams
             expected = sched_teams.get(iid, set())
             if expected:
                 scraped_set = set(meta["teams"])
@@ -565,7 +591,7 @@ def main():
                     skipped_non_ipl += 1; failed += 1
                     continue
 
-        # FIX-012: No-result / abandoned — 0 points, no scorecard processing
+        # No-result: persist with empty scores (0 pts)
         if is_no_result:
             scores = {}
             print(f"  \u26aa NO RESULT: {iid} \u2014 abandoned/no-result, no points awarded")
@@ -580,27 +606,41 @@ def main():
         if resolved < 15 and scores:
             print(f"    \u26a0 Only {resolved} resolved players (expected ~22)")
 
+        # ── Persist scores to match_scores table ──────────────────────────
         payload = {**meta, "scores": scores}
         with open(jp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
         with db._write() as wc:
             _upsert_match(wc, payload)
+
         if is_no_result:
             print(f"  \u2705 PERSISTED: {iid} (no-result, 0 pts, teams: {meta['teams']})")
         else:
             print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
+
+        # ── FIX-014: Atomic per-match point update ────────────────────────
+        # Runs immediately after _upsert_match so user_selections.week_pts,
+        # points_per_match, and players.points are current before the next
+        # match is processed.  Pass iid (e.g. "ipl26_m04") so
+        # recalculate_points() scopes its work to exactly this match.
+        _update_points_for_match(db, iid, wk)
+
         processed += 1
 
+    # ── End-of-run summary ────────────────────────────────────────────────
     if skipped_non_ipl:
         print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards \u2014 run scraper again to retry")
     if no_result_count:
         print(f"  \u26aa {no_result_count} no-result matches recorded (0 points each)")
+
     if processed > 0:
-        print(f"\n  Recalculating fantasy points...")
-        n = db.recalculate_points()
-        print(f"  Points recalculated: {n} rows.")
-        wp = db.update_week_points()
-        print(f"  Week points updated: {wp} user-week rows.")
+        # Final season_pts sync (base pts, no multiplier) — one pass at the end
+        # is sufficient since per-match players.points is already kept current
+        # by _update_points_for_match() inside the loop.
+        print(f"\n  Syncing season_pts for all players...")
+        pp = db.update_player_season_pts()
+        print(f"  season_pts updated: {pp} players with pts > 0.")
+
     print(f"\n--- COMPLETE: {processed} ok, {failed} failed ---")
 
 
