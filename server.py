@@ -1,15 +1,18 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.6
+IPL Fantasy 2026 — Flask Server                             Golden File v12.7
 ===========================================================================
-v12.6 (this release):
-  New: GET /api/user-match-points/<n> — per-match pts for a user from
-       user_match_points table (cap/vc applied).
-  New: POST /api/recalculate-points now also calls update_player_season_pts()
-       so players.season_pts stays current after every recalc.
-  Startup _rebuild_scores_and_points() clears user_match_points + resets
-       players.season_pts (handled in db_manager.rebuild_scores_and_points).
-v12.5: Ghost audit only flags IDs not in players table; v8 seed version.
-v12.4: _SEMANTIC_MAP sooryavanshi/suryavanshi aliases.
+v12.7 (this release):
+  /api/player-points/<n>: SELECT now includes season_pts + points from players
+    table. Each player object in the response gains:
+      season_pts  — base pts (no cap/vc multiplier), mirrors players.season_pts
+      points      — cap/vc-weighted season total, mirrors players.points
+    Frontend (_buildPointsTab, picker) can now read both fields directly from
+    this endpoint without a separate /api/players call.
+  /api/leaderboard: standings rows now include mvp.points and mvp.season_pts
+    so the leaderboard card can show a player's weighted form next to the MVP.
+v12.6: /api/user-match-points, update_player_season_pts on recalculate.
+v12.5: Ghost audit, v8 seed version.
+v12.4: sooryavanshi/suryavanshi semantic aliases.
 v12.3: On restart wipe match_scores + JSON cache.
 """
 
@@ -380,10 +383,7 @@ def _auto_seed_history_if_needed():
 
 def _rebuild_scores_and_points():
     """
-    v12.6 — On every server restart: delegates full wipe + rebuild to
-    db_manager.rebuild_scores_and_points() which clears match_scores,
-    player_match_points, user_match_points, resets week_pts + season_pts,
-    then re-ingests any remaining JSON cache.
+    v12.6 — Wipe all score tables + JSON cache on every restart.
     After restart run: python scraper.py
     """
     try:
@@ -391,24 +391,20 @@ def _rebuild_scores_and_points():
         with db._write() as con:
             con.execute("DELETE FROM match_scores")
             con.execute("DELETE FROM player_match_points")
-            try:
-                con.execute("DELETE FROM user_match_points")
-            except Exception:
-                pass  # table may not exist on older DBs yet
+            try: con.execute("DELETE FROM user_match_points")
+            except Exception: pass
             con.execute("UPDATE user_selections SET week_pts = 0")
-            try:
-                con.execute("UPDATE players SET season_pts = 0")
+            try: con.execute("UPDATE players SET season_pts = 0, points = 0")
             except Exception:
-                pass  # column may not exist on older DBs yet
+                try: con.execute("UPDATE players SET season_pts = 0")
+                except Exception: pass
 
         matches_dir = DATA_DIR / "matches"
         deleted = 0
         if matches_dir.exists():
             for f in matches_dir.glob("*.json"):
-                try:
-                    f.unlink(); deleted += 1
-                except Exception as e2:
-                    print(f"  [startup] Could not delete {f.name}: {e2}")
+                try: f.unlink(); deleted += 1
+                except Exception as e2: print(f"  [startup] Could not delete {f.name}: {e2}")
 
         print(f"  [startup] ✓ Cleared all score data. Deleted {deleted} cached JSON files.")
         print("  [startup] ► Run: python scraper.py   to repopulate with fresh data.")
@@ -417,10 +413,7 @@ def _rebuild_scores_and_points():
 
 
 def _audit_player_id_coverage():
-    """
-    v12.5 fix: Only flags IDs that are NOT in the players table (true ghosts).
-    IDs in players but not in pmp are expected after restart — not reported.
-    """
+    """v12.5: Only flags IDs NOT in players table (true ghosts)."""
     try:
         with db._read() as con:
             con.row_factory = sqlite3.Row
@@ -686,6 +679,11 @@ def api_poll():
 
 @app.route("/api/player-points/<n>",methods=["GET"])
 def api_player_points(n):
+    """
+    v12.7: player rows now include season_pts (base, no multiplier) and
+    points (cap/vc-weighted season total) from the players table, so the
+    frontend Points tab and picker can use both fields without an extra call.
+    """
     name = n
     try:
         if not name or len(name)>30:
@@ -693,21 +691,24 @@ def api_player_points(n):
         with db._read() as con:
             con.row_factory=sqlite3.Row
             sel_rows=con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts,points_per_match
                 FROM user_selections WHERE display_name=? ORDER BY week_no
             """,(name,)).fetchall()
             if not sel_rows:
-                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
+                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[],"weeks":[]})
             import json as _j
             latest=sel_rows[-1]
             team_ids=_j.loads(latest["tw_team_json"] or "[]")
             latest_cap=latest["tw_cap_id"]; latest_vc=latest["tw_vc_id"]
             if not team_ids:
-                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[]})
+                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[],"weeks":[]})
             ph=",".join("?"*len(team_ids))
+            # v12.7: include season_pts and points
             player_rows={r["id"]:dict(r) for r in
-                con.execute(f"SELECT id,name,team,role,price FROM players WHERE id IN ({ph})",
-                            team_ids).fetchall()}
+                con.execute(
+                    f"SELECT id,name,team,role,price,season_pts,points FROM players WHERE id IN ({ph})",
+                    team_ids
+                ).fetchall()}
             by_player=collections.defaultdict(list)
             for sel in sel_rows:
                 wn=sel["week_no"]
@@ -733,18 +734,44 @@ def api_player_points(n):
                         "multiplier":mult,
                         "final_pts":round(r["base_pts"]*mult),
                     })
-        players_out=[]; grand_total=sum(sel["week_pts"] for sel in sel_rows)
+            # v12.7: also return per-week points_per_match blobs for match totals section
+            weeks_out=[]
+            for sel in sel_rows:
+                ppm=sel["points_per_match"] if "points_per_match" in sel.keys() else "{}"
+                weeks_out.append({
+                    "week_no":sel["week_no"],
+                    "week_pts":sel["week_pts"],
+                    "points_per_match":_j.loads(ppm or "{}"),
+                })
+
+        # v12.7: grand_total from user_match_points (cap/vc exact)
+        grand_total = sum(w["week_pts"] for w in weeks_out)
+        players_out=[]
         for pid in team_ids:
-            info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0})
+            info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0,"season_pts":0,"points":0})
             matches=by_player.get(pid,[])
             p_total=sum(m["final_pts"] for m in matches)
             players_out.append({
-                "id":pid,"name":info.get("name",pid),"team":info.get("team",""),
-                "role":info.get("role",""),"is_cap":pid==latest_cap,"is_vc":pid==latest_vc,
-                "total_pts":p_total,"matches":matches,
+                "id":pid,
+                "name":info.get("name",pid),
+                "team":info.get("team",""),
+                "role":info.get("role",""),
+                "price":info.get("price",0),
+                "is_cap":pid==latest_cap,
+                "is_vc":pid==latest_vc,
+                # v12.7: both point fields
+                "season_pts":info.get("season_pts",0),   # base, no cap/vc
+                "points":info.get("points",0),            # cap/vc-weighted season total
+                "total_pts":p_total,                      # this-user match breakdown sum
+                "matches":matches,
             })
         players_out.sort(key=lambda x:-x["total_pts"])
-        return jsonify({"ok":True,"name":name,"total_pts":grand_total,"players":players_out})
+        return jsonify({
+            "ok":True,"name":name,
+            "total_pts":grand_total,
+            "players":players_out,
+            "weeks":weeks_out,   # v12.7: per-week points_per_match for match-by-match section
+        })
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -753,9 +780,8 @@ def api_player_points(n):
 @app.route("/api/user-match-points/<n>",methods=["GET"])
 def api_user_match_points(n):
     """
-    v12.6 — Per-match user points from user_match_points table (cap/vc applied).
-    Returns sorted list: [{week_no, match_id, title, status, teams, pts}].
-    Used by ipl_glue.js Matches tab to show 'My Pts' column per match.
+    v12.6 — Per-match user points from user_match_points (cap/vc applied).
+    Returns [{week_no, match_id, title, status, teams, pts}].
     """
     try:
         if not n or len(n)>30:
@@ -860,7 +886,7 @@ def api_update_match_url():
 
 @app.route("/api/recalculate-points",methods=["POST"])
 def api_recalculate_points():
-    """v12.6: also calls update_player_season_pts() to keep players.season_pts current."""
+    """v12.6+: recalculate + update season_pts + points."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -955,8 +981,10 @@ def api_clean_scores():
             try: con.execute("DELETE FROM user_match_points")
             except Exception: pass
             con.execute("UPDATE user_selections SET week_pts=0")
-            try: con.execute("UPDATE players SET season_pts=0")
-            except Exception: pass
+            try: con.execute("UPDATE players SET season_pts=0, points=0")
+            except Exception:
+                try: con.execute("UPDATE players SET season_pts=0")
+                except Exception: pass
         deleted_files=0
         if delete_json:
             matches_dir=DATA_DIR/"matches"
@@ -964,10 +992,10 @@ def api_clean_scores():
                 for f in matches_dir.glob("*.json"):
                     try: f.unlink(); deleted_files+=1
                     except Exception as e2: _log(f"[clean] {f}: {e2}","warning")
-        _log(f"[clean-scores] Cleared match_scores+pmp+ump+week_pts+season_pts. JSON deleted: {deleted_files}")
+        _log(f"[clean-scores] Cleared match_scores+pmp+ump+week_pts+season_pts+points. JSON deleted: {deleted_files}")
         return jsonify({
             "ok":True,
-            "cleared":["match_scores","player_match_points","user_match_points","week_pts","season_pts"],
+            "cleared":["match_scores","player_match_points","user_match_points","week_pts","season_pts","points"],
             "json_files_deleted":deleted_files,
             "next_steps":["Run scraper.py to re-scrape match data",
                           "Restart server or POST /api/recalculate-points to rebuild"]
