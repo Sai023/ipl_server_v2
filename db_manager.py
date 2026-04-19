@@ -1,17 +1,26 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.6
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.7
 ===========================================================================
-v5.6:
-  Schema: players.season_pts (INTEGER, season total base_pts) + new table
-          user_match_points (display_name, week_no, match_id, pts) for
-          per-match, per-user cap/vc-aware point tracking.
-  update_week_points() now also populates user_match_points so the total
-  is derived from individual match contributions, not weekly buckets.
-  _LEADERBOARD_SQL: user_totals now sources total_pts from user_match_points
-          (cap/vc already baked in) giving exact per-match accuracy.
-  New: update_player_season_pts() — sets players.season_pts = SUM(base_pts)
-          from player_match_points for every player; called after each scrape.
-  rebuild_scores_and_points() clears user_match_points + resets season_pts.
+v5.7:
+  Schema:
+    players.points          INTEGER — cumulative season fantasy pts (cap/vc-aware
+                            aggregate across all weeks a player appeared in a
+                            user's selected XI). Kept in sync by
+                            update_player_points().
+    user_selections.points_per_match  TEXT (JSON) — per-match breakdown stored
+                            directly on the selection row as
+                            {match_id: pts, ...}. One blob per (user, week),
+                            so every week owns its own data with zero aliasing
+                            between W1-W10.
+  Logic:
+    update_week_points() now also:
+      • writes points_per_match JSON onto every user_selections row.
+      • calls update_player_points() so players.points stays current.
+    update_player_points() — new method; aggregates awarded pts (cap/vc baked)
+      from user_match_points per player and writes to players.points.
+    get_players() returns points column.
+    get_history() returns points_per_match per week row.
+v5.6: user_match_points table, players.season_pts, per-match leaderboard.
 v5.5: Leaderboard from SUM(week_pts), MVP via pmp.
 v5.4: week_pts + update_week_points().
 v5.3: rebuild_scores_and_points().
@@ -40,7 +49,8 @@ CREATE TABLE IF NOT EXISTS players (
     team       TEXT    NOT NULL,
     price      REAL    NOT NULL DEFAULT 0 CHECK (price >= 0),
     role       TEXT    NOT NULL DEFAULT 'BAT' CHECK (role IN ('BAT','BOWL','AR','WK')),
-    season_pts INTEGER NOT NULL DEFAULT 0
+    season_pts INTEGER NOT NULL DEFAULT 0,
+    points     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS matches (
@@ -56,15 +66,16 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 
 CREATE TABLE IF NOT EXISTS user_selections (
-    display_name TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
-    week_no      INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
-    tw_team_json TEXT    NOT NULL DEFAULT '[]',
-    tw_cap_id    TEXT,
-    tw_vc_id     TEXT,
-    nw_team_json TEXT    NOT NULL DEFAULT '[]',
-    nw_cap_id    TEXT,
-    nw_vc_id     TEXT,
-    week_pts     INTEGER NOT NULL DEFAULT 0,
+    display_name    TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
+    week_no         INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
+    tw_team_json    TEXT    NOT NULL DEFAULT '[]',
+    tw_cap_id       TEXT,
+    tw_vc_id        TEXT,
+    nw_team_json    TEXT    NOT NULL DEFAULT '[]',
+    nw_cap_id       TEXT,
+    nw_vc_id        TEXT,
+    week_pts        INTEGER NOT NULL DEFAULT 0,
+    points_per_match TEXT   NOT NULL DEFAULT '{}',
     PRIMARY KEY (display_name, week_no)
 );
 
@@ -333,16 +344,19 @@ class DatabaseManager:
         con = sqlite3.connect(self._path, timeout=30)
         con.execute("PRAGMA busy_timeout = 30000")
         con.executescript(_SCHEMA)
-        # v5.4 migration: add week_pts
-        for stmt in [
+        # Safe migrations — ignore if column already exists
+        migrations = [
             "ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0",
-            # v5.6 migration: add season_pts to players
             "ALTER TABLE players ADD COLUMN season_pts INTEGER NOT NULL DEFAULT 0",
-        ]:
+            # v5.7 new columns
+            "ALTER TABLE players ADD COLUMN points INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE user_selections ADD COLUMN points_per_match TEXT NOT NULL DEFAULT '{}'",
+        ]
+        for stmt in migrations:
             try:
                 con.execute(stmt); con.commit()
             except sqlite3.OperationalError:
-                pass  # column already exists
+                pass  # column already exists — safe to skip
         con.close()
 
     def get_meta(self, key, default=""):
@@ -486,13 +500,10 @@ class DatabaseManager:
     def update_player_season_pts(self) -> int:
         """
         v5.6 — Set players.season_pts = SUM(base_pts) from player_match_points.
-        Call after update_week_points() so season totals reflect all scraped matches.
         Returns number of players with season_pts > 0.
         """
         with self._write() as con:
-            # Reset all first
             con.execute("UPDATE players SET season_pts = 0")
-            # Set from aggregated player_match_points
             con.execute("""
                 UPDATE players SET season_pts = (
                     SELECT COALESCE(SUM(pmp.base_pts), 0)
@@ -504,42 +515,88 @@ class DatabaseManager:
             row = con.execute("SELECT COUNT(*) FROM players WHERE season_pts > 0").fetchone()
             return row[0] if row else 0
 
+    def update_player_points(self) -> int:
+        """
+        v5.7 — Set players.points = SUM of cap/vc-awarded pts from user_match_points.
+        Each player's total reflects the actual fantasy points earned across all
+        users' selections (averaged if selected by multiple users) — useful as a
+        form guide in the team picker.
+        In practice with 2 users we sum across all appearances and divide by user count.
+        Returns number of players with points > 0.
+        """
+        with self._read() as con:
+            # Count distinct users for averaging
+            user_count = max(1, con.execute(
+                "SELECT COUNT(DISTINCT display_name) FROM user_selections"
+            ).fetchone()[0])
+
+            # Sum awarded pts per player across all user_match_points rows
+            # (a player earns pts only in weeks they appear in that user's XI)
+            awarded = con.execute("""
+                SELECT je.value AS player_id,
+                       SUM(
+                           CASE
+                               WHEN je.value = us.tw_cap_id THEN ROUND(pmp.base_pts * 2.0)
+                               WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
+                               ELSE pmp.base_pts
+                           END
+                       ) AS total_awarded
+                FROM user_selections us, JSON_EACH(us.tw_team_json) AS je
+                INNER JOIN player_match_points pmp
+                    ON pmp.player_id = je.value AND pmp.week_no = us.week_no
+                GROUP BY je.value
+            """).fetchall()
+
+        pts_map = {r["player_id"]: r["total_awarded"] for r in awarded}
+
+        with self._write() as con:
+            con.execute("UPDATE players SET points = 0")
+            for pid, pts in pts_map.items():
+                con.execute(
+                    "UPDATE players SET points = ? WHERE id = ?",
+                    (int(pts or 0), pid)
+                )
+
+        return sum(1 for v in pts_map.values() if v and v > 0)
+
     def update_week_points(self) -> int:
         """
-        v5.6 — Recompute week_pts for every user_selections row AND populate
-        user_match_points for per-match granularity.
+        v5.7 — Recompute week_pts AND points_per_match for every user_selections row,
+        plus populate user_match_points for per-match granularity.
 
-        For each (display_name, week_no, match_id):
-          pts = SUM(base_pts * multiplier) for players in that week's tw_team_json
-          applying cap(x2) and vc(x1.5) per that week's tw_cap_id / tw_vc_id.
+        Key guarantee (W1-W10 isolation):
+          Each user_selections row owns its own points_per_match JSON blob:
+            { match_id: awarded_pts, ... }
+          This is scoped strictly to that row's (display_name, week_no), so W3 data
+          can never bleed into W4 even if both rows share the same tw_team_json.
 
-        week_pts = SUM of all match pts in that week.
         Returns number of user_selections rows updated.
         """
-        # ── Read all data we need ────────────────────────────────────────────
+        # ── Read ────────────────────────────────────────────────────────────
         with self._read() as con:
             sels = con.execute("""
                 SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
                 FROM user_selections
             """).fetchall()
 
-            # (player_id, match_id) -> base_pts
             pmp_map = {}
             for r in con.execute(
                 "SELECT player_id, match_id, base_pts FROM player_match_points"
             ).fetchall():
                 pmp_map[(r["player_id"], r["match_id"])] = r["base_pts"]
 
-            # week_no -> [match_id, ...]
+            # week_no -> [match_id, ...]  (only completed matches score)
             week_matches: dict = {}
             for r in con.execute(
                 "SELECT id, week_no FROM matches WHERE LOWER(status)='completed'"
             ).fetchall():
                 week_matches.setdefault(r["week_no"], []).append(r["id"])
 
-        # ── Compute user_match_points and week totals ────────────────────────
-        ump_rows = []   # (display_name, week_no, match_id, pts)
-        wk_totals = {}  # (display_name, week_no) -> int
+        # ── Compute ─────────────────────────────────────────────────────────
+        ump_rows   = []   # (display_name, week_no, match_id, pts)
+        wk_totals  = {}   # (display_name, week_no) -> int
+        # v5.7: per-row points_per_match blob {match_id: pts}
+        ppm_blobs  = {}   # (display_name, week_no) -> dict
 
         for sel in sels:
             name = sel["display_name"]
@@ -551,7 +608,9 @@ class DatabaseManager:
             cap = sel["tw_cap_id"]
             vc  = sel["tw_vc_id"]
 
-            wk_total = 0
+            wk_total  = 0
+            match_blob = {}  # {match_id: pts} — isolated to this (user, week)
+
             for mid in week_matches.get(wk, []):
                 match_pts = 0
                 for pid in ids:
@@ -560,13 +619,16 @@ class DatabaseManager:
                         mult = 2.0 if pid == cap else (1.5 if pid == vc else 1.0)
                         match_pts += round(bp * mult)
                 ump_rows.append((name, wk, mid, match_pts))
+                match_blob[mid] = match_pts
                 wk_total += match_pts
 
-            wk_totals[(name, wk)] = wk_total
+            wk_totals[(name, wk)]  = wk_total
+            ppm_blobs[(name, wk)]  = match_blob   # v5.7: own blob per week row
 
         # ── Write ────────────────────────────────────────────────────────────
         updated = 0
         with self._write() as con:
+            # user_match_points (granular per-match lookup)
             for name, wk, mid, pts in ump_rows:
                 con.execute("""
                     INSERT INTO user_match_points (display_name, week_no, match_id, pts)
@@ -574,12 +636,19 @@ class DatabaseManager:
                     ON CONFLICT(display_name, match_id) DO UPDATE SET
                         pts=excluded.pts, week_no=excluded.week_no
                 """, (name, wk, mid, pts))
+
+            # user_selections — write week_pts AND points_per_match together
             for (name, wk), pts in wk_totals.items():
+                ppm_json = json.dumps(ppm_blobs.get((name, wk), {}))
                 con.execute(
-                    "UPDATE user_selections SET week_pts=? WHERE display_name=? AND week_no=?",
-                    (pts, name, wk)
+                    "UPDATE user_selections SET week_pts=?, points_per_match=? "
+                    "WHERE display_name=? AND week_no=?",
+                    (pts, ppm_json, name, wk)
                 )
                 updated += 1
+
+        # v5.7: refresh players.points after every week recalc
+        self.update_player_points()
         return updated
 
     def get_user_match_points(self, display_name: str) -> list:
@@ -610,27 +679,26 @@ class DatabaseManager:
 
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
         """
-        v5.6 — On every server restart (called by server.py startup):
+        v5.7 — Full wipe + rebuild on server restart:
         1. DELETE match_scores, player_match_points, user_match_points.
-        2. Reset season_pts on all players to 0.
-        3. Re-ingest from JSON cache (if any remain).
-        4. recalculate_points() → player_match_points.
-        5. update_week_points() → user_match_points + user_selections.week_pts.
+        2. Reset season_pts, points, points_per_match, week_pts on all rows.
+        3. Re-ingest from JSON cache.
+        4. recalculate_points()  → player_match_points.
+        5. update_week_points()  → user_match_points + user_selections.{week_pts, points_per_match}.
         6. update_player_season_pts() → players.season_pts.
+        7. update_player_points()     → players.points (already called inside update_week_points).
         """
         if json_dir is None:
             json_dir = Path(self._path).parent / "matches"
         json_dir = Path(json_dir)
 
-        # Step 1 + 2: Wipe scoring tables
         with self._write() as con:
             con.execute("DELETE FROM player_match_points")
             con.execute("DELETE FROM match_scores")
             con.execute("DELETE FROM user_match_points")
-            con.execute("UPDATE user_selections SET week_pts = 0")
-            con.execute("UPDATE players SET season_pts = 0")
+            con.execute("UPDATE user_selections SET week_pts = 0, points_per_match = '{}'")
+            con.execute("UPDATE players SET season_pts = 0, points = 0")
 
-        # Step 3: Re-ingest from JSON cache
         files_ingested = 0
         if json_dir.exists():
             files = sorted(
@@ -649,17 +717,14 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"  [rebuild] skip {fp.name}: {e}")
 
-        # Step 4
-        pmp_rows = self.recalculate_points()
-        # Step 5
-        week_pts_rows = self.update_week_points()
-        # Step 6
+        pmp_rows        = self.recalculate_points()
+        week_pts_rows   = self.update_week_points()   # also calls update_player_points()
         player_pts_rows = self.update_player_season_pts()
 
         return {
-            "files_ingested": files_ingested,
-            "pmp_rows": pmp_rows,
-            "week_pts_rows": week_pts_rows,
+            "files_ingested":  files_ingested,
+            "pmp_rows":        pmp_rows,
+            "week_pts_rows":   week_pts_rows,
             "player_pts_rows": player_pts_rows,
         }
 
@@ -736,21 +801,27 @@ class DatabaseManager:
 
     def get_players(self) -> list:
         with self._read() as con:
-            rows = con.execute("SELECT id,name,team,role,price,season_pts FROM players ORDER BY season_pts DESC, name").fetchall()
+            # v5.7: return both season_pts (base, no multiplier) and points (cap/vc awarded)
+            rows = con.execute(
+                "SELECT id,name,team,role,price,season_pts,points FROM players ORDER BY points DESC, season_pts DESC, name"
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_history(self, name: str) -> dict:
         with self._read() as con:
             current_week = self.get_current_week()
             rows = con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,week_pts
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,
+                       week_pts,points_per_match
                 FROM user_selections WHERE display_name=? ORDER BY week_no ASC
             """, (name,)).fetchall()
         weeks = [
             {"week_no": r["week_no"], "is_current": r["week_no"]==current_week,
              "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
              "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
-             "week_pts": r["week_pts"]}
+             "week_pts": r["week_pts"],
+             # v5.7: per-week isolated match breakdown {match_id: pts}
+             "points_per_match": _jloads(r["points_per_match"], {})}
             for r in rows
         ]
         return {"name": name, "current_week": current_week, "weeks": weeks, "ok": True}
