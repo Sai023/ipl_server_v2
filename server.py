@@ -1,15 +1,13 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.3
+IPL Fantasy 2026 — Flask Server                             Golden File v12.4
 ===========================================================================
-v12.3 (this release):
-  _rebuild_scores_and_points() now WIPES match_scores + player_match_points
-  + week_pts AND deletes all cached data/matches/*.json on every server restart
-  so the scraper is forced to re-fetch fresh, correct scorecards from Cricbuzz.
-  After restarting server run: python scraper.py
-v12.2: /api/audit-scores/<n>, /api/clean-scores endpoints.
-v12.1: _rebuild_scores_and_points() logs week_pts_rows.
-v12.0: Rebuild match_scores + pmp on every restart.
-v11.7: Versioned history seed, draft preservation.
+v12.4 (this release):
+  _SEMANTIC_MAP updated:
+    "sooryavanshi" → "vaibhav sooryavanshi" (Cricbuzz/Cricinfo official spelling)
+    "suryavanshi"  → "vaibhav sooryavanshi" (user-friendly alias)
+  Matches rr11 name change in Seed_Players.py v2.
+v12.3: On restart wipe match_scores + JSON cache; scraper repopulates.
+v12.2: /api/audit-scores/<n>, /api/clean-scores.
 """
 
 import collections
@@ -65,7 +63,11 @@ _SEMANTIC_MAP = {
     "chakra":"varun chakravarthy","chakar":"varun chakravarthy",
     "vc":"varun chakravarthy","chahar":"deepak chahar","duffy":"jacob duffy",
     "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
-    "ravindra":"rachin ravindra","suryavanshi":"vaibhav suryavanshi",
+    "ravindra":"rachin ravindra",
+    # Vaibhav Sooryavanshi — Cricbuzz/Cricinfo use "Sooryavanshi" (double-o)
+    "sooryavanshi":"vaibhav sooryavanshi",
+    "suryavanshi":"vaibhav sooryavanshi",   # user-friendly alias
+    "vaibhav":"vaibhav sooryavanshi",
     "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
     "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
     "pant":"rishabh pant","noor":"noor ahmad","dube":"shivam dube",
@@ -270,9 +272,7 @@ def _auto_seed_players_if_needed():
 
 
 def _auto_seed_history_if_needed():
-    """
-    v11.7: Versioned history seed with draft preservation.
-    """
+    """v11.7: Versioned history seed with draft preservation."""
     try:
         con = _db_con()
         ver_row = con.execute("SELECT value FROM meta WHERE key='_seed_version'").fetchone()
@@ -353,13 +353,7 @@ def _rebuild_scores_and_points():
     v12.3 — On every server restart: wipe match_scores, player_match_points,
     week_pts AND delete all cached JSON files so the scraper is forced to
     re-fetch fresh, correct scorecards from Cricbuzz.
-
-    Reason: cached JSON files (data/matches/*.json) can contain corrupted data
-    with player IDs from the wrong teams (scraper bug). Deleting them on every
-    restart guarantees the scraper always hits Cricbuzz for a clean scorecard.
-
-    Workflow after restart:
-        python scraper.py    ← re-scrapes all completed matches fresh
+    After restart run: python scraper.py
     """
     try:
         print("  [startup] Clearing match_scores + player_match_points + week_pts...")
@@ -368,7 +362,6 @@ def _rebuild_scores_and_points():
             con.execute("DELETE FROM player_match_points")
             con.execute("UPDATE user_selections SET week_pts = 0")
 
-        # Delete cached JSON files — scraper will re-fetch fresh from Cricbuzz
         matches_dir = DATA_DIR / "matches"
         deleted = 0
         if matches_dir.exists():
@@ -818,12 +811,6 @@ def api_recalculate_points():
 
 @app.route("/api/audit-scores/<n>",methods=["GET"])
 def api_audit_scores(n):
-    """
-    Full calculation trace per user per week — powers Audit_Scores.ps1.
-    Returns stored_week_pts vs recomputed value, raw match stats, and
-    a per-player per-match breakdown. Flags base_pts > 200 in one match
-    as a potential bad-scrape warning.
-    """
     try:
         if not n or len(n)>30:
             return jsonify({"error":"invalid name","code":400}),400
@@ -893,11 +880,6 @@ def api_audit_scores(n):
 
 @app.route("/api/clean-scores",methods=["POST"])
 def api_clean_scores():
-    """
-    Clear match_scores, player_match_points, reset week_pts to 0.
-    Pass ?delete_json=1 to also wipe cached data/matches/*.json files
-    so the scraper re-fetches everything fresh from Cricbuzz.
-    """
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -1123,7 +1105,7 @@ if __name__=="__main__":
 
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
-    _auto_seed_history_if_needed()       # v11.7: versioned re-seed with draft preservation
+    _auto_seed_history_if_needed()
     _rebuild_scores_and_points()         # v12.3: clear + delete JSON cache on every restart
     _audit_player_id_coverage()
 
