@@ -1,21 +1,20 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.5
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.6
 ===========================================================================
-v5.5: _LEADERBOARD_SQL now derives total_pts from SUM(week_pts) per user
-      (pre-computed, cap/vc-aware) rather than re-aggregating from
-      player_match_points on the fly. MVP player is still resolved via pmp.
-      get_leaderboard() now fetches a per-week breakdown and includes a
-      weekly[] list in each standings row for the UI to render columns.
-v5.4: Add week_pts column to user_selections.
-      New update_week_points() computes per (display_name, week_no):
-        SUM(base_pts * multiplier) from player_match_points for that week's
-        tw_team_json, applying cap×2 and vc×1.5.
-      rebuild_scores_and_points() now calls update_week_points() after
-      recalculate_points() so user_selections.week_pts is always fresh.
-      Schema migration: ALTER TABLE adds column if absent (safe on existing DB).
-v5.3: Add rebuild_scores_and_points() — called on every server restart.
-v5.2: Fix _LEADERBOARD_SQL week-scoped scoring.
-v5.1: timeout 30s + busy_timeout 30000.
+v5.6:
+  Schema: players.season_pts (INTEGER, season total base_pts) + new table
+          user_match_points (display_name, week_no, match_id, pts) for
+          per-match, per-user cap/vc-aware point tracking.
+  update_week_points() now also populates user_match_points so the total
+  is derived from individual match contributions, not weekly buckets.
+  _LEADERBOARD_SQL: user_totals now sources total_pts from user_match_points
+          (cap/vc already baked in) giving exact per-match accuracy.
+  New: update_player_season_pts() — sets players.season_pts = SUM(base_pts)
+          from player_match_points for every player; called after each scrape.
+  rebuild_scores_and_points() clears user_match_points + resets season_pts.
+v5.5: Leaderboard from SUM(week_pts), MVP via pmp.
+v5.4: week_pts + update_week_points().
+v5.3: rebuild_scores_and_points().
 """
 
 import json
@@ -36,11 +35,12 @@ PRAGMA journal_mode  = WAL;
 PRAGMA foreign_keys  = ON;
 
 CREATE TABLE IF NOT EXISTS players (
-    id    TEXT PRIMARY KEY,
-    name  TEXT NOT NULL,
-    team  TEXT NOT NULL,
-    price REAL NOT NULL DEFAULT 0 CHECK (price >= 0),
-    role  TEXT NOT NULL DEFAULT 'BAT' CHECK (role IN ('BAT','BOWL','AR','WK'))
+    id         TEXT    PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    team       TEXT    NOT NULL,
+    price      REAL    NOT NULL DEFAULT 0 CHECK (price >= 0),
+    role       TEXT    NOT NULL DEFAULT 'BAT' CHECK (role IN ('BAT','BOWL','AR','WK')),
+    season_pts INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS matches (
@@ -102,6 +102,14 @@ CREATE TABLE IF NOT EXISTS player_match_points (
     PRIMARY KEY (match_id, player_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_match_points (
+    display_name TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
+    week_no      INTEGER NOT NULL,
+    match_id     TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+    pts          INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (display_name, match_id)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -113,18 +121,21 @@ CREATE INDEX IF NOT EXISTS idx_ms_match    ON match_scores (match_id);
 CREATE INDEX IF NOT EXISTS idx_pmp_player  ON player_match_points (player_id);
 CREATE INDEX IF NOT EXISTS idx_pmp_week    ON player_match_points (week_no);
 CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, player_id);
+CREATE INDEX IF NOT EXISTS idx_ump_name    ON user_match_points (display_name);
+CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 """
 
 
-# v5.5: total_pts sourced from pre-computed week_pts; MVP still via player_match_points.
+# v5.6: total_pts sourced from user_match_points (per-match, cap/vc baked in)
 _LEADERBOARD_SQL = """
 WITH
 user_totals AS (
     SELECT us.display_name,
-           COALESCE(SUM(us.week_pts), 0) AS total_pts,
-           SUM(CASE WHEN us.week_pts > 0 THEN 1 ELSE 0 END) AS matches_counted
+           COALESCE(SUM(ump.pts), 0) AS total_pts,
+           COUNT(DISTINCT CASE WHEN ump.pts > 0 THEN ump.match_id END) AS matches_counted
     FROM  user_selections us
-    WHERE (CAST(:week_no AS INTEGER) IS NULL OR us.week_no = CAST(:week_no AS INTEGER))
+    LEFT JOIN user_match_points ump ON ump.display_name = us.display_name
+        AND (CAST(:week_no AS INTEGER) IS NULL OR ump.week_no = CAST(:week_no AS INTEGER))
     GROUP BY us.display_name
 ),
 scored_points AS (
@@ -322,12 +333,16 @@ class DatabaseManager:
         con = sqlite3.connect(self._path, timeout=30)
         con.execute("PRAGMA busy_timeout = 30000")
         con.executescript(_SCHEMA)
-        # v5.4 migration: add week_pts if the DB predates this version
-        try:
-            con.execute("ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0")
-            con.commit()
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        # v5.4 migration: add week_pts
+        for stmt in [
+            "ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0",
+            # v5.6 migration: add season_pts to players
+            "ALTER TABLE players ADD COLUMN season_pts INTEGER NOT NULL DEFAULT 0",
+        ]:
+            try:
+                con.execute(stmt); con.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
         con.close()
 
     def get_meta(self, key, default=""):
@@ -468,69 +483,154 @@ class DatabaseManager:
                 rows_written += 1
         return rows_written
 
+    def update_player_season_pts(self) -> int:
+        """
+        v5.6 — Set players.season_pts = SUM(base_pts) from player_match_points.
+        Call after update_week_points() so season totals reflect all scraped matches.
+        Returns number of players with season_pts > 0.
+        """
+        with self._write() as con:
+            # Reset all first
+            con.execute("UPDATE players SET season_pts = 0")
+            # Set from aggregated player_match_points
+            con.execute("""
+                UPDATE players SET season_pts = (
+                    SELECT COALESCE(SUM(pmp.base_pts), 0)
+                    FROM player_match_points pmp
+                    WHERE pmp.player_id = players.id
+                )
+            """)
+        with self._read() as con:
+            row = con.execute("SELECT COUNT(*) FROM players WHERE season_pts > 0").fetchone()
+            return row[0] if row else 0
+
     def update_week_points(self) -> int:
         """
-        v5.4 — Recompute week_pts for every user_selections row.
+        v5.6 — Recompute week_pts for every user_selections row AND populate
+        user_match_points for per-match granularity.
 
-        For each (display_name, week_no):
-          week_pts = SUM over tw_team_json players of:
-            base_pts * 2   if player == tw_cap_id
-            base_pts * 1.5 if player == tw_vc_id
-            base_pts       otherwise
-        Only matches player_match_points rows whose week_no matches the
-        selection week, so each week's team only earns points for that week.
-        Returns the number of user_selections rows updated.
+        For each (display_name, week_no, match_id):
+          pts = SUM(base_pts * multiplier) for players in that week's tw_team_json
+          applying cap(x2) and vc(x1.5) per that week's tw_cap_id / tw_vc_id.
+
+        week_pts = SUM of all match pts in that week.
+        Returns number of user_selections rows updated.
         """
+        # ── Read all data we need ────────────────────────────────────────────
         with self._read() as con:
-            rows = con.execute("""
-                SELECT
-                    us.display_name,
-                    us.week_no,
-                    COALESCE(CAST(SUM(
-                        CASE
-                            WHEN je.value = us.tw_cap_id THEN ROUND(pmp.base_pts * 2.0)
-                            WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
-                            ELSE pmp.base_pts
-                        END
-                    ) AS INTEGER), 0) AS week_pts
-                FROM user_selections us
-                JOIN json_each(us.tw_team_json) je
-                LEFT JOIN player_match_points pmp
-                    ON pmp.player_id = je.value
-                    AND pmp.week_no  = us.week_no
-                GROUP BY us.display_name, us.week_no
+            sels = con.execute("""
+                SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
+                FROM user_selections
             """).fetchall()
-        if not rows:
-            return 0
+
+            # (player_id, match_id) -> base_pts
+            pmp_map = {}
+            for r in con.execute(
+                "SELECT player_id, match_id, base_pts FROM player_match_points"
+            ).fetchall():
+                pmp_map[(r["player_id"], r["match_id"])] = r["base_pts"]
+
+            # week_no -> [match_id, ...]
+            week_matches: dict = {}
+            for r in con.execute(
+                "SELECT id, week_no FROM matches WHERE LOWER(status)='completed'"
+            ).fetchall():
+                week_matches.setdefault(r["week_no"], []).append(r["id"])
+
+        # ── Compute user_match_points and week totals ────────────────────────
+        ump_rows = []   # (display_name, week_no, match_id, pts)
+        wk_totals = {}  # (display_name, week_no) -> int
+
+        for sel in sels:
+            name = sel["display_name"]
+            wk   = sel["week_no"]
+            try:
+                ids = json.loads(sel["tw_team_json"] or "[]")
+            except Exception:
+                ids = []
+            cap = sel["tw_cap_id"]
+            vc  = sel["tw_vc_id"]
+
+            wk_total = 0
+            for mid in week_matches.get(wk, []):
+                match_pts = 0
+                for pid in ids:
+                    bp = pmp_map.get((pid, mid))
+                    if bp is not None:
+                        mult = 2.0 if pid == cap else (1.5 if pid == vc else 1.0)
+                        match_pts += round(bp * mult)
+                ump_rows.append((name, wk, mid, match_pts))
+                wk_total += match_pts
+
+            wk_totals[(name, wk)] = wk_total
+
+        # ── Write ────────────────────────────────────────────────────────────
         updated = 0
         with self._write() as con:
-            for row in rows:
+            for name, wk, mid, pts in ump_rows:
+                con.execute("""
+                    INSERT INTO user_match_points (display_name, week_no, match_id, pts)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(display_name, match_id) DO UPDATE SET
+                        pts=excluded.pts, week_no=excluded.week_no
+                """, (name, wk, mid, pts))
+            for (name, wk), pts in wk_totals.items():
                 con.execute(
                     "UPDATE user_selections SET week_pts=? WHERE display_name=? AND week_no=?",
-                    (row["week_pts"], row["display_name"], row["week_no"])
+                    (pts, name, wk)
                 )
                 updated += 1
         return updated
 
+    def get_user_match_points(self, display_name: str) -> list:
+        """
+        v5.6 — Return per-match points for a user, joined with match metadata.
+        Sorted by week_no, match_id.
+        """
+        with self._read() as con:
+            rows = con.execute("""
+                SELECT ump.display_name, ump.week_no, ump.match_id, ump.pts,
+                       m.title, m.status, m.teams_json
+                FROM user_match_points ump
+                JOIN matches m ON m.id = ump.match_id
+                WHERE ump.display_name = ?
+                ORDER BY ump.week_no, ump.match_id
+            """, (display_name,)).fetchall()
+        return [
+            {
+                "week_no":  r["week_no"],
+                "match_id": r["match_id"],
+                "title":    r["title"],
+                "status":   r["status"],
+                "teams":    _jloads(r["teams_json"], []),
+                "pts":      r["pts"],
+            }
+            for r in rows
+        ]
+
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
         """
-        v5.3/v5.4 — Called on every server restart.
-        1. DELETE all rows from match_scores and player_match_points.
-        2. Re-ingest every data/matches/*.json file into match_scores.
-        3. Recalculate player_match_points from the fresh match_scores.
-        4. Recompute user_selections.week_pts for every row (cap/vc aware).
-        Returns {files_ingested, pmp_rows, week_pts_rows}.
+        v5.6 — On every server restart (called by server.py startup):
+        1. DELETE match_scores, player_match_points, user_match_points.
+        2. Reset season_pts on all players to 0.
+        3. Re-ingest from JSON cache (if any remain).
+        4. recalculate_points() → player_match_points.
+        5. update_week_points() → user_match_points + user_selections.week_pts.
+        6. update_player_season_pts() → players.season_pts.
         """
         if json_dir is None:
             json_dir = Path(self._path).parent / "matches"
         json_dir = Path(json_dir)
 
-        # Step 1: Wipe both scoring tables
+        # Step 1 + 2: Wipe scoring tables
         with self._write() as con:
             con.execute("DELETE FROM player_match_points")
             con.execute("DELETE FROM match_scores")
+            con.execute("DELETE FROM user_match_points")
+            con.execute("UPDATE user_selections SET week_pts = 0")
+            con.execute("UPDATE players SET season_pts = 0")
 
-        # Step 2: Re-ingest scores from every JSON file
+        # Step 3: Re-ingest from JSON cache
         files_ingested = 0
         if json_dir.exists():
             files = sorted(
@@ -549,13 +649,19 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"  [rebuild] skip {fp.name}: {e}")
 
-        # Step 3: Recalculate player_match_points
+        # Step 4
         pmp_rows = self.recalculate_points()
-
-        # Step 4: Push week_pts into user_selections (cap×2, vc×1.5)
+        # Step 5
         week_pts_rows = self.update_week_points()
+        # Step 6
+        player_pts_rows = self.update_player_season_pts()
 
-        return {"files_ingested": files_ingested, "pmp_rows": pmp_rows, "week_pts_rows": week_pts_rows}
+        return {
+            "files_ingested": files_ingested,
+            "pmp_rows": pmp_rows,
+            "week_pts_rows": week_pts_rows,
+            "player_pts_rows": player_pts_rows,
+        }
 
     def hydrate_from_json(self, json_dir="data/matches") -> int:
         json_dir = Path(json_dir)
@@ -587,7 +693,6 @@ class DatabaseManager:
     def get_leaderboard(self, week_no=None) -> dict:
         with self._read() as con:
             rows = con.execute(_LEADERBOARD_SQL, {"week_no": week_no}).fetchall()
-            # v5.5: fetch per-week breakdown for each user
             if week_no is None:
                 wk_rows = con.execute(
                     "SELECT display_name, week_no, week_pts FROM user_selections ORDER BY week_no"
@@ -631,7 +736,7 @@ class DatabaseManager:
 
     def get_players(self) -> list:
         with self._read() as con:
-            rows = con.execute("SELECT id,name,team,role,price FROM players ORDER BY name").fetchall()
+            rows = con.execute("SELECT id,name,team,role,price,season_pts FROM players ORDER BY season_pts DESC, name").fetchall()
             return [dict(r) for r in rows]
 
     def get_history(self, name: str) -> dict:
@@ -737,7 +842,8 @@ class DatabaseManager:
 
     def reset(self) -> None:
         with self._write() as con:
-            for t in ("match_scores","player_match_points","user_selections","matches","meta"):
+            for t in ("match_scores","player_match_points","user_match_points",
+                      "user_selections","matches","meta"):
                 con.execute(f"DELETE FROM {t}")
 
     def do_rollover(self) -> dict:
