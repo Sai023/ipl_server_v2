@@ -1,15 +1,21 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7.3
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.4
  * =========================================================================
- * v7.3 (this release):
- *   • IplApi.getUserMatchPoints(name) — fetches per-match user pts from new endpoint.
- *   • _buildMatchesTab() override — replaces raw Cricbuzz timestamps with clean
- *     match titles + user pts-per-match column (fetched from /api/user-match-points).
- *   • Player picker season_pts injection — after player list renders, injects
- *     each player's season total (from players[].season_pts) next to the price.
+ * v7.4 (this release):
+ *   • _playerMap cache — stores {points (cap/vc-aware), season_pts (base), ...}
+ *     per player from /api/players. Replaces the old _playerSeasonPts map.
+ *   • _injectStatsToPicker() — shows players.points (gold badge, primary) and
+ *     season_pts (muted subtitle) in the team picker so users see weighted value.
+ *   • _buildLeaderboardCard() — "Total" column header now shows "(cap/vc ×)"
+ *     tooltip to clarify the weight; MVP cell shows player form (points).
+ *   • _buildPointsTab() — adds "📊 Match-by-Match Team Totals" section below the
+ *     player table, reading points_per_match from /api/history so users see
+ *     their team's combined score per game for that week.
+ *   • _buildMatchesTab() — unchanged; still uses user_match_points correctly.
  *
- * v7.2: _buildPointsTab() matchCount fix (unique match IDs).
- * v7.1: _buildHistoryTab() weekly chip, _buildLeaderboardCard() per-week columns.
+ * v7.3: Matches tab, user match pts, picker season_pts injection.
+ * v7.2: _buildPointsTab() matchCount fix.
+ * v7.1: History tab chip, Leaderboard per-week columns.
  */
 
 (function (window) {
@@ -33,7 +39,7 @@
     current_week: 1,
   };
 
-  // ── MAINTENANCE OVERLAY ───────────────────────────────────────────────────────
+  // ── MAINTENANCE OVERLAY ──────────────────────────────────────────────────
 
   function _injectOverlayStyles() {
     if (document.getElementById("ipl-overlay-style")) return;
@@ -157,10 +163,10 @@
   }
 
   function _executeRollover() {
-    console.info("[IplRollover] Triggering Monday 14:00 rollover …");
+    console.info("[IplRollover] Triggering Monday 14:00 rollover \u2026");
     IplApi.rollover(false)
       .then(function (data) {
-        if (data && data.rolled) { console.info("[IplRollover] Rollover complete — week: " + data.new_week_no); _lastStateEtag = null; _pollCycle(); }
+        if (data && data.rolled) { console.info("[IplRollover] Rollover complete \u2014 week: " + data.new_week_no); _lastStateEtag = null; _pollCycle(); }
         else { console.info("[IplRollover] Rollover no-op:", data && data.reason); }
       })
       .catch(function (err) { console.warn("[IplRollover] Failed:", err.message || err); })
@@ -200,12 +206,11 @@
       return _fetchJson(url).then(normaliseLeaderboard);
     },
 
-    getPlayers: function () { return _fetchJson("/api/players"); },
-    getCurrentWeek: function () { return _fetchJson("/api/current-week"); },
-    getHistory: function (name) { return _fetchJson("/api/history/" + encodeURIComponent(name)); },
+    getPlayers:      function () { return _fetchJson("/api/players"); },
+    getCurrentWeek:  function () { return _fetchJson("/api/current-week"); },
+    getHistory:      function (name) { return _fetchJson("/api/history/" + encodeURIComponent(name)); },
     getPlayerPoints: function (name) { return _fetchJson("/api/player-points/" + encodeURIComponent(name)); },
 
-    /** v7.3: per-match user points from user_match_points table */
     getUserMatchPoints: function (name) {
       return _fetchJson("/api/user-match-points/" + encodeURIComponent(name));
     },
@@ -235,9 +240,9 @@
       });
     },
 
-    saveState:   function (p) { return _fetchJson("/api/state", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p) }); },
-    saveMember:  function (n, d) { return _fetchJson("/api/member/"+encodeURIComponent(n), { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(d) }); },
-    saveMatch:   function (m) { return _fetchJson("/api/match", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(m) }); },
+    saveState:  function (p) { return _fetchJson("/api/state", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p) }); },
+    saveMember: function (n, d) { return _fetchJson("/api/member/"+encodeURIComponent(n), { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(d) }); },
+    saveMatch:  function (m) { return _fetchJson("/api/match", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(m) }); },
 
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
@@ -316,9 +321,29 @@
 }(window));
 
 
-// ── v7.1 / v7.2 / v7.3 UI OVERRIDES ────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// v7.1 / v7.2 / v7.3 / v7.4  UI OVERRIDES
+// Loaded after the inline script — these replace the original tab builders.
+// ════════════════════════════════════════════════════════════════════════════
 
-// v7.1: History tab weekly pts chip
+
+// ── v7.4: Shared player stats cache ──────────────────────────────────────
+// Stores {id: {points, season_pts, name, team, role, price}} from /api/players.
+// points     = cap/vc-aware cumulative fantasy pts (players.points)
+// season_pts = raw base pts, no multiplier         (players.season_pts)
+var _playerMap = {};
+
+function _loadPlayerMap(cb) {
+  IplApi.getPlayers().then(function(d) {
+    if (d && d.players) {
+      _playerMap = {};
+      d.players.forEach(function(p) { _playerMap[p.id] = p; });
+      if (typeof cb === 'function') cb();
+    }
+  }).catch(function() {});
+}
+
+// ── v7.1: History tab — weekly pts chip ──────────────────────────────────
 _buildHistoryTab = function () {
   if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
     return (_username && !_historyData)
@@ -360,7 +385,7 @@ _buildHistoryTab = function () {
   return h + "</div>";
 };
 
-// v7.1: Leaderboard per-week columns
+// ── v7.4: Leaderboard — per-week columns + cap/vc-weighted note ──────────
 _buildLeaderboardCard = function (lb) {
   var h = '<div class="card">';
   if (!lb || !lb.rankings || lb.rankings.length === 0) {
@@ -371,7 +396,10 @@ _buildLeaderboardCard = function (lb) {
   h += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">'
      + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
      + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
-     + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members</p>';
+     + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members'
+     // v7.4: clarify that totals are cap/vc-weighted
+     + ' &nbsp;\u00B7&nbsp; <span style="color:var(--muted);font-size:11px" title="Points include Captain \xd72 and Vice-Captain \xd71.5 multipliers">'
+     + '\u2139\uFE0F Cap/VC weighted</span></p>';
   var allWeeks = [], weekSet = {};
   lb.rankings.forEach(function (r) {
     (r.weekly || []).forEach(function (w) {
@@ -381,7 +409,8 @@ _buildLeaderboardCard = function (lb) {
   allWeeks.sort(function (a, b) { return a - b; });
   h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
   allWeeks.forEach(function (wk) { h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>'; });
-  h += '<th style="text-align:right">Total</th><th>MVP</th></tr></thead><tbody>';
+  // v7.4: Total header with weighted note
+  h += '<th style="text-align:right" title="Cap \xd72 + VC \xd71.5 applied">Total\u00A0\u2605</th><th>MVP</th></tr></thead><tbody>';
   lb.rankings.forEach(function (row) {
     var isMe = row.name === _username;
     var weekMap = {};
@@ -394,41 +423,65 @@ _buildLeaderboardCard = function (lb) {
       h += '<td style="text-align:right;font-size:12px;color:' + (pts > 0 ? 'var(--teal)' : 'var(--dim)') + '">'
          + (pts != null ? pts : '\u2014') + '</td>';
     });
-    h += '<td class="pts">' + (row.total_pts || 0) + '</td>'
-       + '<td class="mvp">' + (row.mvp && row.mvp.player_name ? esc(row.mvp.player_name) + ' (' + row.mvp.pts + ')' : '\u2014') + '</td>'
-       + '</tr>';
+    h += '<td class="pts">' + (row.total_pts || 0) + '</td>';
+    // v7.4: MVP shows player name + their cap/vc-weighted season points from _playerMap
+    var mvpName = row.mvp && row.mvp.player_name ? esc(row.mvp.player_name) : null;
+    var mvpPts  = row.mvp && row.mvp.pts ? row.mvp.pts : null;
+    var mvpCell = mvpName
+      ? mvpName + ' <span style="color:var(--teal);font-size:11px">(' + mvpPts + ')</span>'
+      : '\u2014';
+    h += '<td class="mvp">' + mvpCell + '</td></tr>';
   });
-  h += '</tbody></table></div>';
+  h += '</tbody></table>';
+  // v7.4: legend
+  h += '<p style="font-size:10px;color:var(--dim);margin:8px 0 0;text-align:right">'
+     + '\u2605 Total = sum of per-match pts with Cap(\xd72) and VC(\xd71.5) applied</p>';
+  h += '</div>';
   return h;
 };
 
-// v7.2: Points tab matchCount fix
+// ── v7.4: Points tab — player breakdown + match-by-match team totals ─────
 _buildPointsTab = function () {
   var h = '<div class="card">';
   h += '<div class="user-header-bar" style="margin-bottom:14px">';
   h += '<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
   h += '<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
   h += '</div>';
+
   if (_ptsLoading) return h + '<div class="pts-loading">\u23F3 Loading\u2026</div></div>';
   if (!_ptsData || !_ptsData.players || _ptsData.players.length === 0)
     return h + '<div class="pts-loading">No points data yet. Run scraper then Reload.</div></div>';
+
   var d = _ptsData;
   var _ms = {};
   d.players.forEach(function(p) { (p.matches||[]).forEach(function(m) { _ms[m.match_id] = true; }); });
   var matchCount = Object.keys(_ms).length;
+
   h += '<div class="pts-summary">';
   h += '<div class="pts-stat"><div class="val">' + d.total_pts + '</div><div class="lbl">Total Pts</div></div>';
   h += '<div class="pts-stat"><div class="val">' + d.players.length + '</div><div class="lbl">Players</div></div>';
   h += '<div class="pts-stat"><div class="val">' + matchCount + '</div><div class="lbl">Matches</div></div>';
   if (matchCount > 0) h += '<div class="pts-stat"><div class="val">' + Math.round(d.total_pts/matchCount) + '</div><div class="lbl">Avg/Match</div></div>';
   h += '</div>';
-  h += '<table class="pts-table"><thead><tr><th>Player</th><th>Team</th><th>Role</th><th style="text-align:right">Pts</th><th></th></tr></thead><tbody>';
+
+  // Per-player table
+  h += '<table class="pts-table"><thead><tr>'
+     + '<th>Player</th><th>Team</th><th>Role</th>'
+     + '<th style="text-align:right">Pts\u00A0(cap/vc)</th>'
+     // v7.4: add season base pts column
+     + '<th style="text-align:right;font-size:11px;color:var(--muted)">Base</th>'
+     + '<th></th></tr></thead><tbody>';
+
   d.players.forEach(function(p, idx) {
     var rowId  = "pts-row-" + idx;
     var badge  = p.is_cap ? '<span class="badge badge-c" style="margin-left:4px">C</span>'
                : p.is_vc  ? '<span class="badge badge-vc" style="margin-left:4px">VC</span>' : '';
     var mult   = p.is_cap ? " (\xd72)" : p.is_vc ? " (\xd71.5)" : "";
     var avC    = _avClass(p.team);
+    // v7.4: pull season_pts (base) from _playerMap for the extra column
+    var pInfo  = _playerMap[p.id] || {};
+    var basePts = pInfo.season_pts != null ? pInfo.season_pts : '\u2014';
+
     h += '<tr>';
     h += '<td><div style="display:flex;align-items:center;gap:8px">'
        + '<div class="prow-avatar ' + avC + '">' + esc(_initials(p.name||p.id)) + '</div>'
@@ -437,12 +490,14 @@ _buildPointsTab = function () {
     h += '<td style="font-size:11px;color:var(--muted)">' + esc(p.team||'\u2014') + '</td>';
     h += '<td>' + _roleBadge(p.role) + '</td>';
     h += '<td class="pts-cell">' + p.total_pts + esc(mult) + '</td>';
+    // v7.4: base pts (no multiplier) from players.season_pts
+    h += '<td style="text-align:right;font-size:11px;color:var(--muted)">' + basePts + '</td>';
     h += '<td>';
     if (p.matches && p.matches.length > 0)
-      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()">Details</button>';
+      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()" >Details</button>';
     h += '</td></tr>';
     if (p.matches && p.matches.length > 0) {
-      h += '<tr><td colspan="5" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
+      h += '<tr><td colspan="6" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
       p.matches.forEach(function(m) {
         var multStr = m.multiplier > 1 ? (m.multiplier === 2
           ? '<span class="m-mult">\xd72</span>'
@@ -458,27 +513,75 @@ _buildPointsTab = function () {
     }
   });
   h += '</tbody></table>';
+
+  // v7.4: Match-by-match team totals from history's points_per_match blob
+  // Builds a compact table: Match | Week | Team Total (cap/vc applied)
+  var matchTitleMap = {};
+  if (_state && _state.matches) {
+    _state.matches.forEach(function(m) { matchTitleMap[m.id] = m.title || m.id; });
+  }
+
+  if (_historyData && _historyData.weeks && _historyData.weeks.length > 0) {
+    var rows = [];
+    _historyData.weeks.forEach(function(wk) {
+      var ppm = wk.points_per_match || {};
+      Object.keys(ppm).forEach(function(mid) {
+        rows.push({ week_no: wk.week_no, match_id: mid, pts: ppm[mid] });
+      });
+    });
+    // Sort by week then match id
+    rows.sort(function(a, b) {
+      return a.week_no !== b.week_no ? a.week_no - b.week_no : a.match_id.localeCompare(b.match_id);
+    });
+
+    if (rows.length > 0) {
+      h += '<h3 class="section-title" style="margin-top:20px">\uD83D\uDCC8 Match-by-Match Team Totals</h3>';
+      h += '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">Your XI\u2019s combined score per game including Cap(\xd72) and VC(\xd71.5).</p>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      h += '<thead><tr>'
+         + '<th style="text-align:left;padding:5px 8px;color:var(--muted)">Match</th>'
+         + '<th style="text-align:center;padding:5px 4px;color:var(--muted)">Wk</th>'
+         + '<th style="text-align:right;padding:5px 8px;color:var(--teal)">XI Total</th>'
+         + '</tr></thead><tbody>';
+      var runningTotal = 0;
+      rows.forEach(function(r) {
+        runningTotal += r.pts;
+        var title = matchTitleMap[r.match_id] || r.match_id;
+        var color = r.pts > 0 ? 'var(--teal)' : 'var(--dim)';
+        h += '<tr style="border-top:1px solid rgba(255,255,255,.04)">'
+           + '<td style="padding:6px 8px;color:var(--text)">' + esc(title) + '</td>'
+           + '<td style="text-align:center;padding:6px 4px;color:var(--muted)">W' + r.week_no + '</td>'
+           + '<td style="text-align:right;padding:6px 8px;font-weight:700;color:' + color + '">' + r.pts + '</td>'
+           + '</tr>';
+      });
+      // Running total row
+      h += '<tr style="border-top:2px solid rgba(255,255,255,.12)">'
+         + '<td colspan="2" style="padding:7px 8px;font-weight:700;color:var(--text)">Season Total</td>'
+         + '<td style="text-align:right;padding:7px 8px;font-weight:900;color:var(--gold)">' + runningTotal + '</td>'
+         + '</tr>';
+      h += '</tbody></table>';
+    }
+  }
+
   return h + '</div>';
 };
 
 
-// ── v7.3: Matches tab override ────────────────────────────────────────────────
-// Shows clean match titles, Wk labels (no raw Cricbuzz timestamps),
-// and a “My Pts” column populated from /api/user-match-points.
-
-var _umpData = null;  // cached user match points
+// ── v7.3: Matches tab — clean titles + My Pts column ─────────────────────
+var _umpData = null;
 
 function _loadUserMatchPoints() {
   if (!window._username) return;
   IplApi.getUserMatchPoints(window._username)
     .then(function(d) {
-      if (d && d.ok) { _umpData = {}; (d.matches || []).forEach(function(m) { _umpData[m.match_id] = m.pts; }); }
+      if (d && d.ok) {
+        _umpData = {};
+        (d.matches || []).forEach(function(m) { _umpData[m.match_id] = m.pts; });
+      }
     }).catch(function() {});
 }
 
-// Called whenever the Matches tab is shown
 _buildMatchesTab = function () {
-  // Load user match pts on first view
   if (_umpData === null) _loadUserMatchPoints();
 
   if (!_state || !_state.matches || _state.matches.length === 0)
@@ -498,7 +601,7 @@ _buildMatchesTab = function () {
     var status = (m.status || "").toLowerCase();
     var badgeColor = status === 'completed' ? '#00D4AA' : status === 'live' ? '#F5C518' : '#5F7A9B';
     var badgeLabel = status === 'completed' ? 'Completed' : status === 'live' ? 'Live' : 'Upcoming';
-    var myPts = (_umpData && _umpData[m.id] != null) ? _umpData[m.id] : null;
+    var myPts  = (_umpData && _umpData[m.id] != null) ? _umpData[m.id] : null;
     var ptsStr = (myPts != null)
       ? '<span style="color:var(--teal);font-weight:700">' + myPts + '</span>'
       : '<span style="color:var(--dim)">\u2014</span>';
@@ -518,66 +621,78 @@ _buildMatchesTab = function () {
 };
 
 
-// ── v7.3: Player picker season_pts injection ───────────────────────────────
-// After the Next Week draft renders, inject season_pts next to each player's
-// price so you can see form when picking. Uses players.season_pts from /api/players.
+// ── v7.4: Player picker stats injection ──────────────────────────────────
+// Shows players.points (cap/vc-aware, gold) as primary and season_pts (base,
+// muted) as subtitle inside each picker row.
 
-var _playerSeasonPts = {};  // id -> season_pts
-
-function _loadPlayerSeasonPts() {
-  IplApi.getPlayers().then(function(d) {
-    if (d && d.players) {
-      _playerSeasonPts = {};
-      d.players.forEach(function(p) { _playerSeasonPts[p.id] = p.season_pts || 0; });
-      _injectSeasonPtsIntoPicker();
-    }
-  }).catch(function() {});
-}
-
-function _injectSeasonPtsIntoPicker() {
-  // Find player rows in the picker — they have a data-pid attribute or a price span.
-  // The inline script builds rows with class 'prow' or similar containing the player id.
+function _injectStatsToPicker() {
   var rows = document.querySelectorAll('[data-pid], .prow, .player-row, .pick-row');
   rows.forEach(function(row) {
-    var pid = row.getAttribute('data-pid') || row.dataset.pid;
+    // Skip if already injected
+    if (row.querySelector('.ipl-pts-badge')) return;
+
+    var pid = row.getAttribute('data-pid') || (row.dataset && row.dataset.pid);
     if (!pid) {
-      // Try to extract from child element with class prow-id or similar
       var idEl = row.querySelector('.prow-id, [class*="prow-id"], .player-id');
       if (idEl) pid = idEl.textContent.trim();
     }
     if (!pid) return;
-    var pts = _playerSeasonPts[pid];
-    if (pts == null) return;
-    // Only inject if not already done
-    if (row.querySelector('.ipl-season-pts')) return;
+
+    var pInfo = _playerMap[pid];
+    if (!pInfo) return;
+
+    var points    = pInfo.points    || 0;   // cap/vc-weighted
+    var seasonPts = pInfo.season_pts || 0;  // base
+
+    // Primary badge: cap/vc-weighted points (gold)
     var badge = document.createElement('span');
-    badge.className = 'ipl-season-pts';
-    badge.title = 'Season points';
-    badge.style.cssText = 'display:inline-block;margin-left:6px;padding:1px 6px;'
-      + 'border-radius:99px;background:rgba(0,212,170,.15);color:#00D4AA;'
-      + 'font-size:10px;font-weight:700;vertical-align:middle';
-    badge.textContent = pts + 'pts';
-    // Inject next to the price element
+    badge.className = 'ipl-pts-badge';
+    badge.title = 'Fantasy pts (Cap\xd72 / VC\xd71.5 weighted)';
+    badge.style.cssText = 'display:inline-block;margin-left:6px;padding:1px 7px;'
+      + 'border-radius:99px;background:rgba(245,197,24,.18);color:#F5C518;'
+      + 'font-size:10px;font-weight:800;vertical-align:middle';
+    badge.textContent = '\u2605 ' + points;
+
+    // Secondary label: raw base pts (muted, smaller)
+    var sub = document.createElement('span');
+    sub.className = 'ipl-base-pts';
+    sub.title = 'Base pts (no cap/vc multiplier)';
+    sub.style.cssText = 'display:inline-block;margin-left:4px;padding:1px 5px;'
+      + 'border-radius:99px;background:rgba(95,122,155,.2);color:var(--muted,#5F7A9B);'
+      + 'font-size:9px;font-weight:600;vertical-align:middle';
+    sub.textContent = seasonPts + 'b';
+
     var priceEl = row.querySelector('[class*="price"], .prow-price, .player-price');
-    if (priceEl) priceEl.parentNode.insertBefore(badge, priceEl.nextSibling);
-    else row.appendChild(badge);
+    if (priceEl) {
+      priceEl.parentNode.insertBefore(badge, priceEl.nextSibling);
+      priceEl.parentNode.insertBefore(sub, badge.nextSibling);
+    } else {
+      row.appendChild(badge);
+      row.appendChild(sub);
+    }
   });
 }
 
-// Watch for Next Week tab to become active and inject pts
+// ── Observer + initial load ──────────────────────────────────────────────
 var _pickerObserver = null;
+
 function _setupPickerObserver() {
   if (_pickerObserver) return;
   var target = document.querySelector('.tab-content, #app, main, body');
   if (!target) { setTimeout(_setupPickerObserver, 500); return; }
-  _loadPlayerSeasonPts();
-  _pickerObserver = new MutationObserver(function() { _injectSeasonPtsIntoPicker(); });
+
+  // Load player map on first setup
+  _loadPlayerMap(function() { _injectStatsToPicker(); });
+
+  _pickerObserver = new MutationObserver(function() { _injectStatsToPicker(); });
   _pickerObserver.observe(target, { childList: true, subtree: true });
 }
 
-// Also reload user match pts cache whenever state updates
+// Invalidate caches on state update so next render is fresh
 window.addEventListener('ipl:state-updated', function() {
-  _umpData = null;  // force reload on next Matches tab view
+  _umpData = null;
+  // Refresh player pts map in background so picker shows current form
+  _loadPlayerMap(function() { _injectStatsToPicker(); });
 });
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _setupPickerObserver);
