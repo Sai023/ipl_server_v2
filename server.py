@@ -1,12 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.4
+IPL Fantasy 2026 — Flask Server                             Golden File v12.5
 ===========================================================================
-v12.4 (this release):
-  _SEMANTIC_MAP updated:
-    "sooryavanshi" → "vaibhav sooryavanshi" (Cricbuzz/Cricinfo official spelling)
-    "suryavanshi"  → "vaibhav sooryavanshi" (user-friendly alias)
-  Matches rr11 name change in Seed_Players.py v2.
-v12.3: On restart wipe match_scores + JSON cache; scraper repopulates.
+v12.5 (this release):
+  _SEED_VERSION bumped to v8 — W3/W4 now use their own explicit team variables
+  instead of reusing W2 references. Triggers re-seed on next restart.
+  _audit_player_id_coverage fixed — only flags IDs NOT in the players table
+  as true ghosts. IDs in players but not in player_match_points (expected
+  after restart before scraper runs) are no longer falsely flagged.
+v12.4: _SEMANTIC_MAP sooryavanshi/suryavanshi aliases.
+v12.3: On restart wipe match_scores + JSON cache.
 v12.2: /api/audit-scores/<n>, /api/clean-scores.
 """
 
@@ -64,9 +66,8 @@ _SEMANTIC_MAP = {
     "vc":"varun chakravarthy","chahar":"deepak chahar","duffy":"jacob duffy",
     "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
     "ravindra":"rachin ravindra",
-    # Vaibhav Sooryavanshi — Cricbuzz/Cricinfo use "Sooryavanshi" (double-o)
     "sooryavanshi":"vaibhav sooryavanshi",
-    "suryavanshi":"vaibhav sooryavanshi",   # user-friendly alias
+    "suryavanshi":"vaibhav sooryavanshi",
     "vaibhav":"vaibhav sooryavanshi",
     "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
     "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
@@ -76,7 +77,8 @@ _SEMANTIC_MAP = {
 }
 
 # ── History seed ─────────────────────────────────────────────────────────────
-_SEED_VERSION = "2026.v7.correct-ids"
+# v8: W3/W4 defined with their own explicit variables (same teams as W2 currently)
+_SEED_VERSION = "2026.v8.w3w4-defined"
 
 _SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r11","m04","m07","m12"]
 _SAI_W1_CAP  = "k04"
@@ -86,6 +88,14 @@ _SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s
 _SAI_W2_CAP  = "c09"
 _SAI_W2_VC   = "rr11"
 
+_SAI_W3_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
+_SAI_W3_CAP  = "c09"
+_SAI_W3_VC   = "rr11"
+
+_SAI_W4_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
+_SAI_W4_CAP  = "c09"
+_SAI_W4_VC   = "rr11"
+
 _MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
 _MOE_W1_CAP  = "r03"
 _MOE_W1_VC   = "s04"
@@ -94,15 +104,23 @@ _MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l0
 _MOE_W2_CAP  = "l01"
 _MOE_W2_VC   = "s04"
 
+_MOE_W3_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
+_MOE_W3_CAP  = "l01"
+_MOE_W3_VC   = "s04"
+
+_MOE_W4_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
+_MOE_W4_CAP  = "l01"
+_MOE_W4_VC   = "s04"
+
 _HISTORY_SEED = [
     ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
     ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
     ("Sai", 2, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
     ("Moe", 2, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
-    ("Sai", 3, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
-    ("Moe", 3, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
-    ("Sai", 4, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
-    ("Moe", 4, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
+    ("Sai", 3, _SAI_W3_TEAM, _SAI_W3_CAP, _SAI_W3_VC),
+    ("Moe", 3, _MOE_W3_TEAM, _MOE_W3_CAP, _MOE_W3_VC),
+    ("Sai", 4, _SAI_W4_TEAM, _SAI_W4_CAP, _SAI_W4_VC),
+    ("Moe", 4, _MOE_W4_TEAM, _MOE_W4_CAP, _MOE_W4_VC),
 ]
 
 
@@ -272,7 +290,7 @@ def _auto_seed_players_if_needed():
 
 
 def _auto_seed_history_if_needed():
-    """v11.7: Versioned history seed with draft preservation."""
+    """v11.7/v12.5: Versioned history seed with draft preservation."""
     try:
         con = _db_con()
         ver_row = con.execute("SELECT value FROM meta WHERE key='_seed_version'").fetchone()
@@ -281,7 +299,7 @@ def _auto_seed_history_if_needed():
             print("  [startup] Season history up-to-date.")
             con.close(); return
 
-        print(f"  [startup] Seed version ({stored_ver!r} → {_SEED_VERSION!r}) — re-seeding W1/W2/W3...")
+        print(f"  [startup] Seed version ({stored_ver!r} → {_SEED_VERSION!r}) — re-seeding history...")
         seeded_names = list(set(name for name, _, _, _, _ in _HISTORY_SEED))
         max_seed_wk  = max(wk for _, wk, _, _, _ in _HISTORY_SEED)
         nw_backups = {}; extra_weeks = {}
@@ -351,8 +369,7 @@ def _auto_seed_history_if_needed():
 def _rebuild_scores_and_points():
     """
     v12.3 — On every server restart: wipe match_scores, player_match_points,
-    week_pts AND delete all cached JSON files so the scraper is forced to
-    re-fetch fresh, correct scorecards from Cricbuzz.
+    week_pts AND delete all cached JSON files so the scraper re-fetches fresh.
     After restart run: python scraper.py
     """
     try:
@@ -367,23 +384,27 @@ def _rebuild_scores_and_points():
         if matches_dir.exists():
             for f in matches_dir.glob("*.json"):
                 try:
-                    f.unlink()
-                    deleted += 1
+                    f.unlink(); deleted += 1
                 except Exception as e2:
                     print(f"  [startup] Could not delete {f.name}: {e2}")
 
-        print(f"  [startup] ✓ Cleared all score data. Deleted {deleted} cached JSON files.")
-        print("  [startup] ► Run: python scraper.py   to repopulate with fresh data.")
+        print(f"  [startup] \u2713 Cleared all score data. Deleted {deleted} cached JSON files.")
+        print("  [startup] \u25ba Run: python scraper.py   to repopulate with fresh data.")
     except Exception as e:
         print(f"  [startup] _rebuild_scores_and_points failed: {e}")
 
 
 def _audit_player_id_coverage():
-    """Check all tw_team_json IDs against player_match_points and print any ghosts."""
+    """
+    v12.5 fix: Only flags IDs that are NOT in the players table (true ghosts—wrong ID).
+    IDs that ARE in players but not in player_match_points are expected after
+    restart (pmp is cleared); they are NOT reported as ghosts.
+    """
     try:
         with db._read() as con:
             con.row_factory = sqlite3.Row
             pmp_ids = {r[0] for r in con.execute("SELECT DISTINCT player_id FROM player_match_points").fetchall()}
+            all_player_ids = {r["id"] for r in con.execute("SELECT id FROM players").fetchall()}
             all_players = {r["id"]: r["name"] for r in con.execute("SELECT id,name FROM players").fetchall()}
             sels = con.execute(
                 "SELECT display_name, week_no, tw_team_json FROM user_selections ORDER BY display_name, week_no"
@@ -394,22 +415,25 @@ def _audit_player_id_coverage():
             ).fetchall()}
 
         print("  [startup] === Player ID Coverage Audit ===")
-        ghost_found = False; seen_ghosts = set()
+        true_ghosts = set()  # IDs not in players table AT ALL
         for sel in sels:
             name = sel["display_name"]; wk = sel["week_no"]
             try: ids = _json.loads(sel["tw_team_json"] or "[]")
             except: continue
             for pid in ids:
-                if pid not in pmp_ids and pid not in seen_ghosts:
-                    seen_ghosts.add(pid); ghost_found = True
-                    real_name = all_players.get(pid, "NOT IN players table")
+                if pid not in all_player_ids and pid not in true_ghosts:
+                    true_ghosts.add(pid)
                     prefix = re.match(r'^[a-z]+', pid)
                     suggestions = [f"{p_id}={p_nm}" for p_id,p_nm in all_players.items()
                                    if prefix and p_id.startswith(prefix.group()) and p_id != pid][:4]
-                    print(f"  [startup] ⚠  GHOST '{pid}' ({name}/W{wk}): "
-                          f"players={real_name}. Alternatives: {', '.join(suggestions) or 'none'}")
-        if not ghost_found:
-            print("  [startup] ✓ All IDs verified in player_match_points — no ghosts.")
+                    print(f"  [startup] \u26a0  TRUE GHOST '{pid}' ({name}/W{wk}): "
+                          f"NOT in players table! Alternatives: {', '.join(suggestions) or 'none'}")
+
+        if not true_ghosts:
+            print("  [startup] \u2713 All selected player IDs exist in players table.")
+            if not pmp_ids:
+                print("  [startup]   player_match_points is empty (normal after restart) — run: python scraper.py")
+
         print("  [startup] === Per-user cumulative totals (from week_pts) ===")
         for uname, pts in sorted(totals.items()):
             print(f"  [startup]   {uname}: {pts} pts")
@@ -1106,7 +1130,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()
-    _rebuild_scores_and_points()         # v12.3: clear + delete JSON cache on every restart
+    _rebuild_scores_and_points()
     _audit_player_id_coverage()
 
     if args.tunnel:

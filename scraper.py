@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.6
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.7
 ================================================
+v10.7:
+  FIX-012: No-result/abandoned matches — if Cricbuzz state is "no result"
+            or "abandoned", persist the match with empty scores so 0 points
+            are awarded. Rain-affected matches WITH a result still scrape
+            normally regardless of overs played.
+  FIX-013: "catch: 'and'" dropped fielding — "c and b X" (caught-and-bowled
+            spelled out instead of c&b) now handled in _parse_dismissal.
+            The regex now matches c&b, c & b, AND c and b.
 v10.6:
-  FIX-010: Crash fix — scheduled-teams cross-check used wrong column name
-            "teams" instead of "teams_json" (OperationalError: no such column).
-  FIX-011: Clean up SyntaxWarning — invalid escape sequences '\"' and '\)'
-            in fetch_scorecard_json() replaced with clean equivalents.
+  FIX-010: teams_json column name fix.
+  FIX-011: SyntaxWarning escape sequences.
 v10.5:
-  FIX-009: IPL team validation before persisting any scorecard.
+  FIX-009: IPL team validation before persisting.
 v10.4:
   FIX-008: Team-aware fuzzy matching.
-v10.3:
-  FIX-007: update_week_points() after recalculate_points().
-v10.2:
-  FIX-006: _m anchor regex.
 """
 
 import json
@@ -63,6 +65,11 @@ _TEAM_PREFIX = {
 # Known valid IPL 2026 team short-names as returned by Cricbuzz
 _IPL_TEAMS = frozenset(_TEAM_PREFIX.keys())
 
+# FIX-012: Match states that mean no result — persist with empty scores
+_NO_RESULT_STATES = frozenset({
+    "no result", "match abandoned", "abandoned", "cancelled", "match cancelled"
+})
+
 
 # ════ OVERS NORMALISATION
 
@@ -91,7 +98,7 @@ def _fetch_ordered_ids() -> list:
     try:
         r = requests.get(url, headers=HEADERS, timeout=25)
         if r.status_code != 200:
-            print(f"  [discover] HTTP {r.status_code} — discovery unavailable")
+            print(f"  [discover] HTTP {r.status_code} \u2014 discovery unavailable")
             return []
         seen = set()
         for m in re.finditer(r'/live-cricket-scores/(\d{5,})/', r.text):
@@ -166,10 +173,19 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
             start       = r.text.rfind("self.__next_f.push", 0, idx)
             chunk       = r.text[start:]
             inner_start = chunk.find('"') + 1
-            # FIX-011: clean escape sequences (no backslash before " or ) needed)
-            end_idx = chunk.find('"]\n', inner_start)
+            end_idx = chunk.find('"]\'\n', inner_start)
             if end_idx == -1:
-                end_idx = chunk.find('"])')
+                end_idx = chunk.find('\'"]\')', inner_start)
+            if end_idx == -1:
+                end_idx = chunk.find('"]\')', inner_start)
+            if end_idx == -1:
+                end_idx = chunk.find('\'"]\'\n', inner_start)
+            # fallback: find closing pattern robustly
+            for pat in ['"]\'\n', '\'"]\')', '"]\')', '\'"]\'\n', '\'"]\'\r\n']:
+                ei = chunk.find(pat, inner_start)
+                if ei != -1:
+                    end_idx = ei
+                    break
             json_str    = chunk[inner_start:end_idx].encode().decode("unicode_escape")
             sc_idx      = json_str.find("scorecardApiData")
             brace_start = json_str.find("{", sc_idx)
@@ -207,7 +223,8 @@ def _parse_dismissal(out_desc: str) -> dict:
         result["is_lbw_bowled"] = True
         result["bowler"]        = re.sub(r"^b\s+", "", desc, flags=re.I).strip()
     elif dl.startswith("c ") or dl.startswith("c&"):
-        cb = re.match(r"c\s*&\s*b\s+(.+)", desc, re.I)
+        # FIX-013: Handle c&b, c & b, AND c and b (caught-and-bowled variants)
+        cb = re.match(r"c\s*(?:&|and)\s*b\s+(.+)", desc, re.I)
         if cb:
             n = cb.group(1).strip()
             result["caught_by"] = n; result["bowler"] = n
@@ -403,22 +420,35 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
     return stats
 
 
-def _extract_meta(data: dict, iid: str, wk: int) -> dict:
+def _extract_meta(data: dict, iid: str, wk: int) -> tuple[dict, bool]:
+    """
+    Returns (meta_dict, is_no_result).
+    is_no_result=True for abandoned/no-result matches — caller skips scoring.
+    Rain-affected matches with a result return is_no_result=False.
+    """
     h     = data.get("matchHeader", {})
     teams = []
     for inn in data.get("scoreCard", []):
         t = inn.get("batTeamDetails", {}).get("batTeamShortName", "")
         if t and t not in teams: teams.append(t)
     title = h.get("matchDescription", "")
-    st    = (h.get("state", "") or "").lower()
-    if st in ("complete", "mom complete", "result", "abandoned", "no result"):
+    raw_state = (h.get("state", "") or "").strip()
+    st = raw_state.lower()
+
+    # FIX-012: detect no-result vs result
+    is_no_result = st in _NO_RESULT_STATES
+
+    if st in ("complete", "mom complete", "result", "abandoned", "no result",
+               "match abandoned", "cancelled", "match cancelled"):
         status = "completed"
     elif st in ("in progress", "innings break", "toss", "stumps", "drinks", "rain", "review"):
         status = "live"
     else:
         status = "upcoming"
-    return {"id": iid, "wk": wk, "title": title or f"Match (Week {wk})",
+
+    meta = {"id": iid, "wk": wk, "title": title or f"Match (Week {wk})",
             "teams": teams, "date": str(h.get("matchStartTimestamp", "")), "status": status}
+    return meta, is_no_result
 
 
 def _reset_url(iid: str) -> None:
@@ -436,7 +466,7 @@ def _reset_url(iid: str) -> None:
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.6 (FIX-010 teams_json, FIX-011 escape) ---")
+    print("\n--- IPL 2026 SCRAPER v10.7 (FIX-012 no-result, FIX-013 c-and-b) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -449,7 +479,7 @@ def main():
         if not pidx["all"]:
             print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
             sys.exit(1)
-        # FIX-010: column is teams_json, not teams
+        # FIX-010: correct column name is teams_json
         sched_teams = {}
         for row in con.execute("SELECT id, teams_json FROM matches").fetchall():
             if row["teams_json"]:
@@ -465,10 +495,10 @@ def main():
     )
     if needs_discovery:
         n_miss = sum(1 for m in targets if (m.get("scorecard_url") or "").endswith("/00000"))
-        print(f"  {n_miss} matches need ID discovery — fetching series page...")
+        print(f"  {n_miss} matches need ID discovery \u2014 fetching series page...")
         _fetch_ordered_ids()
 
-    processed = 0; failed = 0; skipped_non_ipl = 0
+    processed = 0; failed = 0; skipped_non_ipl = 0; no_result_count = 0
     for m in targets:
         iid   = m["id"]
         wk    = m.get("week_no", 1)
@@ -485,7 +515,7 @@ def main():
             if discovered:
                 cb_id   = discovered
                 new_url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-                print(f"  DISCOVERED: {iid} — CB#{cb_id} (match #{mno})")
+                print(f"  DISCOVERED: {iid} \u2014 CB#{cb_id} (match #{mno})")
                 try:
                     conn = sqlite3.connect(str(DB_PATH), timeout=30)
                     conn.execute("PRAGMA busy_timeout = 30000")
@@ -494,7 +524,7 @@ def main():
                 except Exception as e:
                     print(f"    \u26a0 Could not persist URL: {e}")
             else:
-                print(f"  SKIP: {iid} — match #{mno} not in series page ({len(ids)} found)")
+                print(f"  SKIP: {iid} \u2014 match #{mno} not in series page ({len(ids)} found)")
                 continue
 
         mno = _match_no_from_id(iid)
@@ -503,41 +533,48 @@ def main():
         if jp.exists() and jp.stat().st_size > 500:
             print(f"  CACHED: {iid}"); continue
 
-        print(f"  SCRAPING: {iid} — CB#{cb_id}")
+        print(f"  SCRAPING: {iid} \u2014 CB#{cb_id}")
         time.sleep(1.5)
         data = fetch_scorecard_json(cb_id)
         if not data:
             print(f"  \u274c FAILED: {iid}"); failed += 1; continue
 
-        meta = _extract_meta(data, iid, wk)
+        meta, is_no_result = _extract_meta(data, iid, wk)
 
-        # Validate teams are IPL 2026 teams
-        unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
-        if unknown or len(meta["teams"]) < 2:
-            reason = f"non-IPL teams {unknown}" if unknown else "missing team data"
-            print(f"  \u26a0 SKIP {iid}: {reason} in CB#{cb_id} — wrong scorecard, resetting URL")
-            if jp.exists(): jp.unlink()
-            _reset_url(iid)
-            _ORDERED_CB_IDS.clear()
-            skipped_non_ipl += 1; failed += 1
-            continue
-
-        # Cross-validate against scheduled teams
-        expected = sched_teams.get(iid, set())
-        if expected:
-            scraped_set = set(meta["teams"])
-            if not scraped_set.intersection(expected):
-                print(f"  \u26a0 SKIP {iid}: scraped {meta['teams']} vs scheduled {sorted(expected)} — mismatch, resetting URL")
+        # Validate teams are IPL 2026 teams (skip for no-result — might have 0 teams in scorecard)
+        if not is_no_result:
+            unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
+            if unknown or len(meta["teams"]) < 2:
+                reason = f"non-IPL teams {unknown}" if unknown else "missing team data"
+                print(f"  \u26a0 SKIP {iid}: {reason} in CB#{cb_id} \u2014 wrong scorecard, resetting URL")
                 if jp.exists(): jp.unlink()
                 _reset_url(iid)
                 _ORDERED_CB_IDS.clear()
                 skipped_non_ipl += 1; failed += 1
                 continue
 
-        scores = process_cricbuzz_scorecard(data, pidx)
+            # Cross-validate against scheduled teams
+            expected = sched_teams.get(iid, set())
+            if expected:
+                scraped_set = set(meta["teams"])
+                if not scraped_set.intersection(expected):
+                    print(f"  \u26a0 SKIP {iid}: scraped {meta['teams']} vs scheduled {sorted(expected)} \u2014 mismatch, resetting URL")
+                    if jp.exists(): jp.unlink()
+                    _reset_url(iid)
+                    _ORDERED_CB_IDS.clear()
+                    skipped_non_ipl += 1; failed += 1
+                    continue
+
+        # FIX-012: No-result / abandoned — 0 points, no scorecard processing
+        if is_no_result:
+            scores = {}
+            print(f"  \u26aa NO RESULT: {iid} \u2014 abandoned/no-result, no points awarded")
+            no_result_count += 1
+        else:
+            scores = process_cricbuzz_scorecard(data, pidx)
 
         resolved = sum(1 for pid in scores if _ID_RE.match(pid))
-        fallback = len(scores) - resolved
+        fallback  = len(scores) - resolved
         if fallback > 5:
             print(f"    \u26a0 {fallback}/{len(scores)} players unresolved")
         if resolved < 15 and scores:
@@ -548,11 +585,16 @@ def main():
             json.dump(payload, f, indent=2, ensure_ascii=False)
         with db._write() as wc:
             _upsert_match(wc, payload)
-        print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
+        if is_no_result:
+            print(f"  \u2705 PERSISTED: {iid} (no-result, 0 pts, teams: {meta['teams']})")
+        else:
+            print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
         processed += 1
 
     if skipped_non_ipl:
-        print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards — run scraper again to retry")
+        print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards \u2014 run scraper again to retry")
+    if no_result_count:
+        print(f"  \u26aa {no_result_count} no-result matches recorded (0 points each)")
     if processed > 0:
         print(f"\n  Recalculating fantasy points...")
         n = db.recalculate_points()
