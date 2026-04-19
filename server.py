@@ -1,16 +1,14 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.2
+IPL Fantasy 2026 — Flask Server                             Golden File v12.3
 ===========================================================================
-v12.2 (this release):
-  Added /api/audit-scores/<n>  — full calculation trace per user per week.
-    Returns stored_week_pts vs computed_week_pts, raw match stats, and
-    per-player per-match breakdown so Audit_Scores.ps1 can validate data.
-  Added /api/clean-scores      — clears match_scores, player_match_points,
-    resets week_pts=0. Pass ?delete_json=1 to also wipe cached JSON files
-    so the scraper re-fetches everything fresh from Cricbuzz.
-v12.1: _rebuild_scores_and_points() now logs week_pts_rows.
+v12.3 (this release):
+  _rebuild_scores_and_points() now WIPES match_scores + player_match_points
+  + week_pts AND deletes all cached data/matches/*.json on every server restart
+  so the scraper is forced to re-fetch fresh, correct scorecards from Cricbuzz.
+  After restarting server run: python scraper.py
+v12.2: /api/audit-scores/<n>, /api/clean-scores endpoints.
+v12.1: _rebuild_scores_and_points() logs week_pts_rows.
 v12.0: Rebuild match_scores + pmp on every restart.
-v11.8: _ensure_points_calculated() gap detection.
 v11.7: Versioned history seed, draft preservation.
 """
 
@@ -348,35 +346,43 @@ def _auto_seed_history_if_needed():
         print(f"  [startup] Could not seed history: {e}")
 
 
-# ════ STARTUP: REBUILD SCORES, POINTS & WEEK_PTS
+# ════ STARTUP: CLEAR SCORE TABLES + JSON CACHE
 
 def _rebuild_scores_and_points():
     """
-    v12.1 — Runs on every server restart.
-    1. Clears match_scores + player_match_points.
-    2. Re-ingests all data/matches/*.json → match_scores.
-    3. Recalculates player_match_points.
-    4. Recomputes user_selections.week_pts (cap×2, vc×1.5) per week.
+    v12.3 — On every server restart: wipe match_scores, player_match_points,
+    week_pts AND delete all cached JSON files so the scraper is forced to
+    re-fetch fresh, correct scorecards from Cricbuzz.
+
+    Reason: cached JSON files (data/matches/*.json) can contain corrupted data
+    with player IDs from the wrong teams (scraper bug). Deleting them on every
+    restart guarantees the scraper always hits Cricbuzz for a clean scorecard.
+
+    Workflow after restart:
+        python scraper.py    ← re-scrapes all completed matches fresh
     """
     try:
-        print("  [startup] Clearing match_scores and player_match_points — rebuilding from JSON...")
-        result = db.rebuild_scores_and_points(DATA_DIR / "matches")
-        print(
-            f"  [startup] Rebuild complete: {result['files_ingested']} match files ingested, "
-            f"{result['pmp_rows']} pmp rows, "
-            f"{result['week_pts_rows']} user_selections.week_pts rows updated."
-        )
-        with db._read() as con:
-            week_rows = con.execute(
-                "SELECT us.week_no, us.display_name, us.week_pts "
-                "FROM user_selections us ORDER BY us.week_no, us.display_name"
-            ).fetchall()
-        for wr in week_rows:
-            print(f"  [startup]   W{wr['week_no']} {wr['display_name']}: {wr['week_pts']} pts")
-        if not week_rows:
-            print("  [startup]   No scored matches found — run scraper or check data/matches/.")
+        print("  [startup] Clearing match_scores + player_match_points + week_pts...")
+        with db._write() as con:
+            con.execute("DELETE FROM match_scores")
+            con.execute("DELETE FROM player_match_points")
+            con.execute("UPDATE user_selections SET week_pts = 0")
+
+        # Delete cached JSON files — scraper will re-fetch fresh from Cricbuzz
+        matches_dir = DATA_DIR / "matches"
+        deleted = 0
+        if matches_dir.exists():
+            for f in matches_dir.glob("*.json"):
+                try:
+                    f.unlink()
+                    deleted += 1
+                except Exception as e2:
+                    print(f"  [startup] Could not delete {f.name}: {e2}")
+
+        print(f"  [startup] ✓ Cleared all score data. Deleted {deleted} cached JSON files.")
+        print("  [startup] ► Run: python scraper.py   to repopulate with fresh data.")
     except Exception as e:
-        print(f"  [startup] rebuild_scores_and_points failed: {e}")
+        print(f"  [startup] _rebuild_scores_and_points failed: {e}")
 
 
 def _audit_player_id_coverage():
@@ -1118,7 +1124,7 @@ if __name__=="__main__":
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()
     _auto_seed_history_if_needed()       # v11.7: versioned re-seed with draft preservation
-    _rebuild_scores_and_points()         # v12.1: rebuild match_scores + pmp + week_pts on every restart
+    _rebuild_scores_and_points()         # v12.3: clear + delete JSON cache on every restart
     _audit_player_id_coverage()
 
     if args.tunnel:
