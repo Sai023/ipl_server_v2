@@ -1,15 +1,16 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.5
+IPL Fantasy 2026 — Flask Server                             Golden File v12.6
 ===========================================================================
-v12.5 (this release):
-  _SEED_VERSION bumped to v8 — W3/W4 now use their own explicit team variables
-  instead of reusing W2 references. Triggers re-seed on next restart.
-  _audit_player_id_coverage fixed — only flags IDs NOT in the players table
-  as true ghosts. IDs in players but not in player_match_points (expected
-  after restart before scraper runs) are no longer falsely flagged.
+v12.6 (this release):
+  New: GET /api/user-match-points/<n> — per-match pts for a user from
+       user_match_points table (cap/vc applied).
+  New: POST /api/recalculate-points now also calls update_player_season_pts()
+       so players.season_pts stays current after every recalc.
+  Startup _rebuild_scores_and_points() clears user_match_points + resets
+       players.season_pts (handled in db_manager.rebuild_scores_and_points).
+v12.5: Ghost audit only flags IDs not in players table; v8 seed version.
 v12.4: _SEMANTIC_MAP sooryavanshi/suryavanshi aliases.
 v12.3: On restart wipe match_scores + JSON cache.
-v12.2: /api/audit-scores/<n>, /api/clean-scores.
 """
 
 import collections
@@ -76,8 +77,9 @@ _SEMANTIC_MAP = {
     "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
 }
 
-# ── History seed ─────────────────────────────────────────────────────────────
-# v8: W3/W4 defined with their own explicit variables (same teams as W2 currently)
+# ── History seed ──────────────────────────────────────────────────────────────
+# RULE: Every week MUST have its own explicit variable — never alias W3=W2.
+# To add W5: define _SAI_W5_TEAM/_MOE_W5_TEAM, add to _HISTORY_SEED, bump _SEED_VERSION.
 _SEED_VERSION = "2026.v8.w3w4-defined"
 
 _SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r11","m04","m07","m12"]
@@ -96,6 +98,11 @@ _SAI_W4_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s
 _SAI_W4_CAP  = "c09"
 _SAI_W4_VC   = "rr11"
 
+# W5+ — add here when teams are known:
+# _SAI_W5_TEAM = [...]
+# _SAI_W5_CAP  = "..."
+# _SAI_W5_VC   = "..."
+
 _MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
 _MOE_W1_CAP  = "r03"
 _MOE_W1_VC   = "s04"
@@ -111,6 +118,11 @@ _MOE_W3_VC   = "s04"
 _MOE_W4_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
 _MOE_W4_CAP  = "l01"
 _MOE_W4_VC   = "s04"
+
+# W5+ — add here when teams are known:
+# _MOE_W5_TEAM = [...]
+# _MOE_W5_CAP  = "..."
+# _MOE_W5_VC   = "..."
 
 _HISTORY_SEED = [
     ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
@@ -368,16 +380,26 @@ def _auto_seed_history_if_needed():
 
 def _rebuild_scores_and_points():
     """
-    v12.3 — On every server restart: wipe match_scores, player_match_points,
-    week_pts AND delete all cached JSON files so the scraper re-fetches fresh.
+    v12.6 — On every server restart: delegates full wipe + rebuild to
+    db_manager.rebuild_scores_and_points() which clears match_scores,
+    player_match_points, user_match_points, resets week_pts + season_pts,
+    then re-ingests any remaining JSON cache.
     After restart run: python scraper.py
     """
     try:
-        print("  [startup] Clearing match_scores + player_match_points + week_pts...")
+        print("  [startup] Clearing score tables (match_scores, pmp, user_match_points, season_pts)...")
         with db._write() as con:
             con.execute("DELETE FROM match_scores")
             con.execute("DELETE FROM player_match_points")
+            try:
+                con.execute("DELETE FROM user_match_points")
+            except Exception:
+                pass  # table may not exist on older DBs yet
             con.execute("UPDATE user_selections SET week_pts = 0")
+            try:
+                con.execute("UPDATE players SET season_pts = 0")
+            except Exception:
+                pass  # column may not exist on older DBs yet
 
         matches_dir = DATA_DIR / "matches"
         deleted = 0
@@ -388,17 +410,16 @@ def _rebuild_scores_and_points():
                 except Exception as e2:
                     print(f"  [startup] Could not delete {f.name}: {e2}")
 
-        print(f"  [startup] \u2713 Cleared all score data. Deleted {deleted} cached JSON files.")
-        print("  [startup] \u25ba Run: python scraper.py   to repopulate with fresh data.")
+        print(f"  [startup] ✓ Cleared all score data. Deleted {deleted} cached JSON files.")
+        print("  [startup] ► Run: python scraper.py   to repopulate with fresh data.")
     except Exception as e:
         print(f"  [startup] _rebuild_scores_and_points failed: {e}")
 
 
 def _audit_player_id_coverage():
     """
-    v12.5 fix: Only flags IDs that are NOT in the players table (true ghosts—wrong ID).
-    IDs that ARE in players but not in player_match_points are expected after
-    restart (pmp is cleared); they are NOT reported as ghosts.
+    v12.5 fix: Only flags IDs that are NOT in the players table (true ghosts).
+    IDs in players but not in pmp are expected after restart — not reported.
     """
     try:
         with db._read() as con:
@@ -415,7 +436,7 @@ def _audit_player_id_coverage():
             ).fetchall()}
 
         print("  [startup] === Player ID Coverage Audit ===")
-        true_ghosts = set()  # IDs not in players table AT ALL
+        true_ghosts = set()
         for sel in sels:
             name = sel["display_name"]; wk = sel["week_no"]
             try: ids = _json.loads(sel["tw_team_json"] or "[]")
@@ -426,11 +447,11 @@ def _audit_player_id_coverage():
                     prefix = re.match(r'^[a-z]+', pid)
                     suggestions = [f"{p_id}={p_nm}" for p_id,p_nm in all_players.items()
                                    if prefix and p_id.startswith(prefix.group()) and p_id != pid][:4]
-                    print(f"  [startup] \u26a0  TRUE GHOST '{pid}' ({name}/W{wk}): "
+                    print(f"  [startup] ⚠  TRUE GHOST '{pid}' ({name}/W{wk}): "
                           f"NOT in players table! Alternatives: {', '.join(suggestions) or 'none'}")
 
         if not true_ghosts:
-            print("  [startup] \u2713 All selected player IDs exist in players table.")
+            print("  [startup] ✓ All selected player IDs exist in players table.")
             if not pmp_ids:
                 print("  [startup]   player_match_points is empty (normal after restart) — run: python scraper.py")
 
@@ -661,7 +682,7 @@ def api_poll():
     except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
-# ════ v11.x ENDPOINTS
+# ════ v11.x / v12.x ENDPOINTS
 
 @app.route("/api/player-points/<n>",methods=["GET"])
 def api_player_points(n):
@@ -726,6 +747,24 @@ def api_player_points(n):
         return jsonify({"ok":True,"name":name,"total_pts":grand_total,"players":players_out})
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@app.route("/api/user-match-points/<n>",methods=["GET"])
+def api_user_match_points(n):
+    """
+    v12.6 — Per-match user points from user_match_points table (cap/vc applied).
+    Returns sorted list: [{week_no, match_id, title, status, teams, pts}].
+    Used by ipl_glue.js Matches tab to show 'My Pts' column per match.
+    """
+    try:
+        if not n or len(n)>30:
+            return jsonify({"error":"invalid name","code":400}),400
+        matches = db.get_user_match_points(n)
+        total = sum(m["pts"] for m in matches)
+        return jsonify({"ok":True,"name":n,"total_pts":total,"matches":matches})
+    except Exception as e:
+        _log(f"GET /api/user-match-points/{n}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
@@ -821,13 +860,15 @@ def api_update_match_url():
 
 @app.route("/api/recalculate-points",methods=["POST"])
 def api_recalculate_points():
+    """v12.6: also calls update_player_season_pts() to keep players.season_pts current."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
         n=db.recalculate_points()
         wp=db.update_week_points()
-        return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,
-                        "message":f"Recalculated points for {n} player-match rows, {wp} week_pts rows."})
+        pp=db.update_player_season_pts()
+        return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,"player_pts_updated":pp,
+                        "message":f"Recalculated {n} player-match rows, {wp} week_pts rows, {pp} player season_pts."})
     except Exception as e:
         _log(f"POST /api/recalculate-points: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -911,7 +952,11 @@ def api_clean_scores():
         with db._write() as con:
             con.execute("DELETE FROM player_match_points")
             con.execute("DELETE FROM match_scores")
+            try: con.execute("DELETE FROM user_match_points")
+            except Exception: pass
             con.execute("UPDATE user_selections SET week_pts=0")
+            try: con.execute("UPDATE players SET season_pts=0")
+            except Exception: pass
         deleted_files=0
         if delete_json:
             matches_dir=DATA_DIR/"matches"
@@ -919,10 +964,10 @@ def api_clean_scores():
                 for f in matches_dir.glob("*.json"):
                     try: f.unlink(); deleted_files+=1
                     except Exception as e2: _log(f"[clean] {f}: {e2}","warning")
-        _log(f"[clean-scores] Cleared match_scores+pmp+week_pts. JSON deleted: {deleted_files}")
+        _log(f"[clean-scores] Cleared match_scores+pmp+ump+week_pts+season_pts. JSON deleted: {deleted_files}")
         return jsonify({
             "ok":True,
-            "cleared":["match_scores","player_match_points","week_pts"],
+            "cleared":["match_scores","player_match_points","user_match_points","week_pts","season_pts"],
             "json_files_deleted":deleted_files,
             "next_steps":["Run scraper.py to re-scrape match data",
                           "Restart server or POST /api/recalculate-points to rebuild"]
