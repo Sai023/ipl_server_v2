@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.4
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.5
 ================================================
+v10.5:
+  FIX-009: Before persisting any match scorecard, validate that ALL teams
+            in the scorecard are known IPL 2026 teams. If non-IPL teams
+            are detected (e.g. county cricket LANCS/DERBY appearing at
+            wrong Cricbuzz series-page positions), the match is skipped,
+            the cached JSON deleted, and the scorecard_url reset to /00000
+            so the next run can attempt rediscovery at the correct offset.
+            This prevents county/other-league data from entering the DB.
 v10.4:
-  FIX-008: _build_player_index now tracks name_conflicts and by_name_team so
-            _fuzzy_match can use team_hint to disambiguate players with identical
-            names (e.g. Noor Ahmad c12/CSK vs g05/GT).
-            process_cricbuzz_scorecard passes bat_code/bowl_code as team_hint
-            for all batter and bowler lookups — kills the ghost-ID problem.
+  FIX-008: Team-aware fuzzy matching (_build_player_index + _fuzzy_match).
 v10.3:
-  FIX-007: After recalculate_points(), also call update_week_points().
+  FIX-007: update_week_points() after recalculate_points().
 v10.2:
-  FIX-006: _m anchor regex so ipl26_m02 -> match 2, not 26.
+  FIX-006: _m anchor regex.
 """
 
 import json
@@ -56,6 +60,9 @@ _TEAM_PREFIX = {
     "LSG": "l",  "MI": "m",   "PBKS": "p", "RCB": "r",
     "RR": "rr", "SRH": "s",
 }
+
+# FIX-009: known valid IPL 2026 team short-names as returned by Cricbuzz
+_IPL_TEAMS = frozenset(_TEAM_PREFIX.keys())
 
 
 # ════ OVERS NORMALISATION
@@ -160,9 +167,9 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
             start       = r.text.rfind("self.__next_f.push", 0, idx)
             chunk       = r.text[start:]
             inner_start = chunk.find('"') + 1
-            end_idx     = chunk.find('"]\n', inner_start)
+            end_idx     = chunk.find('\"]\n', inner_start)
             if end_idx == -1:
-                end_idx = chunk.find('"])')
+                end_idx = chunk.find('\"]\)')
             json_str    = chunk[inner_start:end_idx].encode().decode("unicode_escape")
             sc_idx      = json_str.find("scorecardApiData")
             brace_start = json_str.find("{", sc_idx)
@@ -237,10 +244,7 @@ def _norm(s: str) -> str:
 
 def _build_player_index(con: sqlite3.Connection) -> dict:
     """
-    v10.4: Builds by_name_team dict (keyed by (norm_name, TEAM)) and
-    name_conflicts set so _fuzzy_match can use team_hint to pick the right
-    player when two roster entries share the same name (e.g. Noor Ahmad
-    for both CSK c12 and GT g05).
+    v10.4: Builds by_name_team and name_conflicts for team-aware disambiguation.
     """
     rows    = con.execute("SELECT id, name, team, role FROM players").fetchall()
     players = [{"id": r[0], "name": r[1], "team": r[2], "role": r[3]} for r in rows]
@@ -248,7 +252,7 @@ def _build_player_index(con: sqlite3.Connection) -> dict:
     for p in players:
         n = _norm(p["name"])
         if n in by_name:
-            name_conflicts.add(n)  # two different players share this normalised name
+            name_conflicts.add(n)
         by_name[n] = p
         by_name_team[(n, p["team"].upper())] = p
         parts = n.split()
@@ -261,13 +265,9 @@ def _build_player_index(con: sqlite3.Connection) -> dict:
 
 
 def _fuzzy_match(name: str, idx: dict, team_hint: str = None) -> str | None:
-    """
-    v10.4: team_hint (e.g. 'CSK') is used first when the normalised name
-    appears in name_conflicts — this ensures we always pick the right Noor Ahmad.
-    """
+    """v10.4: team_hint used first for ambiguous (conflict) names."""
     n = _norm(name)
     if not n: return None
-    # Prefer team-specific exact match for ambiguous names
     if team_hint and n in idx.get("name_conflicts", set()):
         p = idx.get("by_name_team", {}).get((n, team_hint.upper()))
         if p: return p["id"]
@@ -338,7 +338,6 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
         for _, b in bat_team.get("batsmenData", {}).items():
             cb = (b.get("batName") or "").strip()
             if not cb: continue
-            # v10.4: pass bat_code so duplicate-name collisions resolve to correct team
             pid = _fuzzy_match(cb, pidx, team_hint=bat_code)
             if not pid:
                 pid = _auto_add_player(cb, bat_code, pidx) if bat_code else _norm(cb).replace(" ", "_")
@@ -381,7 +380,6 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
         for _, bw in bowl_team.get("bowlersData", {}).items():
             cb = (bw.get("bowlName") or "").strip()
             if not cb: continue
-            # v10.4: pass bowl_code so bowlers resolve to the correct team
             pid = _fuzzy_match(cb, pidx, team_hint=bowl_code)
             if not pid:
                 pid = _auto_add_player(cb, bowl_code, pidx) if bowl_code else _norm(cb).replace(" ", "_")
@@ -425,10 +423,22 @@ def _extract_meta(data: dict, iid: str, wk: int) -> dict:
             "teams": teams, "date": str(h.get("matchStartTimestamp", "")), "status": status}
 
 
+def _reset_url(iid: str) -> None:
+    """Reset scorecard URL to /00000 so next run retries discovery at this position."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("UPDATE matches SET scorecard_url=? WHERE id=?",
+                     ("https://www.cricbuzz.com/live-cricket-scorecard/00000", iid))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"    \u26a0 Could not reset URL for {iid}: {e}")
+
+
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.4 (FIX-008 team-aware fuzzy match) ---")
+    print("\n--- IPL 2026 SCRAPER v10.5 (FIX-009 IPL team validation) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -441,6 +451,12 @@ def main():
         if not pidx["all"]:
             print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
             sys.exit(1)
+        # Load scheduled teams per match for cross-validation
+        sched_teams = {}
+        for row in con.execute("SELECT id, teams FROM matches").fetchall():
+            if row["teams"]:
+                try: sched_teams[row["id"]] = set(json.loads(row["teams"]))
+                except: pass
         targets = [dict(r) for r in con.execute(
             "SELECT * FROM matches WHERE LOWER(status)='completed'").fetchall()]
     print(f"  Targets: {len(targets)} completed matches")
@@ -454,7 +470,7 @@ def main():
         print(f"  {n_miss} matches need ID discovery — fetching series page...")
         _fetch_ordered_ids()
 
-    processed = 0; failed = 0
+    processed = 0; failed = 0; skipped_non_ipl = 0
     for m in targets:
         iid   = m["id"]
         wk    = m.get("week_no", 1)
@@ -495,8 +511,32 @@ def main():
         if not data:
             print(f"  \u274c FAILED: {iid}"); failed += 1; continue
 
+        meta = _extract_meta(data, iid, wk)
+
+        # ── FIX-009: Validate teams are IPL 2026 teams ───────────────────────
+        unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
+        if unknown or len(meta["teams"]) < 2:
+            reason = f"non-IPL teams {unknown}" if unknown else "missing team data"
+            print(f"  \u26a0 SKIP {iid}: {reason} in CB#{cb_id} — wrong scorecard, resetting URL")
+            if jp.exists(): jp.unlink()   # remove any partially-cached bad JSON
+            _reset_url(iid)               # force rediscovery on next run
+            _ORDERED_CB_IDS.clear()       # invalidate the cached discovery list
+            skipped_non_ipl += 1; failed += 1
+            continue
+
+        # ── Optional: cross-validate against scheduled teams ─────────────────
+        expected = sched_teams.get(iid, set())
+        if expected:
+            scraped_set = set(meta["teams"])
+            if not scraped_set.intersection(expected):
+                print(f"  \u26a0 SKIP {iid}: scraped {meta['teams']} vs scheduled {sorted(expected)} — mismatch, resetting URL")
+                if jp.exists(): jp.unlink()
+                _reset_url(iid)
+                _ORDERED_CB_IDS.clear()
+                skipped_non_ipl += 1; failed += 1
+                continue
+
         scores = process_cricbuzz_scorecard(data, pidx)
-        meta   = _extract_meta(data, iid, wk)
 
         resolved = sum(1 for pid in scores if _ID_RE.match(pid))
         fallback = len(scores) - resolved
@@ -510,9 +550,11 @@ def main():
             json.dump(payload, f, indent=2, ensure_ascii=False)
         with db._write() as wc:
             _upsert_match(wc, payload)
-        print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved)")
+        print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
         processed += 1
 
+    if skipped_non_ipl:
+        print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards — run scraper again to retry with refreshed discovery")
     if processed > 0:
         print(f"\n  Recalculating fantasy points...")
         n = db.recalculate_points()
