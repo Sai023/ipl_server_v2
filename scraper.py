@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.5
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.6
 ================================================
+v10.6:
+  FIX-010: Crash fix — scheduled-teams cross-check used wrong column name
+            "teams" instead of "teams_json" (OperationalError: no such column).
+  FIX-011: Clean up SyntaxWarning — invalid escape sequences '\"' and '\)'
+            in fetch_scorecard_json() replaced with clean equivalents.
 v10.5:
-  FIX-009: Before persisting any match scorecard, validate that ALL teams
-            in the scorecard are known IPL 2026 teams. If non-IPL teams
-            are detected (e.g. county cricket LANCS/DERBY appearing at
-            wrong Cricbuzz series-page positions), the match is skipped,
-            the cached JSON deleted, and the scorecard_url reset to /00000
-            so the next run can attempt rediscovery at the correct offset.
-            This prevents county/other-league data from entering the DB.
+  FIX-009: IPL team validation before persisting any scorecard.
 v10.4:
-  FIX-008: Team-aware fuzzy matching (_build_player_index + _fuzzy_match).
+  FIX-008: Team-aware fuzzy matching.
 v10.3:
   FIX-007: update_week_points() after recalculate_points().
 v10.2:
@@ -61,7 +60,7 @@ _TEAM_PREFIX = {
     "RR": "rr", "SRH": "s",
 }
 
-# FIX-009: known valid IPL 2026 team short-names as returned by Cricbuzz
+# Known valid IPL 2026 team short-names as returned by Cricbuzz
 _IPL_TEAMS = frozenset(_TEAM_PREFIX.keys())
 
 
@@ -167,9 +166,10 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
             start       = r.text.rfind("self.__next_f.push", 0, idx)
             chunk       = r.text[start:]
             inner_start = chunk.find('"') + 1
-            end_idx     = chunk.find('\"]\n', inner_start)
+            # FIX-011: clean escape sequences (no backslash before " or ) needed)
+            end_idx = chunk.find('"]\n', inner_start)
             if end_idx == -1:
-                end_idx = chunk.find('\"]\)')
+                end_idx = chunk.find('"])')
             json_str    = chunk[inner_start:end_idx].encode().decode("unicode_escape")
             sc_idx      = json_str.find("scorecardApiData")
             brace_start = json_str.find("{", sc_idx)
@@ -243,9 +243,7 @@ def _norm(s: str) -> str:
 
 
 def _build_player_index(con: sqlite3.Connection) -> dict:
-    """
-    v10.4: Builds by_name_team and name_conflicts for team-aware disambiguation.
-    """
+    """v10.4: Builds by_name_team and name_conflicts for team-aware disambiguation."""
     rows    = con.execute("SELECT id, name, team, role FROM players").fetchall()
     players = [{"id": r[0], "name": r[1], "team": r[2], "role": r[3]} for r in rows]
     by_name = {}; by_surname = {}; by_name_team = {}; name_conflicts = set()
@@ -438,7 +436,7 @@ def _reset_url(iid: str) -> None:
 # ════ MAIN
 
 def main():
-    print("\n--- IPL 2026 SCRAPER v10.5 (FIX-009 IPL team validation) ---")
+    print("\n--- IPL 2026 SCRAPER v10.6 (FIX-010 teams_json, FIX-011 escape) ---")
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     db = DatabaseManager(DB_PATH)
 
@@ -451,11 +449,11 @@ def main():
         if not pidx["all"]:
             print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
             sys.exit(1)
-        # Load scheduled teams per match for cross-validation
+        # FIX-010: column is teams_json, not teams
         sched_teams = {}
-        for row in con.execute("SELECT id, teams FROM matches").fetchall():
-            if row["teams"]:
-                try: sched_teams[row["id"]] = set(json.loads(row["teams"]))
+        for row in con.execute("SELECT id, teams_json FROM matches").fetchall():
+            if row["teams_json"]:
+                try: sched_teams[row["id"]] = set(json.loads(row["teams_json"]))
                 except: pass
         targets = [dict(r) for r in con.execute(
             "SELECT * FROM matches WHERE LOWER(status)='completed'").fetchall()]
@@ -513,18 +511,18 @@ def main():
 
         meta = _extract_meta(data, iid, wk)
 
-        # ── FIX-009: Validate teams are IPL 2026 teams ───────────────────────
+        # Validate teams are IPL 2026 teams
         unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
         if unknown or len(meta["teams"]) < 2:
             reason = f"non-IPL teams {unknown}" if unknown else "missing team data"
             print(f"  \u26a0 SKIP {iid}: {reason} in CB#{cb_id} — wrong scorecard, resetting URL")
-            if jp.exists(): jp.unlink()   # remove any partially-cached bad JSON
-            _reset_url(iid)               # force rediscovery on next run
-            _ORDERED_CB_IDS.clear()       # invalidate the cached discovery list
+            if jp.exists(): jp.unlink()
+            _reset_url(iid)
+            _ORDERED_CB_IDS.clear()
             skipped_non_ipl += 1; failed += 1
             continue
 
-        # ── Optional: cross-validate against scheduled teams ─────────────────
+        # Cross-validate against scheduled teams
         expected = sched_teams.get(iid, set())
         if expected:
             scraped_set = set(meta["teams"])
@@ -554,7 +552,7 @@ def main():
         processed += 1
 
     if skipped_non_ipl:
-        print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards — run scraper again to retry with refreshed discovery")
+        print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards — run scraper again to retry")
     if processed > 0:
         print(f"\n  Recalculating fantasy points...")
         n = db.recalculate_points()
