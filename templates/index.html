@@ -467,7 +467,7 @@ function clearUsername(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function escAttr(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");}
 function hideLoading(){if($loading&&!$loading.classList.contains("hidden")){$loading.classList.add("hidden");setTimeout(function(){if($loading)$loading.remove();},450);}}
-function showErrorBanner(msg){if(!$errorBanner)return;$errorBanner.textContent="\u26a0\uFE0F  "+(msg||"Server error — retrying\u2026");$errorBanner.classList.add("visible");}
+function showErrorBanner(msg){if(!$errorBanner)return;$errorBanner.textContent="\u26a0\uFE0F  "+(msg||"Server error \u2014 retrying\u2026");$errorBanner.classList.add("visible");}
 function hideErrorBanner(){if($errorBanner)$errorBanner.classList.remove("visible");}
 function _avClass(team){
   if(!team)return"";
@@ -492,8 +492,7 @@ function _initials(name){
 // ─── SESSION ─────────────────────────────────────────────────────────────────
 function login(name){
   if(!name)return false;
-  var known=_state?Object.keys(_state.members||{}):
-[];
+  var known=_state?Object.keys(_state.members||{}):[];
   if(known.length>0&&!_state.members[name])return false;
   _username=name;_activeTab="team";_historyData=null;_historyViewWk=null;
   _ptsData=null;_adminMatches=null;
@@ -693,7 +692,8 @@ function _buildNwSquad(){
     var p=resolvePlayer(id),nm=p.name||id,iC=(id===cap),iV=(id===vc);
     var cls="xi-card editable"+(iC?" is-cap":iV?" is-vc":"");
     var avC=_avClass(p.team),sub=[p.role,p.team].filter(Boolean).join(" \u00B7 ");
-    h+='<div class="'+cls+'">'+'<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>'+'<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'+(sub?'<div class="xi-sub">'+esc(sub)+'</div>':'')+'</div>'+'<div class="xi-edit-row">'+'<button class="ecap-btn'+(iC?' on':'\')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'+'<button class="evc-btn'+(iV?' on':'\')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'+'<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>'+'</div></div>';
+    // FIX: false branches use '' (empty string) not '\'' (unterminated)
+    h+='<div class="'+cls+'">'+'<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>'+'<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'+(sub?'<div class="xi-sub">'+esc(sub)+'</div>':'')+'</div>'+'<div class="xi-edit-row">'+'<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'+'<button class="evc-btn'+(iV?' on':'')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'+'<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>'+'</div></div>';
   });
   return h+'</div>';
 }
@@ -742,7 +742,6 @@ function _buildPicker(){
   if(filtered.length===0)h+='<div class="picker-empty">No players match.</div>';
   else filtered.forEach(function(p){
     var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
-    // full-xi rows are no longer hard-disabled — they open the swap sheet
     var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
     var cls="picker-row"+(isSel?" selected":"")+(isFull?" full-xi":"")+((!xi_full&&over&&!isSel)?" over-budget":"");
     var lockStyle=over?' style="opacity:0.60;pointer-events:none;"':'';
@@ -752,7 +751,6 @@ function _buildPicker(){
     else if(!over){oc=' onclick="_nwToggle(\''+escAttr(key)+'\')"';}
     else{oc='';}
     var disp=p.name+(p.team?" - "+p.team:"");
-    // PTS column: look up from ptsMap by id then by name
     var pts=ptsMap[key]!=null?ptsMap[key]:(ptsMap[(p.name||'').toLowerCase()]!=null?ptsMap[(p.name||'').toLowerCase()]:null);
     var priceHtml=(p.price?p.price.toFixed(1)+' CR':'')+(pts!=null?'<br><span class="prow-pts">'+pts+' PTS</span>':'');
     h+='<div class="'+cls+'"'+(oc||'')+lockStyle+'><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div><div class="prow-info"><div class="prow-name">'+esc(disp)+'</div>'+(p.role?'<div class="prow-sub">'+esc(p.role)+'</div>':'')+'</div><div class="prow-price">'+priceHtml+'</div><div class="prow-tick">\u2713</div></div>';
@@ -791,7 +789,7 @@ function _buildLoginCard(memberNames){
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
     h+='</div><p class="register-hint">New member? <button style="background:none;border:none;color:var(--teal);cursor:pointer;font-size:12px;text-decoration:underline" onclick="document.getElementById(\'register-panel\').style.display=\'block\'">Register here</button></p><div id="register-panel" style="display:none;margin-top:10px">';
   } else {
-    h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet — enter your name to join.</p><div id="register-panel" style="display:block;margin-top:0">';
+    h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet \u2014 enter your name to join.</p><div id="register-panel" style="display:block;margin-top:0">';
   }
   h+='<input id="register-input" type="text" maxlength="30" placeholder="Your display name">';
   h+='<button class="btn btn-teal" onclick="(function(){var inp=document.getElementById(\'register-input\'),name=inp?inp.value.trim():\'\';if(!name||name.length>30){alert(\'Name must be 1\u201330 characters.\');return;}_username=name;saveUsername(name);if(window.IplApi){window.IplApi.saveMember(name,{this_week:{team:[],cap:null,vc:null},next_week:{team:[],cap:null,vc:null}}).then(function(){window.dispatchEvent(new CustomEvent(\'ipl:saved\'));}).catch(function(e){console.error(e);});}if(_state)render(_state);})()" style="margin-top:6px;width:100%">Join League</button>';
@@ -801,7 +799,7 @@ function _buildLoginCard(memberNames){
 function _buildThisWeekCard(){
   var tw=_getThisWeekData();
   var h='<div class="card card-locked"><div class="week-label">Week '+_currentWeek+' &nbsp;<span class="badge-lock">\uD83D\uDD12 Locked</span></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
-  if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+"\</p></div>";return h;}
+  if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+'\</p></div>';return h;}
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
   return h+'</div>';
 }
@@ -834,14 +832,16 @@ function _buildHistoryTab(){
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
-  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'\')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
+  // FIX: false branch is '' not '\'' (unterminated string)
+  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
   h+='</div></div><div class="members-dual">';
   memberNames.forEach(function(n){
     var isMe=n===_username,tw=[],capId=null,vcId=null;
     if(isMe&&_historyData){var cur=_getCurrentWeekRow();if(cur){var src=null;if(cur.this_week&&cur.this_week.team&&cur.this_week.team.length>0)src=cur.this_week;else if(cur.next_week&&cur.next_week.team&&cur.next_week.team.length>0)src=cur.next_week;if(src){tw=src.team;capId=src.cap;vcId=src.vc;}}}
     if(tw.length===0){var picks=_state&&_state.members&&_state.members[n];if(picks){var raw=null;if(picks.this_week&&picks.this_week.team&&picks.this_week.team.length>0)raw=picks.this_week;else if(picks.next_week&&picks.next_week.team&&picks.next_week.team.length>0)raw=picks.next_week;else if(picks.team&&picks.team.length>0)raw=picks;if(raw){tw=raw.team||[];capId=raw.cap||null;vcId=raw.vc||null;}}}
     var cost=0;tw.forEach(function(id){var p=resolvePlayer(id);cost+=(p.price||0);});cost=Math.round(cost*10)/10;
-    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'\')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
+    // FIX: false branch is '' not '\'' (unterminated string)
+    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
     if(tw.length>0)h+=_buildXiGrid(tw,capId,vcId);
     else{h+='<p class="empty" style="padding:14px 0;color:var(--dim)">No XI set this week</p>';if(isMe)h+='<button class="btn btn-teal btn-sm" onclick="switchTab(\'next\')" style="margin-top:4px">\u270F\uFE0F Set my XI</button>';else h+='<p style="font-size:11px;color:var(--dim);margin-top:4px">Waiting for '+esc(n)+' to set their squad.</p>';}
     h+='</div>';
@@ -891,16 +891,9 @@ function _buildPointsTab(){
   h+='<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
   h+='</div>';
-
-  if(_ptsLoading){
-    return h+'<div class="pts-loading">\u23F3 Loading points data\u2026</div></div>';
-  }
-  if(!_ptsData||!_ptsData.players||_ptsData.players.length===0){
-    return h+'<div class="pts-loading">No points data yet. Run the scraper after matches complete, then click Reload.</div></div>';
-  }
-
+  if(_ptsLoading){return h+'<div class="pts-loading">\u23F3 Loading points data\u2026</div></div>';}
+  if(!_ptsData||!_ptsData.players||_ptsData.players.length===0){return h+'<div class="pts-loading">No points data yet. Run the scraper after matches complete, then click Reload.</div></div>';}
   var d=_ptsData;
-  // Summary stats
   var matchCount=0;
   if(d.players.length>0&&d.players[0].matches)matchCount=d.players[0].matches.length;
   h+='<div class="pts-summary">';
@@ -909,8 +902,6 @@ function _buildPointsTab(){
   h+='<div class="pts-stat"><div class="val">'+matchCount+'</div><div class="lbl">Matches</div></div>';
   if(matchCount>0)h+='<div class="pts-stat"><div class="val">'+Math.round(d.total_pts/matchCount)+'</div><div class="lbl">Avg/Match</div></div>';
   h+='</div>';
-
-  // Per-player table
   h+='<table class="pts-table"><thead><tr><th>Player</th><th>Team</th><th>Role</th><th style="text-align:right">Pts</th><th></th></tr></thead><tbody>';
   d.players.forEach(function(p,idx){
     var rowId="pts-row-"+idx;
@@ -923,9 +914,7 @@ function _buildPointsTab(){
     h+='<td>'+_roleBadge(p.role)+'</td>';
     h+='<td class="pts-cell">'+p.total_pts+esc(mult)+'</td>';
     h+='<td>';
-    if(p.matches&&p.matches.length>0){
-      h+='<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\''+rowId+'\');el.classList.toggle(\'open\');})()">Details</button>';
-    }
+    if(p.matches&&p.matches.length>0){h+='<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\''+rowId+'\');el.classList.toggle(\'open\');})()">Details</button>';}
     h+='</td></tr>';
     if(p.matches&&p.matches.length>0){
       h+='<tr><td colspan="5" style="padding:0 8px 8px"><div class="pts-matches" id="'+rowId+'">';
@@ -949,30 +938,19 @@ function _buildAdminTab(){
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMatches=null;_loadAdminMatches();if(_state)render(_state)">\u27F3 Refresh</button>';
   h+='</div>';
   h+='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Paste the Cricbuzz scorecard URL for each completed match, then click Save. The scraper will run automatically in the background.</p>';
-
-  // Filter buttons
   h+='<div class="admin-filter">';
   [{v:"all",l:"All"},{v:"completed",l:"\uD83D\uDFE2 Completed"},{v:"upcoming",l:"\uD83D\uDD51 Upcoming"},{v:"no-id",l:"\u26A0 Missing IDs"}].forEach(function(f){
-    h+='<button class="admin-filter-btn'+(_adminFilter===f.v?' active':'')
-       +'" onclick="_adminFilter=\''+f.v+'\';if(_state)render(_state)">'+f.l+'</button>';
+    h+='<button class="admin-filter-btn'+(_adminFilter===f.v?' active':'')+'" onclick="_adminFilter=\''+f.v+'\';if(_state)render(_state)">'+f.l+'</button>';
   });
   h+='</div>';
-
-  if(!_adminMatches){
-    return h+'<p style="color:var(--muted);font-size:13px">Loading matches\u2026</p></div>';
-  }
-
+  if(!_adminMatches){return h+'<p style="color:var(--muted);font-size:13px">Loading matches\u2026</p></div>';}
   var list=_adminMatches.filter(function(m){
     if(_adminFilter==="completed")return m.status==="completed";
     if(_adminFilter==="upcoming")return m.status==="upcoming";
-    if(_adminFilter==="no-id"){
-      var u=m.scorecard_url||"";var last=u.split("/").pop();return !last||last==="00000"||!/[1-9]/.test(last);
-    }
+    if(_adminFilter==="no-id"){var u=m.scorecard_url||"";var last=u.split("/").pop();return !last||last==="00000"||!/[1-9]/.test(last);}
     return true;
   });
-
   if(list.length===0){return h+'<p style="color:var(--muted);font-size:13px">No matches match the filter.</p></div>';}
-
   list.forEach(function(m){
     var hasId=m.scorecard_url&&/[1-9]\d{4,}/.test(m.scorecard_url||"00000");
     var inputId="url-"+m.id,statusId="st-"+m.id;
@@ -1052,8 +1030,7 @@ function render(state){
       {id:"members",label:"Members"},
       {id:"admin",label:"Admin \u2699\uFE0F"},
     ].forEach(function(t){
-      html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')
-            +'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
+      html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
     });
     html+='</div>';
     if     (_activeTab==="team")        {html+=_buildThisWeekCard();html+=_buildDevTools();}
@@ -1099,7 +1076,6 @@ function _bootstrap(){
       }
     }
     render(state);
-    // Auto-load points if on points tab
     if(_activeTab==="points"&&_username&&!_ptsData)_loadPoints();
   }).catch(function(){});
   plP.then(function(pl){if(pl&&pl.ok!==false){setPlayers(pl);window.dispatchEvent(new CustomEvent("ipl:players-updated",{detail:pl}));}});
