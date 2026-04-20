@@ -1,48 +1,35 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.5
  * =========================================================================
- * CHANGES vs v6:
- *   • IplConfig gains current_week (hydrated on init + after every rollover)
- *   • IplApi.rollover() dispatches "ipl:week-changed" with { week_no, max_weeks }
- *     after a successful roll, so any UI panel can update without page refresh.
- *   • IplApi.rollover() dispatches "ipl:season-complete" when the season cap
- *     is reached (season_complete === true).
- *   • _init() calls IplApi.getCurrentWeek() to prime IplConfig.current_week.
+ * v7.5 (this release):
+ *   • Safe Boot — 5-second timeout in _init(). If /api/state hasn’t
+ *     resolved by then the loading spinner is force-hidden and the error
+ *     banner fires so the user sees an actionable message instead of an
+ *     infinite spinner.
  *
- * Wire events:
- *   window.addEventListener("ipl:state-updated",       e => render(e.detail));
- *   window.addEventListener("ipl:leaderboard-updated", e => renderLb(e.detail));
- *   window.addEventListener("ipl:players-updated",     e => setPlayers(e.detail));
- *   window.addEventListener("ipl:rollover-triggered",  e => onRollover(e.detail));
- *   window.addEventListener("ipl:week-changed",        e => onWeekChange(e.detail));  // NEW v7
- *   window.addEventListener("ipl:season-complete",     e => onSeasonEnd(e.detail));   // NEW v7
- *   window.addEventListener("ipl:error",               e => console.error(e.detail));
- *
- * ── Exported globals ───────────────────────────────────────────────────────
- *   window.IplApi               — API wrapper object
- *   window.IplPolling           — { start(), stop() }
- *   window.IplConfig            — { budget, xi_size, max_weeks, current_week }
- *   window.IplRollover          — { scheduleNext(), cancelPending() }
- *   window.normaliseLeaderboard — pure function (exposed for unit tests)
+ * v7.4: _playerMap cache, _injectStatsToPicker, per-week leaderboard
+ *       columns, match-by-match team totals, getUserMatchPoints API.
+ * v7.3: Matches tab with My Pts column.
+ * v7.2: _buildPointsTab() matchCount fix.
+ * v7.1: History tab weekly pts chip, Leaderboard per-week columns.
  */
 
 (function (window) {
   "use strict";
 
-  // ── Config ────────────────────────────────────────────────────────────────
   var POLL_INTERVAL_MS  = 60000;
   var MAINTENANCE_DELAY = 1500;
   var ROLLOVER_HOUR_UTC = 14;
   var ROLLOVER_MIN_UTC  = 0;
+  var SAFE_BOOT_MS      = 5000; // v7.5: max ms to wait before showing error
 
-  // ── Module state ──────────────────────────────────────────────────────────
   var _lastStateEtag  = null;
   var _overlayTimer   = null;
   var _overlayVisible = false;
   var _pollTimer      = null;
   var _rolloverTimer  = null;
+  var _safeBootTimer  = null; // v7.5
 
-  // ── Season/budget config (hydrated from /api/ping + /api/current-week) ───
   var IplConfig = {
     budget:       100.0,
     xi_size:      11,
@@ -50,10 +37,7 @@
     current_week: 1,
   };
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // MAINTENANCE OVERLAY
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── MAINTENANCE OVERLAY ──────────────────────────────────────────────────
 
   function _injectOverlayStyles() {
     if (document.getElementById("ipl-overlay-style")) return;
@@ -94,14 +78,13 @@
     var el = document.createElement("div");
     el.id = "ipl-maintenance-overlay";
     el.innerHTML = (
-      '<div class="ipl-mc">' +
-        '<div class="ipl-mc-icon">&#x1F3CF;</div>' +
-        '<h2>Server Unavailable</h2>' +
-        '<p>We\'re having trouble reaching the backend.<br>' +
-        'Retrying automatically every 60 seconds&hellip;</p>' +
-        '<div class="ipl-spin"></div>' +
-        '<p class="sub">If this persists, ask the admin to check the server.</p>' +
-      '</div>'
+      '<div class="ipl-mc">'
+      + '<div class="ipl-mc-icon">&#x1F3CF;</div>'
+      + '<h2>Server Unavailable</h2>'
+      + '<p>We\'re having trouble reaching the backend.<br>Retrying every 60 seconds&hellip;</p>'
+      + '<div class="ipl-spin"></div>'
+      + '<p class="sub">Ask the admin to check the server if this persists.</p>'
+      + '</div>'
     );
     document.body.appendChild(el);
     _overlayVisible = true;
@@ -124,45 +107,30 @@
     if (_overlayVisible) _hideOverlay();
   }
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // LEADERBOARD NORMALISATION
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── LEADERBOARD NORMALISATION ────────────────────────────────────────────
 
   function normaliseLeaderboard(raw) {
     if (!raw || typeof raw !== "object") {
-      return {
-        rankings: [], standings: [],
+      return { rankings: [], standings: [],
         meta: { league_avg: 0, top_score: 0, member_count: 0 },
-        league_avg: 0, top_score: 0, member_count: 0,
-        week_no: null, generated_at: null,
-      };
+        league_avg: 0, top_score: 0, member_count: 0, week_no: null, generated_at: null };
     }
-    var rows = Array.isArray(raw.rankings)
-      ? raw.rankings
-      : Array.isArray(raw.standings)
-        ? raw.standings
-        : [];
-    var m            = raw.meta || {};
+    var rows = Array.isArray(raw.rankings) ? raw.rankings
+             : Array.isArray(raw.standings) ? raw.standings : [];
+    var m = raw.meta || {};
     var league_avg   = (raw.league_avg   != null) ? raw.league_avg   : (m.league_avg   || 0);
     var top_score    = (raw.top_score    != null) ? raw.top_score    : (m.top_score    || 0);
     var member_count = (raw.member_count != null) ? raw.member_count : (m.member_count || 0);
     return {
-      week_no:      raw.week_no      != null ? raw.week_no      : null,
+      week_no: raw.week_no != null ? raw.week_no : null,
       generated_at: raw.generated_at != null ? raw.generated_at : null,
-      league_avg:   league_avg,
-      top_score:    top_score,
-      member_count: member_count,
-      meta:      { league_avg: league_avg, top_score: top_score, member_count: member_count },
-      rankings:  rows,
-      standings: rows,
+      league_avg: league_avg, top_score: top_score, member_count: member_count,
+      meta: { league_avg: league_avg, top_score: top_score, member_count: member_count },
+      rankings: rows, standings: rows,
     };
   }
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // HTTP HELPERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── HTTP HELPERS ─────────────────────────────────────────────────────────
 
   function _fetchJson(url, options) {
     options = options || {};
@@ -171,77 +139,52 @@
       .then(function (res) {
         if (res.status === 304) return null;
         if (!res.ok) {
-          var err = new Error("HTTP " + res.status);
-          err.status = res.status;
+          var err = new Error("HTTP " + res.status); err.status = res.status;
           return res.json().catch(function () { return {}; }).then(function (j) {
-            err.serverMessage = j.error || j.detail || "";
-            err.serverData    = j;
-            throw err;
+            err.serverMessage = j.error || j.detail || ""; err.serverData = j; throw err;
           });
         }
         return res.json();
       });
   }
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // MONDAY 14:00 UTC AUTO-ROLLOVER SCHEDULER
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── ROLLOVER SCHEDULER ──────────────────────────────────────────────────
 
   function _msUntilNextRollover() {
-    var now  = new Date();
-    var utcDay = now.getUTCDay();
+    var now = new Date(); var utcDay = now.getUTCDay();
     var daysUntilMon = (utcDay === 1) ? 0 : (8 - utcDay) % 7;
     var candidate = new Date(now);
     candidate.setUTCDate(now.getUTCDate() + daysUntilMon);
     candidate.setUTCHours(ROLLOVER_HOUR_UTC, ROLLOVER_MIN_UTC, 0, 0);
-    if (candidate.getTime() - now.getTime() <= 5000) {
-      candidate.setUTCDate(candidate.getUTCDate() + 7);
-    }
+    if (candidate.getTime() - now.getTime() <= 5000) candidate.setUTCDate(candidate.getUTCDate() + 7);
     return candidate.getTime() - now.getTime();
   }
 
   function _executeRollover() {
-    console.info("[IplRollover] Triggering Monday 14:00 rollover …");
+    console.info("[IplRollover] Triggering Monday 14:00 rollover \u2026");
     IplApi.rollover(false)
       .then(function (data) {
-        if (data && data.rolled) {
-          console.info("[IplRollover] Rollover complete — new week: " + data.new_week_no);
-          _lastStateEtag = null;
-          _pollCycle();
-        } else {
-          console.info("[IplRollover] Rollover no-op:", data && data.reason);
-        }
+        if (data && data.rolled) { console.info("[IplRollover] Complete \u2014 week: " + data.new_week_no); _lastStateEtag = null; _pollCycle(); }
+        else { console.info("[IplRollover] No-op:", data && data.reason); }
       })
-      .catch(function (err) {
-        console.warn("[IplRollover] Rollover failed:", err.message || err);
-      })
-      .finally(function () {
-        _scheduleNextRollover();
-      });
+      .catch(function (err) { console.warn("[IplRollover] Failed:", err.message || err); })
+      .finally(function () { _scheduleNextRollover(); });
   }
 
   function _scheduleNextRollover() {
     if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
-    var ms     = _msUntilNextRollover();
-    var capped = Math.min(ms, 7 * 24 * 60 * 60 * 1000);
-    console.info("[IplRollover] Next rollover scheduled in " + Math.round(capped / 60000) + " min");
-    _rolloverTimer = setTimeout(_executeRollover, capped);
+    var ms = Math.min(_msUntilNextRollover(), 7 * 24 * 60 * 60 * 1000);
+    console.info("[IplRollover] Next rollover scheduled in " + Math.round(ms / 60000) + " min");
+    _rolloverTimer = setTimeout(_executeRollover, ms);
   }
 
   function _cancelRolloverTimer() {
     if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
   }
 
-  var IplRollover = {
-    scheduleNext:  _scheduleNextRollover,
-    cancelPending: _cancelRolloverTimer,
-  };
+  var IplRollover = { scheduleNext: _scheduleNextRollover, cancelPending: _cancelRolloverTimer };
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // PUBLIC API  —  window.IplApi
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── PUBLIC API ──────────────────────────────────────────────────────────
 
   var IplApi = {
 
@@ -250,13 +193,8 @@
       if (_lastStateEtag) headers["If-None-Match"] = _lastStateEtag;
       return fetch("/api/state", { headers: headers }).then(function (res) {
         if (res.status === 304) return null;
-        if (!res.ok) {
-          var err = new Error("HTTP " + res.status);
-          err.status = res.status;
-          throw err;
-        }
-        var etag = res.headers.get("ETag");
-        if (etag) _lastStateEtag = etag;
+        if (!res.ok) { var err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
+        var etag = res.headers.get("ETag"); if (etag) _lastStateEtag = etag;
         return res.json();
       });
     },
@@ -266,30 +204,22 @@
       return _fetchJson(url).then(normaliseLeaderboard);
     },
 
-    getPlayers: function () {
-      return _fetchJson("/api/players");
-    },
-
-    getCurrentWeek: function () {
-      return _fetchJson("/api/current-week");
-    },
-
-    getHistory: function (name) {
-      return _fetchJson("/api/history/" + encodeURIComponent(name));
-    },
+    getPlayers:         function () { return _fetchJson("/api/players"); },
+    getCurrentWeek:     function () { return _fetchJson("/api/current-week"); },
+    getHistory:         function (name) { return _fetchJson("/api/history/" + encodeURIComponent(name)); },
+    getPlayerPoints:    function (name) { return _fetchJson("/api/player-points/" + encodeURIComponent(name)); },
+    getUserMatchPoints: function (name) { return _fetchJson("/api/user-match-points/" + encodeURIComponent(name)); },
 
     saveNextWeek: function (name, picks) {
       return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(picks),
       });
     },
 
     resolvePlayer: function (query, team) {
       return _fetchJson("/api/resolve-player", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query, team: team || null }),
       });
     },
@@ -305,81 +235,36 @@
       });
     },
 
-    saveState: function (payload) {
-      return _fetchJson("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    },
+    saveState:  function (p) { return _fetchJson("/api/state",  { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p) }); },
+    saveMember: function (n,d){ return _fetchJson("/api/member/"+encodeURIComponent(n), { method:"PUT",  headers:{"Content-Type":"application/json"}, body:JSON.stringify(d) }); },
+    saveMatch:  function (m) { return _fetchJson("/api/match",  { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(m) }); },
 
-    saveMember: function (name, data) {
-      return _fetchJson("/api/member/" + encodeURIComponent(name), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-    },
-
-    saveMatch: function (matchObj) {
-      return _fetchJson("/api/match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(matchObj),
-      });
-    },
-
-    /**
-     * POST /api/rollover[?force=1]
-     *
-     * On success (rolled === true):
-     *   1. Fetches /api/current-week and updates IplConfig.current_week.
-     *   2. Dispatches "ipl:week-changed"   { week_no, max_weeks }
-     *   3. Dispatches "ipl:rollover-triggered" { ...server response }
-     *   4. Busts ETag so next poll fetches fresh state + leaderboard.
-     *
-     * On season_complete === true:
-     *   Dispatches "ipl:season-complete" in addition to the above.
-     */
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
       return _fetchJson(url, { method: "POST" }).then(function (data) {
         if (!data) return data;
-
         if (data.season_complete) {
-          console.warn("[IplApi] Season complete — all " + IplConfig.max_weeks + " weeks rolled.");
+          console.warn("[IplApi] Season complete \u2014 all " + IplConfig.max_weeks + " weeks rolled.");
           window.dispatchEvent(new CustomEvent("ipl:season-complete", { detail: data }));
         }
-
         if (data.rolled) {
-          // Re-fetch current week from server and update IplConfig
           _fetchJson("/api/current-week").then(function (wk) {
             if (wk && wk.week_no != null) {
               IplConfig.current_week = wk.week_no;
-              window.dispatchEvent(new CustomEvent("ipl:week-changed", {
-                detail: { week_no: wk.week_no, max_weeks: wk.max_weeks }
-              }));
+              window.dispatchEvent(new CustomEvent("ipl:week-changed", { detail: { week_no: wk.week_no, max_weeks: wk.max_weeks } }));
             }
           }).catch(function () {});
-
-          // Bust ETag → next poll cycle will pull fresh state + leaderboard
           _lastStateEtag = null;
           window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
         }
-
         return data;
       });
     },
 
-    seedHistory: function () {
-      return _fetchJson("/api/seed-history", { method: "POST" });
-    },
+    seedHistory: function () { return _fetchJson("/api/seed-history", { method: "POST" }); },
   };
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // 60-SECOND POLLING LOOP
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────
 
   function _pollCycle() {
     return _fetchJson("/api/poll")
@@ -387,90 +272,71 @@
         _cancelOverlay();
         var serverEtag = poll && poll.state_etag;
         if (!serverEtag || serverEtag === _lastStateEtag) return;
-
-        return Promise.all([
-          IplApi.getState(),
-          IplApi.getLeaderboard(),
-        ]).then(function (results) {
-          var state = results[0];
-          var lb    = results[1];
-          if (state) {
-            _lastStateEtag = state._saved || serverEtag;
-            window.dispatchEvent(new CustomEvent("ipl:state-updated", { detail: state }));
-          }
-          if (lb) {
-            window.dispatchEvent(new CustomEvent("ipl:leaderboard-updated", { detail: lb }));
-          }
-        });
+        return Promise.all([ IplApi.getState(), IplApi.getLeaderboard() ])
+          .then(function (results) {
+            var state = results[0]; var lb = results[1];
+            if (state) { _lastStateEtag = state._saved || serverEtag; window.dispatchEvent(new CustomEvent("ipl:state-updated", { detail: state })); }
+            if (lb)    { window.dispatchEvent(new CustomEvent("ipl:leaderboard-updated", { detail: lb })); }
+          });
       })
       .catch(function (err) {
         window.dispatchEvent(new CustomEvent("ipl:error", { detail: err }));
-        if ((err.status && err.status >= 500) || !navigator.onLine) {
-          _scheduleOverlay();
-        }
+        if ((err.status && err.status >= 500) || !navigator.onLine) _scheduleOverlay();
       });
   }
 
-  function startPolling() {
-    if (_pollTimer) return;
-    _pollCycle();
-    _pollTimer = setInterval(_pollCycle, POLL_INTERVAL_MS);
-  }
+  function startPolling() { if (_pollTimer) return; _pollCycle(); _pollTimer = setInterval(_pollCycle, POLL_INTERVAL_MS); }
+  function stopPolling()  { if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; } }
 
-  function stopPolling() {
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-  }
-
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // LIFECYCLE
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── LIFECYCLE ───────────────────────────────────────────────────────────
 
   function _init() {
-    // Hydrate IplConfig from server
     IplApi.ping().catch(function () {});
-
-    // Prime current_week synchronously for components that read IplConfig early
     IplApi.getCurrentWeek().then(function (wk) {
-      if (wk && wk.week_no != null) {
-        IplConfig.current_week = wk.week_no;
-      }
+      if (wk && wk.week_no != null) IplConfig.current_week = wk.week_no;
     }).catch(function () {});
-
     startPolling();
     _scheduleNextRollover();
-
     document.addEventListener("visibilitychange", function () {
-      if (document.hidden) {
-        stopPolling();
-      } else {
-        startPolling();
-        _pollCycle();
+      if (document.hidden) stopPolling(); else { startPolling(); _pollCycle(); }
+    });
+    window.addEventListener("ipl:saved",             function () { _lastStateEtag = null; });
+    window.addEventListener("ipl:rollover-triggered", function () { _lastStateEtag = null; _pollCycle(); });
+
+    // ── v7.5: SAFE BOOT — 5-second timeout ────────────────────────────────
+    // If the app-loading screen is still visible after SAFE_BOOT_MS it means
+    // /api/state never resolved. Hide the spinner and surface an error banner
+    // so the user isn’t stuck staring at an infinite loader.
+    _safeBootTimer = setTimeout(function () {
+      var loading = document.getElementById("app-loading");
+      if (loading && !loading.classList.contains("hidden")) {
+        // Force-hide spinner
+        loading.classList.add("hidden");
+        setTimeout(function () { if (loading) loading.remove(); }, 450);
+        // Surface error banner
+        var banner = document.getElementById("error-banner");
+        if (banner) {
+          banner.textContent = "\u26a0\ufe0f  Could not connect to server \u2014 please check your connection or refresh the page.";
+          banner.classList.add("visible");
+        }
+        console.warn("[IPL] Safe boot timeout: /api/state did not respond within " + (SAFE_BOOT_MS / 1000) + "s.");
       }
-    });
+    }, SAFE_BOOT_MS);
 
-    window.addEventListener("ipl:saved", function () {
-      _lastStateEtag = null;
+    // Cancel the safe boot timer as soon as we receive a valid state
+    window.addEventListener("ipl:state-updated", function _clearSafeBoot() {
+      if (_safeBootTimer) { clearTimeout(_safeBootTimer); _safeBootTimer = null; }
+      window.removeEventListener("ipl:state-updated", _clearSafeBoot);
     });
-
-    window.addEventListener("ipl:rollover-triggered", function () {
-      _lastStateEtag = null;
-      _pollCycle();
-    });
+    // ───────────────────────────────────────────────────────────────────
 
     window.dispatchEvent(new CustomEvent("ipl:ready"));
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", _init);
-  } else {
-    _init();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _init);
+  else _init();
 
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // EXPORTS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── EXPORTS ────────────────────────────────────────────────────────────
 
   window.IplApi               = IplApi;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
@@ -479,3 +345,330 @@
   window.normaliseLeaderboard = normaliseLeaderboard;
 
 }(window));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// v7.4  UI OVERRIDES
+// Loaded after the inline script — these replace the original tab builders.
+// ════════════════════════════════════════════════════════════════════════════
+
+
+// ── v7.4: Shared player stats cache ──────────────────────────────────────
+var _playerMap = {};
+
+function _loadPlayerMap(cb) {
+  IplApi.getPlayers().then(function(d) {
+    if (d && d.players) {
+      _playerMap = {};
+      d.players.forEach(function(p) { _playerMap[p.id] = p; });
+      if (typeof cb === 'function') cb();
+    }
+  }).catch(function() {});
+}
+
+// ── v7.1: History tab — weekly pts chip ──────────────────────────────────
+_buildHistoryTab = function () {
+  if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
+    return (_username && !_historyData)
+      ? '<div class="card"><p class="empty">History loading\u2026</p></div>'
+      : '<div class="card"><div class="history-empty"><strong>No history yet</strong>Your weekly XIs will appear here once you\'ve set and locked a team.</div></div>';
+  }
+  var weeks  = _historyData.weeks;
+  var viewWk = (_historyViewWk === null) ? _currentWeek : _historyViewWk;
+  var h = '<div class="history-bar"><label>\uD83D\uDCD6 Browse:</label>'
+        + '<select onchange="_selectHistoryWeek(parseInt(this.value))">';
+  weeks.forEach(function (w) {
+    var lbl = "Week " + w.week_no + (w.week_no === 0 ? " (Pre-season)" : w.is_current ? " (Current)" : " (Archive)");
+    h += '<option value="' + w.week_no + '"' + (w.week_no === viewWk ? " selected" : "") + ">" + esc(lbl) + "</option>";
+  });
+  h += "</select>";
+  var selRow = null;
+  for (var i = 0; i < weeks.length; i++) { if (weeks[i].week_no === viewWk) { selRow = weeks[i]; break; } }
+  if (selRow && !selRow.is_current) h += '<span class="ro-note">\uD83D\uDD12 Read-only archive</span>';
+  h += "</div>";
+  if (!selRow) return h + '<div class="card"><p class="empty">No data for selected week.</p></div>';
+  var tw = selRow.this_week;
+  h += '<div class="card' + (selRow.is_current ? "" : " card-locked") + '">'
+     + '<div class="week-label">Week ' + selRow.week_no
+     + (selRow.week_no === 0 ? " \u2014 Pre-season" : selRow.is_current ? "" : ' &nbsp;<span class="badge-lock">Archive</span>')
+     + '</div><h3 class="section-title">\u26A1 This Week\'s XI</h3>';
+  h += '<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(0,212,170,.1);'
+     + 'border:1px solid rgba(0,212,170,.25);border-radius:8px;padding:6px 14px;margin-bottom:12px;">'
+     + '<span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
+     + 'Week ' + selRow.week_no + ' Points</span>'
+     + '<span style="font-size:20px;font-weight:900;color:var(--teal)">' + (selRow.week_pts || 0) + '</span>'
+     + '</div>';
+  if (tw && tw.team && tw.team.length > 0) {
+    h += _buildXiGrid(tw.team, tw.cap, tw.vc);
+    h += '<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 pts</span>'
+       + '<span><span class="badge badge-vc">VC</span> \xd71.5 pts</span></div>';
+  } else {
+    h += '<p class="empty">No XI recorded for this week.</p>';
+  }
+  return h + "</div>";
+};
+
+// ── v7.4: Leaderboard — per-week columns + cap/vc note ───────────────────
+_buildLeaderboardCard = function (lb) {
+  var h = '<div class="card">';
+  if (!lb || !lb.rankings || lb.rankings.length === 0) {
+    return h + '<h3 class="section-title">\uD83C\uDFC6 Leaderboard</h3>'
+             + '<p class="empty">No scores yet \u2014 check back after the first match.</p></div>';
+  }
+  h += '<h3 class="section-title">\uD83C\uDFC6 Leaderboard' + (lb.week_no ? " \u2014 Week " + lb.week_no : "") + "</h3>";
+  h += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">'
+     + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
+     + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
+     + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members'
+     + ' &nbsp;\u00B7&nbsp; <span style="color:var(--muted);font-size:11px" title="Points include Captain \xd72 and Vice-Captain \xd71.5 multipliers">'
+     + '\u2139\uFE0F Cap/VC weighted</span></p>';
+  var allWeeks = [], weekSet = {};
+  lb.rankings.forEach(function (r) {
+    (r.weekly || []).forEach(function (w) {
+      if (!weekSet[w.week_no]) { weekSet[w.week_no] = true; allWeeks.push(w.week_no); }
+    });
+  });
+  allWeeks.sort(function (a, b) { return a - b; });
+  h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
+  allWeeks.forEach(function (wk) { h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>'; });
+  h += '<th style="text-align:right" title="Cap \xd72 + VC \xd71.5 applied">Total\u00A0\u2605</th><th>MVP</th></tr></thead><tbody>';
+  lb.rankings.forEach(function (row) {
+    var isMe = row.name === _username;
+    var weekMap = {};
+    (row.weekly || []).forEach(function (w) { weekMap[w.week_no] = w.pts; });
+    h += '<tr' + (isMe ? ' class="me"' : "") + '>'
+       + '<td class="rank">' + row.rank + '</td>'
+       + '<td>' + esc(row.name) + (isMe ? ' <span style="color:var(--gold);font-size:11px">(you)</span>' : "") + '</td>';
+    allWeeks.forEach(function (wk) {
+      var pts = weekMap[wk];
+      h += '<td style="text-align:right;font-size:12px;color:' + (pts > 0 ? 'var(--teal)' : 'var(--dim)') + '">'
+         + (pts != null ? pts : '\u2014') + '</td>';
+    });
+    h += '<td class="pts">' + (row.total_pts || 0) + '</td>';
+    var mvpName = row.mvp && row.mvp.player_name ? esc(row.mvp.player_name) : null;
+    var mvpPts  = row.mvp && row.mvp.pts ? row.mvp.pts : null;
+    var mvpCell = mvpName ? mvpName + ' <span style="color:var(--teal);font-size:11px">(' + mvpPts + ')</span>' : '\u2014';
+    h += '<td class="mvp">' + mvpCell + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  h += '<p style="font-size:10px;color:var(--dim);margin:8px 0 0;text-align:right">'
+     + '\u2605 Total = sum of per-match pts with Cap(\xd72) and VC(\xd71.5) applied</p>';
+  h += '</div>';
+  return h;
+};
+
+// ── v7.4: Points tab — breakdown + match-by-match team totals ────────────
+_buildPointsTab = function () {
+  var h = '<div class="card">';
+  h += '<div class="user-header-bar" style="margin-bottom:14px">';
+  h += '<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
+  h += '<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
+  h += '</div>';
+
+  if (_ptsLoading) return h + '<div class="pts-loading">\u23F3 Loading\u2026</div></div>';
+  if (!_ptsData || !_ptsData.players || _ptsData.players.length === 0)
+    return h + '<div class="pts-loading">No points data yet. Run scraper then Reload.</div></div>';
+
+  var d = _ptsData;
+  var _ms = {};
+  d.players.forEach(function(p) { (p.matches||[]).forEach(function(m) { _ms[m.match_id] = true; }); });
+  var matchCount = Object.keys(_ms).length;
+
+  h += '<div class="pts-summary">';
+  h += '<div class="pts-stat"><div class="val">' + d.total_pts + '</div><div class="lbl">Total Pts</div></div>';
+  h += '<div class="pts-stat"><div class="val">' + d.players.length + '</div><div class="lbl">Players</div></div>';
+  h += '<div class="pts-stat"><div class="val">' + matchCount + '</div><div class="lbl">Matches</div></div>';
+  if (matchCount > 0) h += '<div class="pts-stat"><div class="val">' + Math.round(d.total_pts/matchCount) + '</div><div class="lbl">Avg/Match</div></div>';
+  h += '</div>';
+
+  h += '<table class="pts-table"><thead><tr>'
+     + '<th>Player</th><th>Team</th><th>Role</th>'
+     + '<th style="text-align:right">Pts\u00A0(cap/vc)</th>'
+     + '<th style="text-align:right;font-size:11px;color:var(--muted)">Base</th>'
+     + '<th></th></tr></thead><tbody>';
+
+  d.players.forEach(function(p, idx) {
+    var rowId  = "pts-row-" + idx;
+    var badge  = p.is_cap ? '<span class="badge badge-c" style="margin-left:4px">C</span>'
+               : p.is_vc  ? '<span class="badge badge-vc" style="margin-left:4px">VC</span>' : '';
+    var mult   = p.is_cap ? " (\xd72)" : p.is_vc ? " (\xd71.5)" : "";
+    var avC    = _avClass(p.team);
+    var pInfo  = _playerMap[p.id] || {};
+    var basePts = pInfo.season_pts != null ? pInfo.season_pts : '\u2014';
+
+    h += '<tr>';
+    h += '<td><div style="display:flex;align-items:center;gap:8px">'
+       + '<div class="prow-avatar ' + avC + '">' + esc(_initials(p.name||p.id)) + '</div>'
+       + '<div><div style="font-size:13px;font-weight:600">' + esc(p.name||p.id) + badge + '</div>'
+       + '<div style="font-size:10px;color:var(--muted)">' + esc(p.id) + '</div></div></div></td>';
+    h += '<td style="font-size:11px;color:var(--muted)">' + esc(p.team||'\u2014') + '</td>';
+    h += '<td>' + _roleBadge(p.role) + '</td>';
+    h += '<td class="pts-cell">' + p.total_pts + esc(mult) + '</td>';
+    h += '<td style="text-align:right;font-size:11px;color:var(--muted)">' + basePts + '</td>';
+    h += '<td>';
+    if (p.matches && p.matches.length > 0)
+      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()" >Details</button>';
+    h += '</td></tr>';
+    if (p.matches && p.matches.length > 0) {
+      h += '<tr><td colspan="6" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
+      p.matches.forEach(function(m) {
+        var multStr = m.multiplier > 1 ? (m.multiplier === 2
+          ? '<span class="m-mult">\xd72</span>' : '<span class="m-mult">\xd71.5</span>') : '';
+        h += '<div class="pts-match-row">'
+           + '<div class="m-title">' + esc(m.title||m.match_id) + '</div>'
+           + '<div style="display:flex;align-items:center">'
+           + '<span style="font-size:10px;color:var(--muted);margin-right:6px">W' + m.week_no + '</span>'
+           + multStr + '<span class="m-pts">' + m.final_pts + '</span></div></div>';
+      });
+      h += '</div></td></tr>';
+    }
+  });
+  h += '</tbody></table>';
+
+  var matchTitleMap = {};
+  if (_state && _state.matches) _state.matches.forEach(function(m) { matchTitleMap[m.id] = m.title || m.id; });
+
+  if (_historyData && _historyData.weeks && _historyData.weeks.length > 0) {
+    var rows = [];
+    _historyData.weeks.forEach(function(wk) {
+      var ppm = wk.points_per_match || {};
+      Object.keys(ppm).forEach(function(mid) { rows.push({ week_no: wk.week_no, match_id: mid, pts: ppm[mid] }); });
+    });
+    rows.sort(function(a, b) { return a.week_no !== b.week_no ? a.week_no - b.week_no : a.match_id.localeCompare(b.match_id); });
+    if (rows.length > 0) {
+      h += '<h3 class="section-title" style="margin-top:20px">\uD83D\uDCC8 Match-by-Match Team Totals</h3>';
+      h += '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">Your XI\u2019s combined score per game including Cap(\xd72) and VC(\xd71.5).</p>';
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      h += '<thead><tr>'
+         + '<th style="text-align:left;padding:5px 8px;color:var(--muted)">Match</th>'
+         + '<th style="text-align:center;padding:5px 4px;color:var(--muted)">Wk</th>'
+         + '<th style="text-align:right;padding:5px 8px;color:var(--teal)">XI Total</th></tr></thead><tbody>';
+      var runningTotal = 0;
+      rows.forEach(function(r) {
+        runningTotal += r.pts;
+        var title = matchTitleMap[r.match_id] || r.match_id;
+        var color = r.pts > 0 ? 'var(--teal)' : 'var(--dim)';
+        h += '<tr style="border-top:1px solid rgba(255,255,255,.04)">'
+           + '<td style="padding:6px 8px;color:var(--text)">' + esc(title) + '</td>'
+           + '<td style="text-align:center;padding:6px 4px;color:var(--muted)">W' + r.week_no + '</td>'
+           + '<td style="text-align:right;padding:6px 8px;font-weight:700;color:' + color + '">' + r.pts + '</td></tr>';
+      });
+      h += '<tr style="border-top:2px solid rgba(255,255,255,.12)">'
+         + '<td colspan="2" style="padding:7px 8px;font-weight:700;color:var(--text)">Season Total</td>'
+         + '<td style="text-align:right;padding:7px 8px;font-weight:900;color:var(--gold)">' + runningTotal + '</td></tr>';
+      h += '</tbody></table>';
+    }
+  }
+
+  return h + '</div>';
+};
+
+
+// ── v7.3: Matches tab ─────────────────────────────────────────────────────
+var _umpData = null;
+
+function _loadUserMatchPoints() {
+  if (!window._username) return;
+  IplApi.getUserMatchPoints(window._username)
+    .then(function(d) {
+      if (d && d.ok) {
+        _umpData = {};
+        (d.matches || []).forEach(function(m) { _umpData[m.match_id] = m.pts; });
+      }
+    }).catch(function() {});
+}
+
+_buildMatchesTab = function () {
+  if (_umpData === null) _loadUserMatchPoints();
+
+  if (!_state || !_state.matches || _state.matches.length === 0)
+    return '<div class="card"><p class="empty">No match data yet.</p></div>';
+
+  var h = '<div class="card"><h3 class="section-title">\uD83D\uDCCB Matches</h3>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+  h += '<thead><tr>'
+     + '<th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Match</th>'
+     + '<th style="text-align:center;padding:6px 4px;color:var(--muted);font-weight:600">Wk</th>'
+     + '<th style="text-align:center;padding:6px 4px;color:var(--muted);font-weight:600">Status</th>'
+     + '<th style="text-align:right;padding:6px 8px;color:var(--teal);font-weight:600">My Pts</th>'
+     + '</tr></thead><tbody>';
+
+  _state.matches.forEach(function(m) {
+    var title  = m.title || m.id;
+    var status = (m.status || "").toLowerCase();
+    var badgeColor = status === 'completed' ? '#00D4AA' : status === 'live' ? '#F5C518' : '#5F7A9B';
+    var badgeLabel = status === 'completed' ? 'Completed' : status === 'live' ? 'Live' : 'Upcoming';
+    var myPts  = (_umpData && _umpData[m.id] != null) ? _umpData[m.id] : null;
+    var ptsStr = (myPts != null)
+      ? '<span style="color:var(--teal);font-weight:700">' + myPts + '</span>'
+      : '<span style="color:var(--dim)">\u2014</span>';
+    h += '<tr style="border-top:1px solid rgba(255,255,255,.05)">';
+    h += '<td style="padding:8px 8px;font-weight:500">' + esc(title) + '</td>';
+    h += '<td style="text-align:center;padding:8px 4px;color:var(--muted);font-size:11px">W' + (m.wk||m.week_no||'?') + '</td>';
+    h += '<td style="text-align:center;padding:8px 4px"><span style="display:inline-block;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;'
+       + 'background:' + badgeColor + '22;color:' + badgeColor + '">' + badgeLabel + '</span></td>';
+    h += '<td style="text-align:right;padding:8px 8px">' + ptsStr + '</td></tr>';
+  });
+
+  h += '</tbody></table></div>';
+  return h;
+};
+
+
+// ── v7.4: Player picker stats injection ──────────────────────────────────
+function _injectStatsToPicker() {
+  var rows = document.querySelectorAll('[data-pid], .prow, .player-row, .pick-row');
+  rows.forEach(function(row) {
+    if (row.querySelector('.ipl-pts-badge')) return;
+    var pid = row.getAttribute('data-pid') || (row.dataset && row.dataset.pid);
+    if (!pid) {
+      var idEl = row.querySelector('.prow-id, [class*="prow-id"], .player-id');
+      if (idEl) pid = idEl.textContent.trim();
+    }
+    if (!pid) return;
+    var pInfo = _playerMap[pid];
+    if (!pInfo) return;
+    var points    = pInfo.points    || 0;
+    var seasonPts = pInfo.season_pts || 0;
+    var badge = document.createElement('span');
+    badge.className = 'ipl-pts-badge';
+    badge.title = 'Fantasy pts (Cap\xd72 / VC\xd71.5 weighted)';
+    badge.style.cssText = 'display:inline-block;margin-left:6px;padding:1px 7px;'
+      + 'border-radius:99px;background:rgba(245,197,24,.18);color:#F5C518;'
+      + 'font-size:10px;font-weight:800;vertical-align:middle';
+    badge.textContent = '\u2605 ' + points;
+    var sub = document.createElement('span');
+    sub.className = 'ipl-base-pts';
+    sub.title = 'Base pts (no cap/vc multiplier)';
+    sub.style.cssText = 'display:inline-block;margin-left:4px;padding:1px 5px;'
+      + 'border-radius:99px;background:rgba(95,122,155,.2);color:var(--muted,#5F7A9B);'
+      + 'font-size:9px;font-weight:600;vertical-align:middle';
+    sub.textContent = seasonPts + 'b';
+    var priceEl = row.querySelector('[class*="price"], .prow-price, .player-price');
+    if (priceEl) {
+      priceEl.parentNode.insertBefore(badge, priceEl.nextSibling);
+      priceEl.parentNode.insertBefore(sub, badge.nextSibling);
+    } else {
+      row.appendChild(badge); row.appendChild(sub);
+    }
+  });
+}
+
+var _pickerObserver = null;
+
+function _setupPickerObserver() {
+  if (_pickerObserver) return;
+  var target = document.querySelector('.tab-content, #app, main, body');
+  if (!target) { setTimeout(_setupPickerObserver, 500); return; }
+  _loadPlayerMap(function() { _injectStatsToPicker(); });
+  _pickerObserver = new MutationObserver(function() { _injectStatsToPicker(); });
+  _pickerObserver.observe(target, { childList: true, subtree: true });
+}
+
+window.addEventListener('ipl:state-updated', function() {
+  _umpData = null;
+  _loadPlayerMap(function() { _injectStatsToPicker(); });
+});
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _setupPickerObserver);
+else setTimeout(_setupPickerObserver, 800);

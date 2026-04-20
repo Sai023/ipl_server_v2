@@ -515,7 +515,7 @@ function _buildPointsTab(){
   return h+'</div>';
 }
 
-// ─── ADMIN TAB (Cricbuzz URL management) ─────────────────────────────────────
+// ─── ADMIN TAB ───────────────────────────────────────────────────────────────
 function _buildAdminTab(){
   var h='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:14px">';
@@ -683,6 +683,6 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=74"></script>
+<script src="/static/ipl_glue.js?v=75"></script>
 </body>
 </html>
