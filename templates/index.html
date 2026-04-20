@@ -77,10 +77,11 @@
     .picker-lockout-banner{padding:8px 14px;font-size:12px;font-weight:600;background:rgba(245,197,24,.07);border-bottom:1px solid rgba(245,197,24,.18);color:var(--gold);text-align:center;letter-spacing:.02em;}
     .picker-row{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;transition:background .1s;border-bottom:1px solid rgba(255,255,255,.03);}
     .picker-row:hover:not(.full-xi){background:rgba(255,255,255,.04);} .picker-row.selected{background:rgba(0,212,170,.07);} .picker-row.selected:hover{background:rgba(0,212,170,.12);}
-    .picker-row.full-xi{opacity:0.35;cursor:not-allowed;} .picker-row.over-budget{opacity:0.35;cursor:not-allowed;}
+    .picker-row.full-xi{opacity:0.75;cursor:pointer;} .picker-row.full-xi:hover{background:rgba(245,197,24,.04);} .picker-row.over-budget{opacity:0.35;cursor:not-allowed;}
     .prow-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0;background:rgba(255,255,255,.1);color:var(--text);}
     .prow-info{flex:1;min-width:0;} .prow-name{font-size:13px;font-weight:600;color:var(--text);} .prow-sub{font-size:10px;color:var(--muted);margin-top:1px;}
-    .prow-price{font-size:12px;font-weight:700;color:var(--gold);min-width:44px;text-align:right;} .prow-tick{width:18px;font-size:13px;color:var(--teal);text-align:center;opacity:0;}
+    .prow-price{font-size:11px;font-weight:700;color:var(--gold);min-width:44px;text-align:right;line-height:1.5;} .prow-tick{width:18px;font-size:13px;color:var(--teal);text-align:center;opacity:0;}
+    .prow-pts{font-size:10px;color:var(--teal);font-weight:600;}
     .picker-row.selected .prow-tick{opacity:1;}
     .history-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:var(--muted);}
     .history-bar select{background:var(--surface);border:1px solid rgba(255,255,255,.12);color:var(--text);font-size:12px;border-radius:6px;padding:4px 8px;cursor:pointer;}
@@ -466,7 +467,7 @@ function clearUsername(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function escAttr(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");}
 function hideLoading(){if($loading&&!$loading.classList.contains("hidden")){$loading.classList.add("hidden");setTimeout(function(){if($loading)$loading.remove();},450);}}
-function showErrorBanner(msg){if(!$errorBanner)return;$errorBanner.textContent="\u26a0\uFE0F  "+(msg||"Server error — retrying…");$errorBanner.classList.add("visible");}
+function showErrorBanner(msg){if(!$errorBanner)return;$errorBanner.textContent="\u26a0\uFE0F  "+(msg||"Server error — retrying\u2026");$errorBanner.classList.add("visible");}
 function hideErrorBanner(){if($errorBanner)$errorBanner.classList.remove("visible");}
 function _avClass(team){
   if(!team)return"";
@@ -692,7 +693,7 @@ function _buildNwSquad(){
     var p=resolvePlayer(id),nm=p.name||id,iC=(id===cap),iV=(id===vc);
     var cls="xi-card editable"+(iC?" is-cap":iV?" is-vc":"");
     var avC=_avClass(p.team),sub=[p.role,p.team].filter(Boolean).join(" \u00B7 ");
-    h+='<div class="'+cls+'">'+'<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>'+'<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'+(sub?'<div class="xi-sub">'+esc(sub)+'</div>':'')+'</div>'+'<div class="xi-edit-row">'+'<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'+'<button class="evc-btn'+(iV?' on':'')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'+'<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>'+'</div></div>';
+    h+='<div class="'+cls+'">'+'<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>'+'<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'+(sub?'<div class="xi-sub">'+esc(sub)+'</div>':'')+'</div>'+'<div class="xi-edit-row">'+'<button class="ecap-btn'+(iC?' on':'\')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'+'<button class="evc-btn'+(iV?' on':'\')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'+'<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>'+'</div></div>';
   });
   return h+'</div>';
 }
@@ -706,6 +707,14 @@ function _buildPicker(){
   var allP=_allPlayers(),teams=[],ts={};
   allP.forEach(function(p){if(p.team&&!ts[p.team]){ts[p.team]=true;teams.push(p.team);}});
   teams.sort();
+  // Build pts lookup from _ptsData (gracefully empty when not loaded)
+  var ptsMap={};
+  if(_ptsData&&_ptsData.players){
+    _ptsData.players.forEach(function(pp){
+      if(pp.id)ptsMap[pp.id]=pp.total_pts;
+      if(pp.name)ptsMap[pp.name.toLowerCase()]=pp.total_pts;
+    });
+  }
   var q=_pickerSearch.toLowerCase().trim();
   var filtered=allP.filter(function(p){
     if(_pickerRole!=="All"&&p.role!==_pickerRole)return false;
@@ -716,7 +725,7 @@ function _buildPicker(){
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
   var xi_full=_nwDraft.team.length>=XI_SIZE,rem=_remaining();
   var lockMsg="";
-  if(xi_full&&rem>=-0.001)lockMsg="\uD83D\uDD12 XI complete (11/11) \u2014 remove a player to swap";
+  if(xi_full&&rem>=-0.001)lockMsg="\uD83D\uDD12 XI complete \u2014 tap any player below to swap";
   else if(rem<=0)lockMsg="\uD83D\uDCB8 Budget limit reached \u2014 remove a player to free up funds";
   var h='<div class="picker-shell"><div class="picker-toolbar"><div class="picker-search"><span style="color:var(--muted);font-size:13px">\uD83D\uDD0D</span><input id="picker-search-input" type="text" placeholder="Search by name or team\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"></div><div class="picker-filters">';
   ["All","WK","BAT","AR","BOWL"].forEach(function(r){
@@ -733,12 +742,20 @@ function _buildPicker(){
   if(filtered.length===0)h+='<div class="picker-empty">No players match.</div>';
   else filtered.forEach(function(p){
     var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
-    var over=!isSel&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel,dis=isFull||over;
-    var cls="picker-row"+(isSel?" selected":"")+(isFull?" full-xi":"")+((!isFull&&over&&!isSel)?" over-budget":"");
-    var lockStyle=dis&&!isSel?' style="opacity:0.60;pointer-events:none;"':'';
-    var oc=dis?"":' onclick="_nwToggle(\''+escAttr(key)+'\')'+'"';
+    // full-xi rows are no longer hard-disabled — they open the swap sheet
+    var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
+    var cls="picker-row"+(isSel?" selected":"")+(isFull?" full-xi":"")+((!xi_full&&over&&!isSel)?" over-budget":"");
+    var lockStyle=over?' style="opacity:0.60;pointer-events:none;"':'';
+    var oc;
+    if(isSel){oc=' onclick="_nwToggle(\''+escAttr(key)+'\')"';}
+    else if(xi_full){oc=' onclick="_showSwapModal(\''+escAttr(key)+'\')"';}
+    else if(!over){oc=' onclick="_nwToggle(\''+escAttr(key)+'\')"';}
+    else{oc='';}
     var disp=p.name+(p.team?" - "+p.team:"");
-    h+='<div class="'+cls+'"'+oc+lockStyle+'><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div><div class="prow-info"><div class="prow-name">'+esc(disp)+'</div>'+(p.role?'<div class="prow-sub">'+esc(p.role)+'</div>':'')+'</div><div class="prow-price">'+(p.price?p.price.toFixed(1)+' CR':'')+'</div><div class="prow-tick">\u2713</div></div>';
+    // PTS column: look up from ptsMap by id then by name
+    var pts=ptsMap[key]!=null?ptsMap[key]:(ptsMap[(p.name||'').toLowerCase()]!=null?ptsMap[(p.name||'').toLowerCase()]:null);
+    var priceHtml=(p.price?p.price.toFixed(1)+' CR':'')+(pts!=null?'<br><span class="prow-pts">'+pts+' PTS</span>':'');
+    h+='<div class="'+cls+'"'+(oc||'')+lockStyle+'><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div><div class="prow-info"><div class="prow-name">'+esc(disp)+'</div>'+(p.role?'<div class="prow-sub">'+esc(p.role)+'</div>':'')+'</div><div class="prow-price">'+priceHtml+'</div><div class="prow-tick">\u2713</div></div>';
   });
   return h+'</div></div>';
 }
@@ -784,7 +801,7 @@ function _buildLoginCard(memberNames){
 function _buildThisWeekCard(){
   var tw=_getThisWeekData();
   var h='<div class="card card-locked"><div class="week-label">Week '+_currentWeek+' &nbsp;<span class="badge-lock">\uD83D\uDD12 Locked</span></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
-  if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+"</p></div>";return h;}
+  if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+"\</p></div>";return h;}
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
   return h+'</div>';
 }
@@ -817,14 +834,14 @@ function _buildHistoryTab(){
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
-  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
+  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'\')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
   h+='</div></div><div class="members-dual">';
   memberNames.forEach(function(n){
     var isMe=n===_username,tw=[],capId=null,vcId=null;
     if(isMe&&_historyData){var cur=_getCurrentWeekRow();if(cur){var src=null;if(cur.this_week&&cur.this_week.team&&cur.this_week.team.length>0)src=cur.this_week;else if(cur.next_week&&cur.next_week.team&&cur.next_week.team.length>0)src=cur.next_week;if(src){tw=src.team;capId=src.cap;vcId=src.vc;}}}
     if(tw.length===0){var picks=_state&&_state.members&&_state.members[n];if(picks){var raw=null;if(picks.this_week&&picks.this_week.team&&picks.this_week.team.length>0)raw=picks.this_week;else if(picks.next_week&&picks.next_week.team&&picks.next_week.team.length>0)raw=picks.next_week;else if(picks.team&&picks.team.length>0)raw=picks;if(raw){tw=raw.team||[];capId=raw.cap||null;vcId=raw.vc||null;}}}
     var cost=0;tw.forEach(function(id){var p=resolvePlayer(id);cost+=(p.price||0);});cost=Math.round(cost*10)/10;
-    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
+    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'\')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
     if(tw.length>0)h+=_buildXiGrid(tw,capId,vcId);
     else{h+='<p class="empty" style="padding:14px 0;color:var(--dim)">No XI set this week</p>';if(isMe)h+='<button class="btn btn-teal btn-sm" onclick="switchTab(\'next\')" style="margin-top:4px">\u270F\uFE0F Set my XI</button>';else h+='<p style="font-size:11px;color:var(--dim);margin-top:4px">Waiting for '+esc(n)+' to set their squad.</p>';}
     h+='</div>';
@@ -907,7 +924,7 @@ function _buildPointsTab(){
     h+='<td class="pts-cell">'+p.total_pts+esc(mult)+'</td>';
     h+='<td>';
     if(p.matches&&p.matches.length>0){
-      h+='<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\''+rowId+'\');el.classList.toggle(\'open\');})()" >Details</button>';
+      h+='<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\''+rowId+'\');el.classList.toggle(\'open\');})()">Details</button>';
     }
     h+='</td></tr>';
     if(p.matches&&p.matches.length>0){
@@ -973,6 +990,42 @@ function _buildAdminTab(){
   return h+'</div>';
 }
 
+// ─── SWAP MODAL ───────────────────────────────────────────────────────────────
+function _showSwapModal(incomingId){
+  var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
+  var h='<div id="swap-modal" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 32px;max-height:80vh;overflow-y:auto;">';
+  h+='<div style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Select who to remove from your XI</div>';
+  _nwDraft.team.forEach(function(id){
+    var cur=resolvePlayer(id),avC=_avClass(cur.team),curPrice=cur.price||0;
+    var diff=Math.round((inPrice-curPrice)*10)/10;
+    var newRem=Math.round((_remaining()+curPrice-inPrice)*10)/10;
+    var canAfford=newRem>=-0.001;
+    var roleTeam=[cur.role,cur.team].filter(Boolean).join(' \u00B7 ')+(id===_nwDraft.cap?' \u00B7 C':(id===_nwDraft.vc?' \u00B7 VC':''));
+    var diffLabel=diff>0?'<span style="color:#FF6B6B;font-size:10px;font-weight:600">\u2212'+diff.toFixed(1)+' CR</span>':diff<0?'<span style="color:var(--teal);font-size:10px;font-weight:600">+'+Math.abs(diff).toFixed(1)+' CR</span>':'<span style="color:var(--muted);font-size:10px">Same cost</span>';
+    h+='<div onclick="'+(canAfford?'_doSwap(\''+escAttr(id)+'\',\''+escAttr(incomingId)+'\')':'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);margin-bottom:7px;cursor:'+(canAfford?'pointer':'not-allowed')+';opacity:'+(canAfford?'1':'0.35')+'">';
+    h+='<div class="prow-avatar '+avC+'">'+esc(_initials(cur.name||id))+'</div>';
+    h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(cur.name||id)+'</div><div style="font-size:10px;color:var(--muted)">'+esc(roleTeam)+'</div></div>';
+    h+='<div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--gold)">'+(curPrice?curPrice.toFixed(1)+' CR':'')+'</div>'+diffLabel+'</div>';
+    h+='</div>';
+  });
+  h+='<button onclick="_closeSwapModal()" style="margin-top:8px;width:100%;padding:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>';
+  h+='</div></div>';
+  var el=document.createElement('div');
+  el.innerHTML=h;
+  document.body.appendChild(el.firstChild);
+}
+function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.remove();}
+function _doSwap(removeId,addId){
+  _closeSwapModal();
+  _nwDraft.team=_nwDraft.team.filter(function(x){return x!==removeId;});
+  if(_nwDraft.cap===removeId)_nwDraft.cap=null;
+  if(_nwDraft.vc===removeId)_nwDraft.vc=null;
+  _nwDraft.team.push(addId);
+  if(_state)render(_state);
+}
+
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
@@ -1000,7 +1053,7 @@ function render(state){
       {id:"admin",label:"Admin \u2699\uFE0F"},
     ].forEach(function(t){
       html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')
-            +'" onclick="switchTab(\''+t.id+'\')">'+ t.label+'</button>';
+            +'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
     });
     html+='</div>';
     if     (_activeTab==="team")        {html+=_buildThisWeekCard();html+=_buildDevTools();}
