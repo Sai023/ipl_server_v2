@@ -2,6 +2,7 @@
 IPL Fantasy 2026 — Database Initialiser                     init_db v1.0.0
 ===========================================================================
 Phase 1 — System Architect.  Strict relocation; zero logic changes.
+Phase 2 — DB_PATH, DATA_DIR, INIT_DB_VER, VERSION_MAP imported from config.
 
 What lives here
 ---------------
@@ -13,9 +14,10 @@ _HISTORY_SEED   — weekly team/cap/vc tuples, relocated from server.py.
 _auto_seed_*    — the three startup seed functions, relocated verbatim from server.py.
 run_all_sync()  — single public entry point called by server.py on startup.
 
-Dependency graph (Phase 1)
+Dependency graph (Phase 2)
 --------------------------
-  server.py  ──import──>  init_db.py  ──import──>  DatabaseManager (db_manager.py)
+  server.py  ──import──>  init_db.py  ──import──>  config.py
+                                        └──import──>  DatabaseManager (db_manager.py)
 """
 
 import json as _json
@@ -26,21 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from db_manager import DatabaseManager  # noqa: F401 — used by run_all_sync caller
+from config import DATA_DIR, DB_PATH, INIT_DB_VER, VERSION_MAP  # noqa: F401
 
-# ── Version ───────────────────────────────────────────────────────────────────
-
-INIT_DB_VER = "1.0.0"
-
-VERSION_MAP = {
-    "1.0.0": "Phase 1 — Relocated _SCHEMA + _auto_seed_* from server.py / db_manager.py",
-}
-
-# ── Paths (same derivation as server.py — both files sit in BASE_DIR) ─────────
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DB_PATH  = DATA_DIR / "fantasy.db"
 DATA_DIR.mkdir(exist_ok=True)
+
+# ── BASE_DIR is kept local: seed subprocess calls use cwd=str(BASE_DIR) ──────────
+BASE_DIR = Path(__file__).resolve().parent
 
 # ── Schema — relocated from db_manager.py (authoritative copy) ────────────────
 # Note: db_manager.py retains its own copy for DatabaseManager._init_schema().
@@ -206,6 +199,7 @@ _HISTORY_SEED = [
 # ── DB connection helper — local copy for seed functions ──────────────────────
 # server.py retains its own _db_con() for route handlers; this one is used only
 # by _auto_seed_history_if_needed() which runs at startup before Flask is live.
+# DB_PATH is now sourced from config.py — guaranteed same path as scraper.py.
 
 def _db_con():
     con = sqlite3.connect(str(DB_PATH), timeout=30)
@@ -217,7 +211,7 @@ def _db_con():
 
 
 # ── Auto-seed functions — relocated verbatim from server.py ───────────────────
-# No logic changes. Strict-scope Phase 1 relocation only.
+# No logic changes. Strict-scope Phase 1/2 relocation only.
 
 def _auto_seed_if_needed():
     seed=BASE_DIR/"Seed_Matches.py"
@@ -228,7 +222,7 @@ def _auto_seed_if_needed():
         n=con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]; con.close()
     except: return
     if n>0: return
-    print("\n  [startup] No match data — running seed script ...")
+    print("\n  [startup] No match data \u2014 running seed script ...")
     try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
     except Exception as e: print(f"  [startup] Could not run: {e}\n")
 
@@ -242,7 +236,7 @@ def _auto_seed_players_if_needed():
         n=con.execute("SELECT COUNT(*) FROM players").fetchone()[0]; con.close()
     except: return
     if n>0: return
-    print("\n  [startup] No player data — running Seed_Players.py ...")
+    print("\n  [startup] No player data \u2014 running Seed_Players.py ...")
     try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
     except Exception as e: print(f"  [startup] Could not run: {e}\n")
 
@@ -326,13 +320,13 @@ def _auto_seed_history_if_needed():
 
 def run_all_sync(db=None):
     """
-    Single startup call for server.py (Phase 1).
+    Single startup call for server.py (Phase 1/2).
     Replaces the three individual _auto_seed_* calls that previously
     lived inline in server.py's __main__ block.
 
     Execution order is preserved: players → matches → history.
     `db` (a DatabaseManager instance) is accepted for forward-compat but is
-    not used in Phase 1 — the seed functions each open their own connections.
+    not used in Phase 1/2 — the seed functions each open their own connections.
     """
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()

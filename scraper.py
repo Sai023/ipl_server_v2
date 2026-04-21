@@ -44,10 +44,10 @@ except ImportError:
     sys.exit(1)
 
 from db_manager import DatabaseManager, _upsert_match
+from config import DB_PATH, SCRAPER_VER  # noqa: F401
 
 # ── Paths
 BASE_DIR    = Path(__file__).resolve().parent
-DB_PATH     = BASE_DIR / "data" / "fantasy.db"
 MATCHES_DIR = BASE_DIR / "data" / "matches"
 SERIES_ID   = "9237"
 MAX_RETRIES = 3
@@ -606,7 +606,7 @@ def main():
         if resolved < 15 and scores:
             print(f"    \u26a0 Only {resolved} resolved players (expected ~22)")
 
-        # ── Persist scores to match_scores table ──────────────────────────
+        # ── Persist scores to match_scores table ────────────────────────────────────────
         payload = {**meta, "scores": scores}
         with open(jp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -618,25 +618,18 @@ def main():
         else:
             print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
 
-        # ── FIX-014: Atomic per-match point update ────────────────────────
-        # Runs immediately after _upsert_match so user_selections.week_pts,
-        # points_per_match, and players.points are current before the next
-        # match is processed.  Pass iid (e.g. "ipl26_m04") so
-        # recalculate_points() scopes its work to exactly this match.
+        # ── FIX-014: Atomic per-match point update ───────────────────────────────────────
         _update_points_for_match(db, iid, wk)
 
         processed += 1
 
-    # ── End-of-run summary ────────────────────────────────────────────────
+    # ── End-of-run summary ─────────────────────────────────────────────────────────────────
     if skipped_non_ipl:
         print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards \u2014 run scraper again to retry")
     if no_result_count:
         print(f"  \u26aa {no_result_count} no-result matches recorded (0 points each)")
 
     if processed > 0:
-        # Final season_pts sync (base pts, no multiplier) — one pass at the end
-        # is sufficient since per-match players.points is already kept current
-        # by _update_points_for_match() inside the loop.
         print(f"\n  Syncing season_pts for all players...")
         pp = db.update_player_season_pts()
         print(f"  season_pts updated: {pp} players with pts > 0.")

@@ -42,18 +42,16 @@ except ImportError:
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from db_manager import DatabaseManager
 import init_db
+from config import DB_PATH, DEADLINE_HOUR, DEADLINE_MIN, SERVER_VER
 
 BASE_DIR   = Path(__file__).resolve().parent
 DATA_DIR   = BASE_DIR / "data"
-DB_PATH    = DATA_DIR / "fantasy.db"
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR.mkdir(exist_ok=True)
 
 BUDGET_TOTAL  = 100.0
 XI_SIZE       = 11
 MAX_WEEKS     = 8
-DEADLINE_HOUR = 14
-DEADLINE_MIN  = 0
 
 _ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
 
@@ -542,7 +540,6 @@ def api_player_points(n):
             if not team_ids:
                 return jsonify({"ok":True,"name":name,"total_pts":0,"players":[],"weeks":[]})
             ph=",".join("?"*len(team_ids))
-            # v12.7: include season_pts and points
             player_rows={r["id"]:dict(r) for r in
                 con.execute(
                     f"SELECT id,name,team,role,price,season_pts,points FROM players WHERE id IN ({ph})",
@@ -573,7 +570,6 @@ def api_player_points(n):
                         "multiplier":mult,
                         "final_pts":round(r["base_pts"]*mult),
                     })
-            # v12.7: also return per-week points_per_match blobs for match totals section
             weeks_out=[]
             for sel in sel_rows:
                 ppm=sel["points_per_match"] if "points_per_match" in sel.keys() else "{}"
@@ -583,7 +579,6 @@ def api_player_points(n):
                     "points_per_match":_j.loads(ppm or "{}"),
                 })
 
-        # v12.7: grand_total from user_match_points (cap/vc exact)
         grand_total = sum(w["week_pts"] for w in weeks_out)
         players_out=[]
         for pid in team_ids:
@@ -598,10 +593,9 @@ def api_player_points(n):
                 "price":info.get("price",0),
                 "is_cap":pid==latest_cap,
                 "is_vc":pid==latest_vc,
-                # v12.7: both point fields
-                "season_pts":info.get("season_pts",0),   # base, no cap/vc
-                "points":info.get("points",0),            # cap/vc-weighted season total
-                "total_pts":p_total,                      # this-user match breakdown sum
+                "season_pts":info.get("season_pts",0),
+                "points":info.get("points",0),
+                "total_pts":p_total,
                 "matches":matches,
             })
         players_out.sort(key=lambda x:-x["total_pts"])
@@ -609,7 +603,7 @@ def api_player_points(n):
             "ok":True,"name":name,
             "total_pts":grand_total,
             "players":players_out,
-            "weeks":weeks_out,   # v12.7: per-week points_per_match for match-by-match section
+            "weeks":weeks_out,
         })
     except Exception as e:
         _log(f"GET /api/player-points/{name}: {e}","error")
@@ -619,7 +613,7 @@ def api_player_points(n):
 @app.route("/api/user-match-points/<n>",methods=["GET"])
 def api_user_match_points(n):
     """
-    v12.6 \u2014 Per-match user points from user_match_points (cap/vc applied).
+    v12.6 — Per-match user points from user_match_points (cap/vc applied).
     Returns [{week_no, match_id, title, status, teams, pts}].
     """
     try:

@@ -35,8 +35,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-DEADLINE_HOUR = 14
-DEADLINE_MIN  = 0
+from config import DEADLINE_HOUR, DEADLINE_MIN, DB_VER  # noqa: F401
 
 
 _SCHEMA = """
@@ -572,7 +571,7 @@ class DatabaseManager:
 
         Returns number of user_selections rows updated.
         """
-        # ── Read ────────────────────────────────────────────────────────────
+        # ── Read ───────────────────────────────────────────────────────────────────
         with self._read() as con:
             sels = con.execute("""
                 SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
@@ -592,7 +591,7 @@ class DatabaseManager:
             ).fetchall():
                 week_matches.setdefault(r["week_no"], []).append(r["id"])
 
-        # ── Compute ─────────────────────────────────────────────────────────
+        # ── Compute ─────────────────────────────────────────────────────────────────
         ump_rows   = []   # (display_name, week_no, match_id, pts)
         wk_totals  = {}   # (display_name, week_no) -> int
         # v5.7: per-row points_per_match blob {match_id: pts}
@@ -625,7 +624,7 @@ class DatabaseManager:
             wk_totals[(name, wk)]  = wk_total
             ppm_blobs[(name, wk)]  = match_blob   # v5.7: own blob per week row
 
-        # ── Write ────────────────────────────────────────────────────────────
+        # ── Write ──────────────────────────────────────────────────────────────────
         updated = 0
         with self._write() as con:
             # user_match_points (granular per-match lookup)
