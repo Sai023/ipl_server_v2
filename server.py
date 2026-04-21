@@ -41,6 +41,7 @@ except ImportError:
 
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from db_manager import DatabaseManager
+import init_db
 
 BASE_DIR   = Path(__file__).resolve().parent
 DATA_DIR   = BASE_DIR / "data"
@@ -79,64 +80,6 @@ _SEMANTIC_MAP = {
     "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
     "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
 }
-
-# ── History seed ──────────────────────────────────────────────────────────────
-# RULE: Every week MUST have its own explicit variable — never alias W3=W2.
-# To add W5: define _SAI_W5_TEAM/_MOE_W5_TEAM, add to _HISTORY_SEED, bump _SEED_VERSION.
-_SEED_VERSION = "2026.v8.w3w4-defined"
-
-_SAI_W1_TEAM = ["k04","k19","s04","s05","s07","r01","r03","r11","m04","m07","m12"]
-_SAI_W1_CAP  = "k04"
-_SAI_W1_VC   = "s05"
-
-_SAI_W2_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
-_SAI_W2_CAP  = "c09"
-_SAI_W2_VC   = "rr11"
-
-_SAI_W3_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
-_SAI_W3_CAP  = "c09"
-_SAI_W3_VC   = "rr11"
-
-_SAI_W4_TEAM = ["d22","p10","c12","c02","g03","rr14","rr11","l11","c09","p03","s04"]
-_SAI_W4_CAP  = "c09"
-_SAI_W4_VC   = "rr11"
-
-# W5+ — add here when teams are known:
-# _SAI_W5_TEAM = [...]
-# _SAI_W5_CAP  = "..."
-# _SAI_W5_VC   = "..."
-
-_MOE_W1_TEAM = ["k04","m04","m07","m17","r02","r03","r12","s01","s04","k07","r16"]
-_MOE_W1_CAP  = "r03"
-_MOE_W1_VC   = "s04"
-
-_MOE_W2_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
-_MOE_W2_CAP  = "l01"
-_MOE_W2_VC   = "s04"
-
-_MOE_W3_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
-_MOE_W3_CAP  = "l01"
-_MOE_W3_VC   = "s04"
-
-_MOE_W4_TEAM = ["m03","r05","k09","r16","p07","c11","rr04","s05","m11","s04","l01"]
-_MOE_W4_CAP  = "l01"
-_MOE_W4_VC   = "s04"
-
-# W5+ — add here when teams are known:
-# _MOE_W5_TEAM = [...]
-# _MOE_W5_CAP  = "..."
-# _MOE_W5_VC   = "..."
-
-_HISTORY_SEED = [
-    ("Sai", 1, _SAI_W1_TEAM, _SAI_W1_CAP, _SAI_W1_VC),
-    ("Moe", 1, _MOE_W1_TEAM, _MOE_W1_CAP, _MOE_W1_VC),
-    ("Sai", 2, _SAI_W2_TEAM, _SAI_W2_CAP, _SAI_W2_VC),
-    ("Moe", 2, _MOE_W2_TEAM, _MOE_W2_CAP, _MOE_W2_VC),
-    ("Sai", 3, _SAI_W3_TEAM, _SAI_W3_CAP, _SAI_W3_VC),
-    ("Moe", 3, _MOE_W3_TEAM, _MOE_W3_CAP, _MOE_W3_VC),
-    ("Sai", 4, _SAI_W4_TEAM, _SAI_W4_CAP, _SAI_W4_VC),
-    ("Moe", 4, _MOE_W4_TEAM, _MOE_W4_CAP, _MOE_W4_VC),
-]
 
 
 # ════ PLAYER RESOLVER
@@ -275,110 +218,6 @@ def _db_con():
     return con
 
 
-# ════ AUTO-SEED HELPERS
-
-def _auto_seed_if_needed():
-    seed=BASE_DIR/"Seed_Matches.py"
-    if not seed.exists(): seed=BASE_DIR/"seed_matches.py"
-    if not seed.exists(): return
-    try:
-        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
-        n=con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]; con.close()
-    except: return
-    if n>0: return
-    print("\n  [startup] No match data — running seed script ...")
-    try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
-    except Exception as e: print(f"  [startup] Could not run: {e}\n")
-
-def _auto_seed_players_if_needed():
-    seed=BASE_DIR/"Seed_Players.py"
-    if not seed.exists(): seed=BASE_DIR/"seed_players.py"
-    if not seed.exists(): return
-    try:
-        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
-        n=con.execute("SELECT COUNT(*) FROM players").fetchone()[0]; con.close()
-    except: return
-    if n>0: return
-    print("\n  [startup] No player data — running Seed_Players.py ...")
-    try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
-    except Exception as e: print(f"  [startup] Could not run: {e}\n")
-
-
-def _auto_seed_history_if_needed():
-    """v11.7/v12.5: Versioned history seed with draft preservation."""
-    try:
-        con = _db_con()
-        ver_row = con.execute("SELECT value FROM meta WHERE key='_seed_version'").fetchone()
-        stored_ver = ver_row["value"] if ver_row else None
-        if stored_ver == _SEED_VERSION:
-            print("  [startup] Season history up-to-date.")
-            con.close(); return
-
-        print(f"  [startup] Seed version ({stored_ver!r} → {_SEED_VERSION!r}) — re-seeding history...")
-        seeded_names = list(set(name for name, _, _, _, _ in _HISTORY_SEED))
-        max_seed_wk  = max(wk for _, wk, _, _, _ in _HISTORY_SEED)
-        nw_backups = {}; extra_weeks = {}
-
-        for uname in seeded_names:
-            row = con.execute(
-                "SELECT nw_team_json,nw_cap_id,nw_vc_id FROM user_selections "
-                "WHERE display_name=? AND week_no=?", (uname, max_seed_wk)
-            ).fetchone()
-            if row:
-                nw_t = row["nw_team_json"]
-                tw_row = con.execute(
-                    "SELECT tw_team_json FROM user_selections WHERE display_name=? AND week_no=?",
-                    (uname, max_seed_wk)
-                ).fetchone()
-                stale_tw = tw_row["tw_team_json"] if tw_row else "[]"
-                if nw_t and nw_t != "[]" and nw_t != stale_tw:
-                    nw_backups[uname] = (nw_t, row["nw_cap_id"], row["nw_vc_id"])
-            extras = con.execute(
-                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id "
-                "FROM user_selections WHERE display_name=? AND week_no>?",
-                (uname, max_seed_wk)
-            ).fetchall()
-            if extras: extra_weeks[uname] = [dict(r) for r in extras]
-
-        for uname in seeded_names:
-            con.execute("DELETE FROM user_selections WHERE display_name=? AND week_no<=?",
-                        (uname, max_seed_wk))
-
-        seeded = []
-        for name, week_no, team, cap, vc in _HISTORY_SEED:
-            if week_no == max_seed_wk and name in nw_backups:
-                nw_team, nw_cap, nw_vc = nw_backups[name]
-            else:
-                nw_team = _json.dumps(team); nw_cap = cap; nw_vc = vc
-            con.execute("""
-                INSERT OR REPLACE INTO user_selections
-                (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                VALUES (?,?,?,?,?,?,?,?)
-            """, (name, week_no, _json.dumps(team), cap, vc, nw_team, nw_cap, nw_vc))
-            seeded.append(f"{name}/W{week_no}")
-
-        for uname, rows in extra_weeks.items():
-            for r in rows:
-                con.execute("""
-                    INSERT OR IGNORE INTO user_selections
-                    (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (uname, r["week_no"], r["tw_team_json"], r["tw_cap_id"], r["tw_vc_id"],
-                      r["nw_team_json"], r["nw_cap_id"], r["nw_vc_id"]))
-
-        con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_seed_version',?)", (_SEED_VERSION,))
-        con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
-                    (datetime.now(timezone.utc).isoformat(),))
-        con.commit(); con.close()
-        print(f"  [startup] History re-seeded: {', '.join(seeded)}")
-        if nw_backups: print(f"  [startup] Preserved nw drafts for: {', '.join(nw_backups)}")
-        if extra_weeks:
-            restored = [f"{u}/W{r['week_no']}" for u,rs in extra_weeks.items() for r in rs]
-            print(f"  [startup] Restored extra weeks: {', '.join(restored)}")
-    except Exception as e:
-        print(f"  [startup] Could not seed history: {e}")
-
-
 # ════ STARTUP: CLEAR SCORE TABLES + JSON CACHE
 
 def _rebuild_scores_and_points():
@@ -406,8 +245,8 @@ def _rebuild_scores_and_points():
                 try: f.unlink(); deleted += 1
                 except Exception as e2: print(f"  [startup] Could not delete {f.name}: {e2}")
 
-        print(f"  [startup] ✓ Cleared all score data. Deleted {deleted} cached JSON files.")
-        print("  [startup] ► Run: python scraper.py   to repopulate with fresh data.")
+        print(f"  [startup] \u2713 Cleared all score data. Deleted {deleted} cached JSON files.")
+        print("  [startup] \u25ba Run: python scraper.py   to repopulate with fresh data.")
     except Exception as e:
         print(f"  [startup] _rebuild_scores_and_points failed: {e}")
 
@@ -440,13 +279,13 @@ def _audit_player_id_coverage():
                     prefix = re.match(r'^[a-z]+', pid)
                     suggestions = [f"{p_id}={p_nm}" for p_id,p_nm in all_players.items()
                                    if prefix and p_id.startswith(prefix.group()) and p_id != pid][:4]
-                    print(f"  [startup] ⚠  TRUE GHOST '{pid}' ({name}/W{wk}): "
+                    print(f"  [startup] \u26a0  TRUE GHOST '{pid}' ({name}/W{wk}): "
                           f"NOT in players table! Alternatives: {', '.join(suggestions) or 'none'}")
 
         if not true_ghosts:
-            print("  [startup] ✓ All selected player IDs exist in players table.")
+            print("  [startup] \u2713 All selected player IDs exist in players table.")
             if not pmp_ids:
-                print("  [startup]   player_match_points is empty (normal after restart) — run: python scraper.py")
+                print("  [startup]   player_match_points is empty (normal after restart) \u2014 run: python scraper.py")
 
         print("  [startup] === Per-user cumulative totals (from week_pts) ===")
         for uname, pts in sorted(totals.items()):
@@ -467,7 +306,7 @@ def _cold_start_hydrate():
         if n==0:
             jd=DATA_DIR/"matches"
             if jd.exists() and any(jd.glob("*.json")):
-                print("\n  [startup] Cold DB — hydrating from JSON archives...")
+                print("\n  [startup] Cold DB \u2014 hydrating from JSON archives...")
                 ingested=db.hydrate_from_json(jd)
                 print(f"  [startup] Hydrated: {ingested} matches.\n")
     except Exception as e:
@@ -644,7 +483,7 @@ def api_rollover():
 def api_seed_history():
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try: _auto_seed_history_if_needed(); return jsonify({"ok":True})
+    try: init_db._auto_seed_history_if_needed(); return jsonify({"ok":True})
     except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 @app.route("/api/players",methods=["GET"])
@@ -780,7 +619,7 @@ def api_player_points(n):
 @app.route("/api/user-match-points/<n>",methods=["GET"])
 def api_user_match_points(n):
     """
-    v12.6 — Per-match user points from user_match_points (cap/vc applied).
+    v12.6 \u2014 Per-match user points from user_match_points (cap/vc applied).
     Returns [{week_no, match_id, title, status, teams, pts}].
     """
     try:
@@ -878,7 +717,7 @@ def api_update_match_url():
             except Exception as e: _log(f"[bg scrape] {e}","error")
         threading.Thread(target=_scrape_bg,daemon=True).start()
         return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
-                        "message":"URL saved. Scraping started in background — refresh in ~30 seconds."})
+                        "message":"URL saved. Scraping started in background \u2014 refresh in ~30 seconds."})
     except Exception as e:
         _log(f"POST /api/update-match-url: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -1155,7 +994,7 @@ def print_banner(port,tunnel,lan_ip):
         url=tunnel.url; sys.modules[__name__].CURRENT_PUBLIC_URL=url
         for i in range(0,len(url),WIDE-4): print(banner_line(f"   {url[i:i+WIDE-4]}"))
         if tunnel.ephemeral:
-            print(banner_line("\u26a0  EPHEMERAL TUNNEL — URL may die after ~30 min!"))
+            print(banner_line("\u26a0  EPHEMERAL TUNNEL \u2014 URL may die after ~30 min!"))
             print(banner_line("   Run setup_cloudflare.ps1 for a persistent tunnel"))
         else:
             print(banner_line("SHARE THIS LINK with friends anywhere!"))
@@ -1200,9 +1039,7 @@ if __name__=="__main__":
     _log(f"Database: {DB_PATH}")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
-    _auto_seed_players_if_needed()
-    _auto_seed_if_needed()
-    _auto_seed_history_if_needed()
+    init_db.run_all_sync(db)
     _rebuild_scores_and_points()
     _audit_player_id_coverage()
 
