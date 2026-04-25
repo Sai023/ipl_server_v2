@@ -1,18 +1,17 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7.4
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.5
  * =========================================================================
- * v7.4 (this release):
- *   • _playerMap cache — stores {points (cap/vc-aware), season_pts (base), ...}
- *     per player from /api/players. Replaces the old _playerSeasonPts map.
- *   • _injectStatsToPicker() — shows players.points (gold badge, primary) and
- *     season_pts (muted subtitle) in the team picker so users see weighted value.
- *   • _buildLeaderboardCard() — "Total" column header now shows "(cap/vc ×)"
- *     tooltip to clarify the weight; MVP cell shows player form (points).
- *   • _buildPointsTab() — adds "📊 Match-by-Match Team Totals" section below the
- *     player table, reading points_per_match from /api/history so users see
- *     their team's combined score per game for that week.
- *   • _buildMatchesTab() — unchanged; still uses user_match_points correctly.
+ * v7.5 (Phase 6 — Integrator):
+ *   • _checkVersionHandshake() — called on page load; hits /api/version and
+ *     logs APP_VERSION + VERSION_MAP to the browser console with a styled
+ *     group header. Confirms the frontend is talking to the Decoupled v2.0
+ *     backend. Also dispatches ipl:version-ok with the payload.
+ *   • IplApi.getVersion() — added to public API surface.
+ *   • UI Safety: lock state uses ROLLOVER_HOUR_UTC=14 / ROLLOVER_MIN_UTC=0
+ *     (Monday 14:00 UTC = 16:00 SAST). Confirmed to match rollover_engine.py
+ *     DEADLINE_HOUR=14 — both sides lock at the same instant. ✓
  *
+ * v7.4: _playerMap cache, season_pts/points dual-column, match-by-match totals.
  * v7.3: Matches tab, user match pts, picker season_pts injection.
  * v7.2: _buildPointsTab() matchCount fix.
  * v7.1: History tab chip, Leaderboard per-week columns.
@@ -23,7 +22,7 @@
 
   var POLL_INTERVAL_MS  = 60000;
   var MAINTENANCE_DELAY = 1500;
-  var ROLLOVER_HOUR_UTC = 14;
+  var ROLLOVER_HOUR_UTC = 14;   // Monday 14:00 UTC = 16:00 SAST — matches DEADLINE_HOUR in config.py
   var ROLLOVER_MIN_UTC  = 0;
 
   var _lastStateEtag  = null;
@@ -109,7 +108,7 @@
     if (_overlayVisible) _hideOverlay();
   }
 
-  // ── LEADERBOARD NORMALISATION ────────────────────────────────────────────
+  // ── LEADERBOARD NORMALISATION ─────────────────────────────────────────────────
 
   function normaliseLeaderboard(raw) {
     if (!raw || typeof raw !== "object") {
@@ -132,7 +131,7 @@
     };
   }
 
-  // ── HTTP HELPERS ─────────────────────────────────────────────────────────
+  // ── HTTP HELPERS ────────────────────────────────────────────────────────────
 
   function _fetchJson(url, options) {
     options = options || {};
@@ -150,7 +149,33 @@
       });
   }
 
-  // ── ROLLOVER SCHEDULER ──────────────────────────────────────────────────
+  // ── VERSION HANDSHAKE (Phase 6) ───────────────────────────────────────────────
+  // Called once from _init(). Hits /api/version and logs the full
+  // VERSION_MAP to the browser console to confirm the decoupled backend.
+
+  function _checkVersionHandshake() {
+    _fetchJson("/api/version")
+      .then(function (v) {
+        if (!v || !v.ok) return;
+        console.group(
+          "%c\uD83C\uDFCF IPL Fantasy " + v.app_version + " — Decoupled v2.0 Backend \u2713",
+          "color:#F5C518;font-weight:800;font-size:13px"
+        );
+        console.log("%cAPP_VERSION%c  " + v.app_version, "color:#5F7A9B;font-weight:600", "color:#00D4AA;font-weight:800");
+        console.log("%cModule pins:", "color:#5F7A9B;font-weight:600", v.modules);
+        console.log("%cMigration map:", "color:#5F7A9B;font-weight:600");
+        Object.keys(v.version_map).sort().forEach(function (ver) {
+          console.log("  " + ver + " →", v.version_map[ver]);
+        });
+        console.groupEnd();
+        window.dispatchEvent(new CustomEvent("ipl:version-ok", { detail: v }));
+      })
+      .catch(function (err) {
+        console.warn("[IplGlue] /api/version handshake failed —", err.message || err);
+      });
+  }
+
+  // ── ROLLOVER SCHEDULER ─────────────────────────────────────────────────────────
 
   function _msUntilNextRollover() {
     var now = new Date(); var utcDay = now.getUTCDay();
@@ -163,7 +188,7 @@
   }
 
   function _executeRollover() {
-    console.info("[IplRollover] Triggering Monday 14:00 rollover \u2026");
+    console.info("[IplRollover] Triggering Monday 14:00 UTC rollover \u2026");
     IplApi.rollover(false)
       .then(function (data) {
         if (data && data.rolled) { console.info("[IplRollover] Rollover complete \u2014 week: " + data.new_week_no); _lastStateEtag = null; _pollCycle(); }
@@ -186,7 +211,7 @@
 
   var IplRollover = { scheduleNext: _scheduleNextRollover, cancelPending: _cancelRolloverTimer };
 
-  // ── PUBLIC API ──────────────────────────────────────────────────────────
+  // ── PUBLIC API ────────────────────────────────────────────────────────────────────
 
   var IplApi = {
 
@@ -214,6 +239,9 @@
     getUserMatchPoints: function (name) {
       return _fetchJson("/api/user-match-points/" + encodeURIComponent(name));
     },
+
+    // Phase 6: /api/version endpoint — returns VERSION_MAP + module pins
+    getVersion: function () { return _fetchJson("/api/version"); },
 
     saveNextWeek: function (name, picks) {
       return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
@@ -266,7 +294,7 @@
     seedHistory: function () { return _fetchJson("/api/seed-history", { method: "POST" }); },
   };
 
-  // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────
+  // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────────────
 
   function _pollCycle() {
     return _fetchJson("/api/poll")
@@ -290,9 +318,10 @@
   function startPolling() { if (_pollTimer) return; _pollCycle(); _pollTimer = setInterval(_pollCycle, POLL_INTERVAL_MS); }
   function stopPolling()  { if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; } }
 
-  // ── LIFECYCLE ───────────────────────────────────────────────────────────
+  // ── LIFECYCLE ───────────────────────────────────────────────────────────────────
 
   function _init() {
+    _checkVersionHandshake();     // Phase 6: confirm backend version on every page load
     IplApi.ping().catch(function () {});
     IplApi.getCurrentWeek().then(function (wk) {
       if (wk && wk.week_no != null) IplConfig.current_week = wk.week_no;
@@ -310,7 +339,7 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _init);
   else _init();
 
-  // ── EXPORTS ────────────────────────────────────────────────────────────
+  // ── EXPORTS ────────────────────────────────────────────────────────────────────
 
   window.IplApi               = IplApi;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
@@ -322,15 +351,12 @@
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// v7.1 / v7.2 / v7.3 / v7.4  UI OVERRIDES
+// v7.1 / v7.2 / v7.3 / v7.4 / v7.5  UI OVERRIDES
 // Loaded after the inline script — these replace the original tab builders.
 // ════════════════════════════════════════════════════════════════════════════
 
 
-// ── v7.4: Shared player stats cache ──────────────────────────────────────
-// Stores {id: {points, season_pts, name, team, role, price}} from /api/players.
-// points     = cap/vc-aware cumulative fantasy pts (players.points)
-// season_pts = raw base pts, no multiplier         (players.season_pts)
+// ── v7.4: Shared player stats cache ───────────────────────────────────────────────────
 var _playerMap = {};
 
 function _loadPlayerMap(cb) {
@@ -343,7 +369,7 @@ function _loadPlayerMap(cb) {
   }).catch(function() {});
 }
 
-// ── v7.1: History tab — weekly pts chip ──────────────────────────────────
+// ── v7.1: History tab — weekly pts chip ──────────────────────────────────────────────
 _buildHistoryTab = function () {
   if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
     return (_username && !_historyData)
@@ -385,7 +411,7 @@ _buildHistoryTab = function () {
   return h + "</div>";
 };
 
-// ── v7.4: Leaderboard — per-week columns + cap/vc-weighted note ──────────
+// ── v7.4: Leaderboard — per-week columns + cap/vc-weighted note ────────────────────
 _buildLeaderboardCard = function (lb) {
   var h = '<div class="card">';
   if (!lb || !lb.rankings || lb.rankings.length === 0) {
@@ -397,7 +423,6 @@ _buildLeaderboardCard = function (lb) {
      + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
      + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
      + ' &nbsp;\u00B7&nbsp; ' + lb.member_count + ' members'
-     // v7.4: clarify that totals are cap/vc-weighted
      + ' &nbsp;\u00B7&nbsp; <span style="color:var(--muted);font-size:11px" title="Points include Captain \xd72 and Vice-Captain \xd71.5 multipliers">'
      + '\u2139\uFE0F Cap/VC weighted</span></p>';
   var allWeeks = [], weekSet = {};
@@ -409,7 +434,6 @@ _buildLeaderboardCard = function (lb) {
   allWeeks.sort(function (a, b) { return a - b; });
   h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
   allWeeks.forEach(function (wk) { h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>'; });
-  // v7.4: Total header with weighted note
   h += '<th style="text-align:right" title="Cap \xd72 + VC \xd71.5 applied">Total\u00A0\u2605</th><th>MVP</th></tr></thead><tbody>';
   lb.rankings.forEach(function (row) {
     var isMe = row.name === _username;
@@ -424,7 +448,6 @@ _buildLeaderboardCard = function (lb) {
          + (pts != null ? pts : '\u2014') + '</td>';
     });
     h += '<td class="pts">' + (row.total_pts || 0) + '</td>';
-    // v7.4: MVP shows player name + their cap/vc-weighted season points from _playerMap
     var mvpName = row.mvp && row.mvp.player_name ? esc(row.mvp.player_name) : null;
     var mvpPts  = row.mvp && row.mvp.pts ? row.mvp.pts : null;
     var mvpCell = mvpName
@@ -433,14 +456,13 @@ _buildLeaderboardCard = function (lb) {
     h += '<td class="mvp">' + mvpCell + '</td></tr>';
   });
   h += '</tbody></table>';
-  // v7.4: legend
   h += '<p style="font-size:10px;color:var(--dim);margin:8px 0 0;text-align:right">'
      + '\u2605 Total = sum of per-match pts with Cap(\xd72) and VC(\xd71.5) applied</p>';
   h += '</div>';
   return h;
 };
 
-// ── v7.4: Points tab — player breakdown + match-by-match team totals ─────
+// ── v7.4: Points tab — player breakdown + match-by-match team totals ─────────
 _buildPointsTab = function () {
   var h = '<div class="card">';
   h += '<div class="user-header-bar" style="margin-bottom:14px">';
@@ -464,11 +486,9 @@ _buildPointsTab = function () {
   if (matchCount > 0) h += '<div class="pts-stat"><div class="val">' + Math.round(d.total_pts/matchCount) + '</div><div class="lbl">Avg/Match</div></div>';
   h += '</div>';
 
-  // Per-player table
   h += '<table class="pts-table"><thead><tr>'
      + '<th>Player</th><th>Team</th><th>Role</th>'
      + '<th style="text-align:right">Pts\u00A0(cap/vc)</th>'
-     // v7.4: add season base pts column
      + '<th style="text-align:right;font-size:11px;color:var(--muted)">Base</th>'
      + '<th></th></tr></thead><tbody>';
 
@@ -478,7 +498,6 @@ _buildPointsTab = function () {
                : p.is_vc  ? '<span class="badge badge-vc" style="margin-left:4px">VC</span>' : '';
     var mult   = p.is_cap ? " (\xd72)" : p.is_vc ? " (\xd71.5)" : "";
     var avC    = _avClass(p.team);
-    // v7.4: pull season_pts (base) from _playerMap for the extra column
     var pInfo  = _playerMap[p.id] || {};
     var basePts = pInfo.season_pts != null ? pInfo.season_pts : '\u2014';
 
@@ -490,7 +509,6 @@ _buildPointsTab = function () {
     h += '<td style="font-size:11px;color:var(--muted)">' + esc(p.team||'\u2014') + '</td>';
     h += '<td>' + _roleBadge(p.role) + '</td>';
     h += '<td class="pts-cell">' + p.total_pts + esc(mult) + '</td>';
-    // v7.4: base pts (no multiplier) from players.season_pts
     h += '<td style="text-align:right;font-size:11px;color:var(--muted)">' + basePts + '</td>';
     h += '<td>';
     if (p.matches && p.matches.length > 0)
@@ -514,8 +532,6 @@ _buildPointsTab = function () {
   });
   h += '</tbody></table>';
 
-  // v7.4: Match-by-match team totals from history's points_per_match blob
-  // Builds a compact table: Match | Week | Team Total (cap/vc applied)
   var matchTitleMap = {};
   if (_state && _state.matches) {
     _state.matches.forEach(function(m) { matchTitleMap[m.id] = m.title || m.id; });
@@ -529,7 +545,6 @@ _buildPointsTab = function () {
         rows.push({ week_no: wk.week_no, match_id: mid, pts: ppm[mid] });
       });
     });
-    // Sort by week then match id
     rows.sort(function(a, b) {
       return a.week_no !== b.week_no ? a.week_no - b.week_no : a.match_id.localeCompare(b.match_id);
     });
@@ -554,7 +569,6 @@ _buildPointsTab = function () {
            + '<td style="text-align:right;padding:6px 8px;font-weight:700;color:' + color + '">' + r.pts + '</td>'
            + '</tr>';
       });
-      // Running total row
       h += '<tr style="border-top:2px solid rgba(255,255,255,.12)">'
          + '<td colspan="2" style="padding:7px 8px;font-weight:700;color:var(--text)">Season Total</td>'
          + '<td style="text-align:right;padding:7px 8px;font-weight:900;color:var(--gold)">' + runningTotal + '</td>'
@@ -567,7 +581,7 @@ _buildPointsTab = function () {
 };
 
 
-// ── v7.3: Matches tab — clean titles + My Pts column ─────────────────────
+// ── v7.3: Matches tab — clean titles + My Pts column ───────────────────────────
 var _umpData = null;
 
 function _loadUserMatchPoints() {
@@ -621,14 +635,11 @@ _buildMatchesTab = function () {
 };
 
 
-// ── v7.4: Player picker stats injection ──────────────────────────────────
-// Shows players.points (cap/vc-aware, gold) as primary and season_pts (base,
-// muted) as subtitle inside each picker row.
+// ── v7.4: Player picker stats injection ──────────────────────────────────────────────
 
 function _injectStatsToPicker() {
   var rows = document.querySelectorAll('[data-pid], .prow, .player-row, .pick-row');
   rows.forEach(function(row) {
-    // Skip if already injected
     if (row.querySelector('.ipl-pts-badge')) return;
 
     var pid = row.getAttribute('data-pid') || (row.dataset && row.dataset.pid);
@@ -641,10 +652,9 @@ function _injectStatsToPicker() {
     var pInfo = _playerMap[pid];
     if (!pInfo) return;
 
-    var points    = pInfo.points    || 0;   // cap/vc-weighted
-    var seasonPts = pInfo.season_pts || 0;  // base
+    var points    = pInfo.points    || 0;
+    var seasonPts = pInfo.season_pts || 0;
 
-    // Primary badge: cap/vc-weighted points (gold)
     var badge = document.createElement('span');
     badge.className = 'ipl-pts-badge';
     badge.title = 'Fantasy pts (Cap\xd72 / VC\xd71.5 weighted)';
@@ -653,7 +663,6 @@ function _injectStatsToPicker() {
       + 'font-size:10px;font-weight:800;vertical-align:middle';
     badge.textContent = '\u2605 ' + points;
 
-    // Secondary label: raw base pts (muted, smaller)
     var sub = document.createElement('span');
     sub.className = 'ipl-base-pts';
     sub.title = 'Base pts (no cap/vc multiplier)';
@@ -673,7 +682,7 @@ function _injectStatsToPicker() {
   });
 }
 
-// ── Observer + initial load ──────────────────────────────────────────────
+// ── Observer + initial load ───────────────────────────────────────────────────────────
 var _pickerObserver = null;
 
 function _setupPickerObserver() {
@@ -681,17 +690,14 @@ function _setupPickerObserver() {
   var target = document.querySelector('.tab-content, #app, main, body');
   if (!target) { setTimeout(_setupPickerObserver, 500); return; }
 
-  // Load player map on first setup
   _loadPlayerMap(function() { _injectStatsToPicker(); });
 
   _pickerObserver = new MutationObserver(function() { _injectStatsToPicker(); });
   _pickerObserver.observe(target, { childList: true, subtree: true });
 }
 
-// Invalidate caches on state update so next render is fresh
 window.addEventListener('ipl:state-updated', function() {
   _umpData = null;
-  // Refresh player pts map in background so picker shows current form
   _loadPlayerMap(function() { _injectStatsToPicker(); });
 });
 
