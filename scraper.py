@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.9
-================================================
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.10
+=================================================
+v10.10 (Phase 4):
+  _norm, _build_player_index, _fuzzy_match, _fuzzy_fielder removed from
+  this file — now imported from logic.fuzzy_match (logic is identical,
+  zero behaviour change).
 v10.9 (Phase 3):
   run_full_scrape(db=None) added — programmatic entry point for tasks.py.
   main() is now a thin CLI wrapper around run_full_scrape().
-  sys.exit() replaced with RuntimeError in run_full_scrape() so callers
-  can handle fatal errors without killing the host process.
-  IPL_YEAR and SCRAPER_VER pulled from config.py.
 v10.8:
   FIX-014: Per-match atomic point update via recalculate_points() +
   update_week_points() immediately after each _upsert_match() call.
 v10.7:
-  FIX-012: No-result/abandoned → empty scores, 0 pts.
+  FIX-012: No-result/abandoned \u2192 empty scores, 0 pts.
   FIX-013: c and b dismissal variant handled.
 v10.6:
   FIX-010: teams_json column name fix.
@@ -40,8 +41,9 @@ except ImportError:
 
 from db_manager import DatabaseManager, _upsert_match
 from config import DB_PATH, IPL_YEAR, SCRAPER_VER  # noqa: F401
+from logic.fuzzy_match import _norm, _build_player_index, _fuzzy_match, _fuzzy_fielder
 
-# ── Paths
+# \u2500\u2500 Paths
 BASE_DIR    = Path(__file__).resolve().parent
 MATCHES_DIR = BASE_DIR / "data" / "matches"
 SERIES_ID   = "9237"
@@ -73,7 +75,7 @@ _NO_RESULT_STATES = frozenset({
 })
 
 
-# ════ OVERS NORMALISATION
+# \u2550\u2550\u2550\u2550 OVERS NORMALISATION
 
 def _normalise_overs(raw: float) -> float:
     if raw <= 0:
@@ -83,7 +85,7 @@ def _normalise_overs(raw: float) -> float:
     return round(full + balls / 6, 4)
 
 
-# ════ MATCH ID DISCOVERY: POSITION-BASED
+# \u2550\u2550\u2550\u2550 MATCH ID DISCOVERY: POSITION-BASED
 
 _ORDERED_CB_IDS: list = []
 
@@ -119,7 +121,7 @@ def _match_no_from_id(iid: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-# ════ AUTO-ADD UNKNOWN PLAYERS
+# \u2550\u2550\u2550\u2550 AUTO-ADD UNKNOWN PLAYERS
 
 def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
     n = _norm(name)
@@ -160,7 +162,7 @@ def _auto_add_player(name: str, team_code: str, pidx: dict) -> str:
     return new_id
 
 
-# ════ CRICBUZZ JSON EXTRACTION
+# \u2550\u2550\u2550\u2550 CRICBUZZ JSON EXTRACTION
 
 def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
     url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cricbuzz_match_id}"
@@ -204,7 +206,7 @@ def fetch_scorecard_json(cricbuzz_match_id: str) -> dict | None:
     return None
 
 
-# ════ DISMISSAL PARSER
+# \u2550\u2550\u2550\u2550 DISMISSAL PARSER
 
 def _parse_dismissal(out_desc: str) -> dict:
     result = {"is_out": False, "is_lbw_bowled": False,
@@ -249,86 +251,7 @@ def _parse_dismissal(out_desc: str) -> dict:
     return result
 
 
-# ════ FUZZY NAME MATCHER
-
-def _norm(s: str) -> str:
-    s = str(s).lower().strip()
-    s = unicodedata.normalize("NFD", s)
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = re.sub(r"[.\-'/\u2020]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def _build_player_index(con: sqlite3.Connection) -> dict:
-    """v10.4: Builds by_name_team and name_conflicts for team-aware disambiguation."""
-    rows    = con.execute("SELECT id, name, team, role FROM players").fetchall()
-    players = [{"id": r[0], "name": r[1], "team": r[2], "role": r[3]} for r in rows]
-    by_name = {}; by_surname = {}; by_name_team = {}; name_conflicts = set()
-    for p in players:
-        n = _norm(p["name"])
-        if n in by_name:
-            name_conflicts.add(n)
-        by_name[n] = p
-        by_name_team[(n, p["team"].upper())] = p
-        parts = n.split()
-        if parts:
-            by_surname.setdefault(parts[-1], []).append(p)
-    return {
-        "by_name": by_name, "by_surname": by_surname, "all": players,
-        "by_name_team": by_name_team, "name_conflicts": name_conflicts,
-    }
-
-
-def _fuzzy_match(name: str, idx: dict, team_hint: str = None) -> str | None:
-    """v10.4: team_hint used first for ambiguous (conflict) names."""
-    n = _norm(name)
-    if not n: return None
-    if team_hint and n in idx.get("name_conflicts", set()):
-        p = idx.get("by_name_team", {}).get((n, team_hint.upper()))
-        if p: return p["id"]
-    p = idx["by_name"].get(n)
-    if p: return p["id"]
-    parts   = n.split()
-    surname = parts[-1] if parts else n
-    cands   = idx["by_surname"].get(surname, [])
-    if len(cands) == 1: return cands[0]["id"]
-    tokens = set(n.split()); best = 0.0; best_id = None
-    for p in idx["all"]:
-        pt  = set(_norm(p["name"]).split())
-        if not pt: continue
-        exp = set()
-        for t in tokens:
-            if len(t) == 1:
-                for x in pt:
-                    if x.startswith(t): exp.add(x)
-            else: exp.add(t)
-        inter = exp & pt; union = exp | pt
-        sc = len(inter) / len(union) if union else 0
-        if sc > best: best = sc; best_id = p["id"]
-    return best_id if best >= 0.45 else None
-
-
-def _fuzzy_fielder(name: str, idx: dict, bowling_team: str = None) -> str | None:
-    n = _norm(name)
-    if not n: return None
-    p = idx["by_name"].get(n)
-    if p: return p["id"]
-    cands = idx["by_surname"].get(n, [])
-    if len(cands) == 1: return cands[0]["id"]
-    if len(cands) > 1 and bowling_team:
-        tf = [c for c in cands if c["team"].upper() == bowling_team.upper()]
-        if len(tf) == 1: return tf[0]["id"]
-    parts = n.split()
-    if len(parts) > 1:
-        cands2 = idx["by_surname"].get(parts[-1], [])
-        if len(cands2) == 1: return cands2[0]["id"]
-        if len(cands2) > 1 and bowling_team:
-            tf = [c for c in cands2 if c["team"].upper() == bowling_team.upper()]
-            if len(tf) == 1: return tf[0][" id"]
-    return None
-
-
-# ════ SCORECARD PROCESSOR
+# \u2550\u2550\u2550\u2550 SCORECARD PROCESSOR
 
 def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
     cards = data.get("scoreCard", [])
@@ -423,7 +346,7 @@ def process_cricbuzz_scorecard(data: dict, pidx: dict) -> dict:
 def _extract_meta(data: dict, iid: str, wk: int) -> tuple[dict, bool]:
     """
     Returns (meta_dict, is_no_result).
-    is_no_result=True for abandoned/no-result — caller writes empty scores.
+    is_no_result=True for abandoned/no-result \u2014 caller writes empty scores.
     """
     h     = data.get("matchHeader", {})
     teams = []
@@ -465,8 +388,8 @@ def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
     """
     FIX-014: Atomic per-match point pipeline.
     Steps:
-      1. recalculate_points(match_id) — insert/update player_match_points for this match.
-      2. update_week_points()         — recompute user_match_points + user_selections.
+      1. recalculate_points(match_id) \u2014 insert/update player_match_points for this match.
+      2. update_week_points()         \u2014 recompute user_match_points + user_selections.
     """
     try:
         pmp_rows = db.recalculate_points(match_id=iid)
@@ -476,28 +399,12 @@ def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
         print(f"  \u26a0 Point update failed for {iid}: {e}")
 
 
-# ════ PROGRAMMATIC ENTRY POINT (Phase 3)
+# \u2550\u2550\u2550\u2550 PROGRAMMATIC ENTRY POINT (Phase 3 / Phase 4)
 
 def run_full_scrape(db: DatabaseManager = None) -> dict:
     """
-    Programmatic entry point — callable by tasks.py and other modules.
-
-    Unlike main(), this function:
-      - Does not print the banner line (caller decides).
-      - Raises RuntimeError instead of calling sys.exit() on fatal errors.
-      - Returns a summary dict instead of printing the final line.
-
-    Parameters
-    ----------
-    db : DatabaseManager, optional
-        An existing DatabaseManager instance. If None, a fresh one is created
-        from config.DB_PATH.
-
-    Returns
-    -------
-    dict
-        {"processed": int, "failed": int,
-         "skipped_non_ipl": int, "no_result_count": int}
+    Programmatic entry point \u2014 callable by tasks.py and other modules.
+    Returns {processed, failed, skipped_non_ipl, no_result_count}.
     """
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     if db is None:
@@ -505,12 +412,12 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
 
     with db._read() as con:
         con.row_factory = sqlite3.Row
-        pidx = _build_player_index(con)
+        pidx = _build_player_index(con)  # now from logic.fuzzy_match
         print(f"  Player index: {len(pidx['all'])} players loaded")
         if pidx["name_conflicts"]:
             print(f"  Name conflicts (team-resolved): {sorted(pidx['name_conflicts'])}")
         if not pidx["all"]:
-            raise RuntimeError("players table empty — run Seed_Players.py first")
+            raise RuntimeError("players table empty \u2014 run Seed_Players.py first")
         sched_teams = {}
         for row in con.execute("SELECT id, teams_json FROM matches").fetchall():
             if row["teams_json"]:
@@ -641,7 +548,7 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
     }
 
 
-# ════ CLI ENTRY POINT
+# \u2550\u2550\u2550\u2550 CLI ENTRY POINT
 
 def main():
     print(f"\n--- IPL {IPL_YEAR} SCRAPER v{SCRAPER_VER} ---")
