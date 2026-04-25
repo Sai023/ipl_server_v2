@@ -14,6 +14,8 @@ v12.6: /api/user-match-points, update_player_season_pts on recalculate.
 v12.5: Ghost audit, v8 seed version.
 v12.4: sooryavanshi/suryavanshi semantic aliases.
 v12.3: On restart wipe match_scores + JSON cache.
+Phase 3: import tasks; /api/update-match-url uses tasks.start_bg_scrape()
+  instead of an inline subprocess.run() thread closure.
 """
 
 import collections
@@ -42,6 +44,7 @@ except ImportError:
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from db_manager import DatabaseManager
 import init_db
+import tasks
 from config import DB_PATH, DEADLINE_HOUR, DEADLINE_MIN, SERVER_VER
 
 BASE_DIR   = Path(__file__).resolve().parent
@@ -613,7 +616,7 @@ def api_player_points(n):
 @app.route("/api/user-match-points/<n>",methods=["GET"])
 def api_user_match_points(n):
     """
-    v12.6 — Per-match user points from user_match_points (cap/vc applied).
+    v12.6 \u2014 Per-match user points from user_match_points (cap/vc applied).
     Returns [{week_no, match_id, title, status, teams, pts}].
     """
     try:
@@ -701,15 +704,8 @@ def api_update_match_url():
             con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
         con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
         con.commit(); con.close()
-        def _scrape_bg():
-            try:
-                mno_m=re.search(r'_m(\d+)',match_id,re.IGNORECASE)
-                if mno_m:
-                    jp=BASE_DIR/"data"/"matches"/f"match_{mno_m.group(1).zfill(2)}.json"
-                    if jp.exists(): jp.unlink()
-                subprocess.run([sys.executable,str(BASE_DIR/"scraper.py")],cwd=str(BASE_DIR),timeout=120)
-            except Exception as e: _log(f"[bg scrape] {e}","error")
-        threading.Thread(target=_scrape_bg,daemon=True).start()
+        # Phase 3: background scrape via tasks.py (replaces inline subprocess.run closure)
+        tasks.start_bg_scrape(match_id, BASE_DIR)
         return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
                         "message":"URL saved. Scraping started in background \u2014 refresh in ~30 seconds."})
     except Exception as e:
