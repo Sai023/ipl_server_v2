@@ -1,36 +1,23 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.8
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.9
 ===========================================================================
-v5.8 (Phase 4):
-  calc_pts() and _normalise_overs() removed — now imported from
-    logic.scoring_engine (logic is identical, zero behaviour change).
-  rollover_season() and do_rollover() inline deadline + team-pick logic
-    replaced by calls to logic.rollover_engine helpers
-    (last_monday_deadline, already_rolled, pick_active_team).
-  All behaviour is preserved exactly; this is a pure structural refactor.
-v5.7:
-  Schema:
-    players.points          INTEGER — cumulative season fantasy pts (cap/vc-aware
-                            aggregate across all weeks a player appeared in a
-                            user's selected XI). Kept in sync by
-                            update_player_points().
-    user_selections.points_per_match  TEXT (JSON) — per-match breakdown stored
-                            directly on the selection row as
-                            {match_id: pts, ...}. One blob per (user, week),
-                            so every week owns its own data with zero aliasing
-                            between W1-W10.
-  Logic:
-    update_week_points() now also:
-      \u2022 writes points_per_match JSON onto every user_selections row.
-      \u2022 calls update_player_points() so players.points stays current.
-    update_player_points() \u2014 new method; aggregates awarded pts (cap/vc baked)
-      from user_match_points per player and writes to players.points.
-    get_players() returns points column.
-    get_history() returns points_per_match per week row.
-v5.6: user_match_points table, players.season_pts, per-match leaderboard.
-v5.5: Leaderboard from SUM(week_pts), MVP via pmp.
-v5.4: week_pts + update_week_points().
-v5.3: rebuild_scores_and_points().
+v5.9 (Phase 5 — DAO refactor):
+  rollover_season() and do_rollover() removed entirely.
+    Rollover logic now lives in server.py api_rollover(), which calls
+    logic.rollover_engine helpers and the four new thin DAO methods below.
+  _normalise_overs re-export removed (server.py now imports from logic/).
+  DEADLINE_HOUR / DEADLINE_MIN imports removed (only rollover methods used them).
+  timedelta import removed (only rollover methods used it).
+  New DAO methods added to support server.py rollover route:
+    get_users_and_max_weeks()
+    get_selection_row(display_name, week_no)
+    insert_rollover_week(display_name, new_wk, team_json, cap_id, vc_id)
+    set_last_rollover(iso)
+  DatabaseManager is now a strict DAO: SELECT / INSERT / UPDATE only.
+  No business logic lives here; all computation delegated to logic/.
+v5.8 (Phase 4): Imported from logic.scoring_engine + logic.rollover_engine.
+v5.7: points_per_match, update_player_points(), cap/vc aggregation.
+v5.6: user_match_points, season_pts, per-match leaderboard.
 """
 
 import json
@@ -38,12 +25,11 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
-from config import DEADLINE_HOUR, DEADLINE_MIN, DB_VER  # noqa: F401
-from logic.scoring_engine import _normalise_overs, calc_pts  # noqa: F401
-from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team
+from config import DB_VER  # noqa: F401
+from logic.scoring_engine import calc_pts  # used by recalculate_points()
 
 
 _SCHEMA = """
@@ -144,7 +130,6 @@ CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 """
 
 
-# v5.6: total_pts sourced from user_match_points (per-match, cap/vc baked in)
 _LEADERBOARD_SQL = """
 WITH
 user_totals AS (
@@ -295,11 +280,9 @@ class DatabaseManager:
         con = sqlite3.connect(self._path, timeout=30)
         con.execute("PRAGMA busy_timeout = 30000")
         con.executescript(_SCHEMA)
-        # Safe migrations \u2014 ignore if column already exists
         migrations = [
             "ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE players ADD COLUMN season_pts INTEGER NOT NULL DEFAULT 0",
-            # v5.7 new columns
             "ALTER TABLE players ADD COLUMN points INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE user_selections ADD COLUMN points_per_match TEXT NOT NULL DEFAULT '{}'",
         ]
@@ -307,8 +290,10 @@ class DatabaseManager:
             try:
                 con.execute(stmt); con.commit()
             except sqlite3.OperationalError:
-                pass  # column already exists \u2014 safe to skip
+                pass
         con.close()
+
+    # ── Meta ──────────────────────────────────────────────────────────────────
 
     def get_meta(self, key, default=""):
         with self._read() as con:
@@ -318,6 +303,8 @@ class DatabaseManager:
     def set_meta(self, key, value):
         with self._write() as con:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, value))
+
+    # ── State ─────────────────────────────────────────────────────────────────
 
     def get_state(self) -> dict:
         with self._read() as con:
@@ -387,6 +374,8 @@ class DatabaseManager:
             self.recalculate_points(match_id=mid)
         return now_iso
 
+    # ── Members / Matches ─────────────────────────────────────────────────────
+
     def upsert_member(self, name: str, data: dict) -> None:
         with self._write() as con:
             row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
@@ -417,7 +406,13 @@ class DatabaseManager:
         if mid and m.get("scores"):
             self.recalculate_points(match_id=mid)
 
+    # ── Points Calculation ────────────────────────────────────────────────────
+
     def recalculate_points(self, match_id=None) -> int:
+        """
+        Read match_scores, call calc_pts() from logic.scoring_engine for each row,
+        and write base_pts into player_match_points.
+        """
         with self._read() as con:
             if match_id:
                 score_rows = con.execute(
@@ -436,7 +431,7 @@ class DatabaseManager:
         with self._write() as con:
             for row in score_rows:
                 sc       = _jloads(row["raw_score_json"], {})
-                base_pts = calc_pts(sc)  # imported from logic.scoring_engine
+                base_pts = calc_pts(sc)
                 con.execute("""
                     INSERT INTO player_match_points (match_id,player_id,week_no,base_pts,multiplier,final_pts,calculated_at)
                     VALUES (?,?,?,?,1.0,?,?)
@@ -449,10 +444,7 @@ class DatabaseManager:
         return rows_written
 
     def update_player_season_pts(self) -> int:
-        """
-        v5.6 \u2014 Set players.season_pts = SUM(base_pts) from player_match_points.
-        Returns number of players with season_pts > 0.
-        """
+        """Set players.season_pts = SUM(base_pts) from player_match_points."""
         with self._write() as con:
             con.execute("UPDATE players SET season_pts = 0")
             con.execute("""
@@ -467,15 +459,8 @@ class DatabaseManager:
             return row[0] if row else 0
 
     def update_player_points(self) -> int:
-        """
-        v5.7 \u2014 Set players.points = SUM of cap/vc-awarded pts from user_match_points.
-        Returns number of players with points > 0.
-        """
+        """Set players.points = SUM of cap/vc-awarded pts across all user weeks."""
         with self._read() as con:
-            user_count = max(1, con.execute(
-                "SELECT COUNT(DISTINCT display_name) FROM user_selections"
-            ).fetchone()[0])
-
             awarded = con.execute("""
                 SELECT je.value AS player_id,
                        SUM(
@@ -490,60 +475,38 @@ class DatabaseManager:
                     ON pmp.player_id = je.value AND pmp.week_no = us.week_no
                 GROUP BY je.value
             """).fetchall()
-
         pts_map = {r["player_id"]: r["total_awarded"] for r in awarded}
-
         with self._write() as con:
             con.execute("UPDATE players SET points = 0")
             for pid, pts in pts_map.items():
-                con.execute(
-                    "UPDATE players SET points = ? WHERE id = ?",
-                    (int(pts or 0), pid)
-                )
-
+                con.execute("UPDATE players SET points = ? WHERE id = ?", (int(pts or 0), pid))
         return sum(1 for v in pts_map.values() if v and v > 0)
 
     def update_week_points(self) -> int:
-        """
-        v5.7 \u2014 Recompute week_pts AND points_per_match for every user_selections row,
-        plus populate user_match_points for per-match granularity.
-        Returns number of user_selections rows updated.
-        """
+        """Recompute week_pts + points_per_match + user_match_points for all rows."""
         with self._read() as con:
             sels = con.execute("""
                 SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
                 FROM user_selections
             """).fetchall()
-
             pmp_map = {}
             for r in con.execute(
                 "SELECT player_id, match_id, base_pts FROM player_match_points"
             ).fetchall():
                 pmp_map[(r["player_id"], r["match_id"])] = r["base_pts"]
-
             week_matches: dict = {}
             for r in con.execute(
                 "SELECT id, week_no FROM matches WHERE LOWER(status)='completed'"
             ).fetchall():
                 week_matches.setdefault(r["week_no"], []).append(r["id"])
 
-        ump_rows   = []
-        wk_totals  = {}
-        ppm_blobs  = {}
-
+        ump_rows = []; wk_totals = {}; ppm_blobs = {}
         for sel in sels:
-            name = sel["display_name"]
-            wk   = sel["week_no"]
-            try:
-                ids = json.loads(sel["tw_team_json"] or "[]")
-            except Exception:
-                ids = []
-            cap = sel["tw_cap_id"]
-            vc  = sel["tw_vc_id"]
-
-            wk_total  = 0
-            match_blob = {}
-
+            name = sel["display_name"]; wk = sel["week_no"]
+            try: ids = json.loads(sel["tw_team_json"] or "[]")
+            except Exception: ids = []
+            cap = sel["tw_cap_id"]; vc = sel["tw_vc_id"]
+            wk_total = 0; match_blob = {}
             for mid in week_matches.get(wk, []):
                 match_pts = 0
                 for pid in ids:
@@ -552,11 +515,8 @@ class DatabaseManager:
                         mult = 2.0 if pid == cap else (1.5 if pid == vc else 1.0)
                         match_pts += round(bp * mult)
                 ump_rows.append((name, wk, mid, match_pts))
-                match_blob[mid] = match_pts
-                wk_total += match_pts
-
-            wk_totals[(name, wk)]  = wk_total
-            ppm_blobs[(name, wk)]  = match_blob
+                match_blob[mid] = match_pts; wk_total += match_pts
+            wk_totals[(name, wk)] = wk_total; ppm_blobs[(name, wk)] = match_blob
 
         updated = 0
         with self._write() as con:
@@ -567,7 +527,6 @@ class DatabaseManager:
                     ON CONFLICT(display_name, match_id) DO UPDATE SET
                         pts=excluded.pts, week_no=excluded.week_no
                 """, (name, wk, mid, pts))
-
             for (name, wk), pts in wk_totals.items():
                 ppm_json = json.dumps(ppm_blobs.get((name, wk), {}))
                 con.execute(
@@ -576,12 +535,62 @@ class DatabaseManager:
                     (pts, ppm_json, name, wk)
                 )
                 updated += 1
-
         self.update_player_points()
         return updated
 
+    # ── Rollover DAO (Phase 5) ────────────────────────────────────────────────
+    # Pure SELECT / INSERT helpers called by server.py api_rollover().
+    # No rollover business logic lives here; that belongs in logic.rollover_engine.
+
+    def get_users_and_max_weeks(self) -> list:
+        """Return [{display_name, cur_wk}] for all users. Used by api_rollover."""
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT display_name, MAX(week_no) AS cur_wk "
+                "FROM user_selections GROUP BY display_name"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_selection_row(self, display_name: str, week_no: int) -> dict | None:
+        """Return one user_selections row as a dict, or None if not found."""
+        with self._read() as con:
+            row = con.execute(
+                "SELECT tw_team_json, tw_cap_id, tw_vc_id, "
+                "nw_team_json, nw_cap_id, nw_vc_id "
+                "FROM user_selections WHERE display_name=? AND week_no=?",
+                (display_name, week_no),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def insert_rollover_week(self, display_name: str, new_week_no: int,
+                              team_json: str, cap_id, vc_id) -> None:
+        """
+        INSERT OR IGNORE the new-week row produced by a rollover.
+        Both tw_ and nw_ columns receive the promoted team so the next
+        week starts with an active team and an editable draft.
+        """
+        with self._write() as con:
+            con.execute("""
+                INSERT OR IGNORE INTO user_selections
+                    (display_name, week_no,
+                     tw_team_json, tw_cap_id, tw_vc_id,
+                     nw_team_json, nw_cap_id, nw_vc_id)
+                VALUES (?,?, ?,?,?, ?,?,?)
+            """, (display_name, new_week_no,
+                  team_json, cap_id, vc_id,
+                  team_json, cap_id, vc_id))
+
+    def set_last_rollover(self, iso: str) -> None:
+        """Write _last_rollover timestamp to meta (gate for next Monday's rollover)."""
+        with self._write() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
+                (iso,)
+            )
+
+    # ── Queries ───────────────────────────────────────────────────────────────
+
     def get_user_match_points(self, display_name: str) -> list:
-        """v5.6 \u2014 Return per-match points for a user, joined with match metadata."""
         with self._read() as con:
             rows = con.execute("""
                 SELECT ump.display_name, ump.week_no, ump.match_id, ump.pts,
@@ -591,31 +600,21 @@ class DatabaseManager:
                 WHERE ump.display_name = ?
                 ORDER BY ump.week_no, ump.match_id
             """, (display_name,)).fetchall()
-        return [
-            {
-                "week_no":  r["week_no"],
-                "match_id": r["match_id"],
-                "title":    r["title"],
-                "status":   r["status"],
-                "teams":    _jloads(r["teams_json"], []),
-                "pts":      r["pts"],
-            }
-            for r in rows
-        ]
+        return [{"week_no": r["week_no"], "match_id": r["match_id"],
+                 "title": r["title"], "status": r["status"],
+                 "teams": _jloads(r["teams_json"], []), "pts": r["pts"]}
+                for r in rows]
 
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
-        """v5.7 \u2014 Full wipe + rebuild on server restart."""
         if json_dir is None:
             json_dir = Path(self._path).parent / "matches"
         json_dir = Path(json_dir)
-
         with self._write() as con:
             con.execute("DELETE FROM player_match_points")
             con.execute("DELETE FROM match_scores")
             con.execute("DELETE FROM user_match_points")
             con.execute("UPDATE user_selections SET week_pts = 0, points_per_match = '{}'")
             con.execute("UPDATE players SET season_pts = 0, points = 0")
-
         files_ingested = 0
         if json_dir.exists():
             files = sorted(
@@ -625,25 +624,16 @@ class DatabaseManager:
             with self._write() as con:
                 for fp in files:
                     try:
-                        with open(fp) as fh:
-                            match_data = json.load(fh)
-                        if "id" not in match_data:
-                            continue
-                        _upsert_match(con, match_data)
-                        files_ingested += 1
+                        with open(fp) as fh: match_data = json.load(fh)
+                        if "id" not in match_data: continue
+                        _upsert_match(con, match_data); files_ingested += 1
                     except Exception as e:
                         print(f"  [rebuild] skip {fp.name}: {e}")
-
-        pmp_rows        = self.recalculate_points()
-        week_pts_rows   = self.update_week_points()
-        player_pts_rows = self.update_player_season_pts()
-
-        return {
-            "files_ingested":  files_ingested,
-            "pmp_rows":        pmp_rows,
-            "week_pts_rows":   week_pts_rows,
-            "player_pts_rows": player_pts_rows,
-        }
+        pmp_rows      = self.recalculate_points()
+        week_pts_rows = self.update_week_points()
+        player_rows   = self.update_player_season_pts()
+        return {"files_ingested": files_ingested, "pmp_rows": pmp_rows,
+                "week_pts_rows": week_pts_rows, "player_pts_rows": player_rows}
 
     def hydrate_from_json(self, json_dir="data/matches") -> int:
         json_dir = Path(json_dir)
@@ -668,9 +658,14 @@ class DatabaseManager:
 
     def ping_stats(self) -> dict:
         with self._read() as con:
-            member_count = con.execute("SELECT COUNT(DISTINCT display_name) AS n FROM user_selections").fetchone()["n"]
-            scored_count = con.execute("SELECT COUNT(DISTINCT match_id) AS n FROM match_scores WHERE played=1").fetchone()["n"]
-        return {"members": member_count, "matches_scored": scored_count, "saved": self.get_meta("_saved","never")}
+            member_count = con.execute(
+                "SELECT COUNT(DISTINCT display_name) AS n FROM user_selections"
+            ).fetchone()["n"]
+            scored_count = con.execute(
+                "SELECT COUNT(DISTINCT match_id) AS n FROM match_scores WHERE played=1"
+            ).fetchone()["n"]
+        return {"members": member_count, "matches_scored": scored_count,
+                "saved": self.get_meta("_saved","never")}
 
     def get_leaderboard(self, week_no=None) -> dict:
         with self._read() as con:
@@ -699,10 +694,12 @@ class DatabaseManager:
             {"rank": r["rank"], "name": r["display_name"], "total_pts": r["total_pts"],
              "matches_counted": r["matches_counted"],
              "weekly": weekly.get(r["display_name"], []),
-             "mvp": {"player_id": r["mvp_player_id"], "player_name": r["mvp_player_name"], "pts": r["mvp_pts"]}}
+             "mvp": {"player_id": r["mvp_player_id"],
+                     "player_name": r["mvp_player_name"], "pts": r["mvp_pts"]}}
             for r in rows
         ]
-        meta = {"league_avg": first["league_avg"], "top_score": first["top_score"], "member_count": first["member_count"]}
+        meta = {"league_avg": first["league_avg"], "top_score": first["top_score"],
+                "member_count": first["member_count"]}
         return {"week_no": week_no, "generated_at": datetime.now(timezone.utc).isoformat(),
                 "league_avg": first["league_avg"], "top_score": first["top_score"],
                 "member_count": first["member_count"], "meta": meta,
@@ -713,13 +710,16 @@ class DatabaseManager:
 
     def get_current_week(self) -> int:
         with self._read() as con:
-            row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
+            row = con.execute(
+                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
+            ).fetchone()
             return int(row["wn"]) if row else 1
 
     def get_players(self) -> list:
         with self._read() as con:
             rows = con.execute(
-                "SELECT id,name,team,role,price,season_pts,points FROM players ORDER BY points DESC, season_pts DESC, name"
+                "SELECT id,name,team,role,price,season_pts,points "
+                "FROM players ORDER BY points DESC, season_pts DESC, name"
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -745,7 +745,8 @@ class DatabaseManager:
         if not player_ids: return True, 0.0
         with self._read() as con:
             ph   = ",".join("?" * len(player_ids))
-            rows = con.execute(f"SELECT id,price FROM players WHERE id IN ({ph})", player_ids).fetchall()
+            rows = con.execute(f"SELECT id,price FROM players WHERE id IN ({ph})",
+                               player_ids).fetchall()
         price_map = {r["id"]: r["price"] for r in rows}
         total = round(sum(price_map.get(pid, 0.0) for pid in player_ids), 1)
         return total <= budget, total
@@ -753,98 +754,28 @@ class DatabaseManager:
     def save_next_week(self, name: str, team: list, cap, vc) -> dict:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._write() as con:
-            row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
+            row = con.execute(
+                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
+            ).fetchone()
             current_week = int(row["wn"]) if row else 1
             con.execute("""
-                INSERT INTO user_selections (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
+                INSERT INTO user_selections
+                    (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,
+                     nw_team_json,nw_cap_id,nw_vc_id)
                 VALUES (?,?,?,?,?,?,?,?)
                 ON CONFLICT(display_name,week_no) DO UPDATE SET
-                    nw_team_json=excluded.nw_team_json, nw_cap_id=excluded.nw_cap_id, nw_vc_id=excluded.nw_vc_id
+                    nw_team_json=excluded.nw_team_json,
+                    nw_cap_id=excluded.nw_cap_id,
+                    nw_vc_id=excluded.nw_vc_id
             """, (name, current_week, "[]", None, None, json.dumps(team), cap, vc))
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
         return {"week_no": current_week}
-
-    def rollover_season(self, force=False, max_weeks=8, deadline_hour=14,
-                        deadline_min=0, resolver_callback=None) -> dict:
-        now = datetime.now(timezone.utc)
-        if not force:
-            # Phase 4: deadline + already-rolled check via logic.rollover_engine
-            lmd      = last_monday_deadline(now, deadline_hour, deadline_min)
-            last_raw = self.get_meta("_last_rollover", "")
-            if already_rolled(last_raw, lmd):
-                return {"ok":True,"rolled":False,"new_week_no":None,
-                        "season_complete":False,"reason":"Already rolled for this deadline"}
-        current_week = self.get_current_week()
-        if current_week >= max_weeks:
-            return {"ok":True,"rolled":False,"new_week_no":None,
-                    "season_complete":True,"reason":f"Season complete \u2014 {max_weeks} weeks reached"}
-        with self._read() as con:
-            users = con.execute(
-                "SELECT display_name, MAX(week_no) AS cur_wk FROM user_selections GROUP BY display_name"
-            ).fetchall()
-        if not users:
-            return {"ok":True,"rolled":False,"new_week_no":None,
-                    "season_complete":False,"reason":"No members found"}
-        new_week_no = int(users[0]["cur_wk"]) + 1
-        now_iso = now.isoformat()
-        with self._write() as con:
-            for u in users:
-                uname  = u["display_name"]
-                cur_wk = int(u["cur_wk"])
-                cur_row = con.execute("""
-                    SELECT tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id
-                    FROM user_selections WHERE display_name=? AND week_no=?
-                """, (uname, cur_wk)).fetchone()
-                if not cur_row: continue
-                # Phase 4: draft→active pick via logic.rollover_engine
-                nw_team, nw_cap, nw_vc = pick_active_team(
-                    cur_row["nw_team_json"], cur_row["nw_cap_id"], cur_row["nw_vc_id"],
-                    cur_row["tw_team_json"], cur_row["tw_cap_id"], cur_row["tw_vc_id"],
-                    _jloads,
-                )
-                if resolver_callback is not None:
-                    try:
-                        resolved = resolver_callback(_jloads(nw_team,[]))
-                        nw_team  = json.dumps(resolved)
-                    except Exception: pass
-                con.execute("""
-                    INSERT OR IGNORE INTO user_selections
-                        (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (uname, cur_wk+1, nw_team, nw_cap, nw_vc, nw_team, nw_cap, nw_vc))
-            if not force:
-                con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)", (now_iso,))
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
-        return {"ok":True,"rolled":True,"new_week_no":new_week_no,
-                "season_complete":new_week_no>=max_weeks}
 
     def reset(self) -> None:
         with self._write() as con:
             for t in ("match_scores","player_match_points","user_match_points",
                       "user_selections","matches","meta"):
                 con.execute(f"DELETE FROM {t}")
-
-    def do_rollover(self) -> dict:
-        """Legacy single-table rollover (kept for compat)."""
-        now = datetime.now(timezone.utc)
-        # Phase 4: deadline + already-rolled check via logic.rollover_engine
-        lmd      = last_monday_deadline(now, DEADLINE_HOUR, DEADLINE_MIN)
-        last_raw = self.get_meta("_last_rollover", "")
-        if already_rolled(last_raw, lmd):
-            return {"ok": True, "rolled": False}
-        with self._write() as con:
-            con.execute("""
-                UPDATE user_selections SET
-                    tw_team_json = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_team_json ELSE tw_team_json END,
-                    tw_cap_id    = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_cap_id    ELSE tw_cap_id    END,
-                    tw_vc_id     = CASE WHEN json_array_length(nw_team_json)>0 THEN nw_vc_id     ELSE tw_vc_id     END,
-                    nw_team_json = '[]', nw_cap_id = NULL, nw_vc_id = NULL
-                WHERE week_no = (SELECT MAX(week_no) FROM user_selections u2
-                                 WHERE u2.display_name = user_selections.display_name)
-            """)
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)", (lmd.isoformat(),))
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (datetime.now(timezone.utc).isoformat(),))
-        return {"ok": True, "rolled": True}
 
 
 GoldenDB = DatabaseManager
