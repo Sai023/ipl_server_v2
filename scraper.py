@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.8
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.9
 ================================================
+v10.9 (Phase 3):
+  run_full_scrape(db=None) added — programmatic entry point for tasks.py.
+  main() is now a thin CLI wrapper around run_full_scrape().
+  sys.exit() replaced with RuntimeError in run_full_scrape() so callers
+  can handle fatal errors without killing the host process.
+  IPL_YEAR and SCRAPER_VER pulled from config.py.
 v10.8:
-  FIX-014: Per-match atomic point update.
-            Immediately after _upsert_match() writes scores for a match,
-            the scraper now calls:
-              1. db.recalculate_points(match_id=iid)
-                 — computes base_pts in player_match_points for this match only.
-              2. db.update_week_points()
-                 — updates user_match_points, user_selections.week_pts,
-                   user_selections.points_per_match, and players.points
-                   for every user whose active week contains this match.
-            This means user_selections is fully current before the scraper
-            moves to the next match.
-            A final db.update_player_season_pts() pass runs at the end to
-            keep players.season_pts (base, no multiplier) accurate.
+  FIX-014: Per-match atomic point update via recalculate_points() +
+  update_week_points() immediately after each _upsert_match() call.
 v10.7:
   FIX-012: No-result/abandoned → empty scores, 0 pts.
   FIX-013: c and b dismissal variant handled.
@@ -44,7 +39,7 @@ except ImportError:
     sys.exit(1)
 
 from db_manager import DatabaseManager, _upsert_match
-from config import DB_PATH, SCRAPER_VER  # noqa: F401
+from config import DB_PATH, IPL_YEAR, SCRAPER_VER  # noqa: F401
 
 # ── Paths
 BASE_DIR    = Path(__file__).resolve().parent
@@ -99,7 +94,7 @@ def _fetch_ordered_ids() -> list:
         return _ORDERED_CB_IDS
     url = (
         f"https://www.cricbuzz.com/cricket-series/{SERIES_ID}/"
-        f"indian-premier-league-2026/matches"
+        f"indian-premier-league-{IPL_YEAR}/matches"
     )
     print(f"  [discover] {url}")
     try:
@@ -469,18 +464,9 @@ def _reset_url(iid: str) -> None:
 def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
     """
     FIX-014: Atomic per-match point pipeline.
-
-    Called immediately after _upsert_match() so user_selections is fully
-    current (week_pts, points_per_match, players.points) before the scraper
-    moves to the next match.
-
     Steps:
-      1. recalculate_points(match_id)  — insert/update player_match_points
-                                         for exactly this match.
-      2. update_week_points()          — recompute user_match_points,
-                                         user_selections.{week_pts, points_per_match},
-                                         and players.points for every user
-                                         whose active week_no == wk.
+      1. recalculate_points(match_id) — insert/update player_match_points for this match.
+      2. update_week_points()         — recompute user_match_points + user_selections.
     """
     try:
         pmp_rows = db.recalculate_points(match_id=iid)
@@ -490,22 +476,41 @@ def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
         print(f"  \u26a0 Point update failed for {iid}: {e}")
 
 
-# ════ MAIN
+# ════ PROGRAMMATIC ENTRY POINT (Phase 3)
 
-def main():
-    print("\n--- IPL 2026 SCRAPER v10.8 (FIX-014 per-match atomic point update) ---")
+def run_full_scrape(db: DatabaseManager = None) -> dict:
+    """
+    Programmatic entry point — callable by tasks.py and other modules.
+
+    Unlike main(), this function:
+      - Does not print the banner line (caller decides).
+      - Raises RuntimeError instead of calling sys.exit() on fatal errors.
+      - Returns a summary dict instead of printing the final line.
+
+    Parameters
+    ----------
+    db : DatabaseManager, optional
+        An existing DatabaseManager instance. If None, a fresh one is created
+        from config.DB_PATH.
+
+    Returns
+    -------
+    dict
+        {"processed": int, "failed": int,
+         "skipped_non_ipl": int, "no_result_count": int}
+    """
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
-    db = DatabaseManager(DB_PATH)
+    if db is None:
+        db = DatabaseManager(DB_PATH)
 
     with db._read() as con:
         con.row_factory = sqlite3.Row
-        pidx    = _build_player_index(con)
+        pidx = _build_player_index(con)
         print(f"  Player index: {len(pidx['all'])} players loaded")
         if pidx["name_conflicts"]:
             print(f"  Name conflicts (team-resolved): {sorted(pidx['name_conflicts'])}")
         if not pidx["all"]:
-            print("  \u274c FATAL: players table empty. Run: python Seed_Players.py")
-            sys.exit(1)
+            raise RuntimeError("players table empty — run Seed_Players.py first")
         sched_teams = {}
         for row in con.execute("SELECT id, teams_json FROM matches").fetchall():
             if row["teams_json"]:
@@ -568,7 +573,6 @@ def main():
 
         meta, is_no_result = _extract_meta(data, iid, wk)
 
-        # Validate IPL teams (skip validation for no-result matches)
         if not is_no_result:
             unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
             if unknown or len(meta["teams"]) < 2:
@@ -591,7 +595,6 @@ def main():
                     skipped_non_ipl += 1; failed += 1
                     continue
 
-        # No-result: persist with empty scores (0 pts)
         if is_no_result:
             scores = {}
             print(f"  \u26aa NO RESULT: {iid} \u2014 abandoned/no-result, no points awarded")
@@ -606,7 +609,6 @@ def main():
         if resolved < 15 and scores:
             print(f"    \u26a0 Only {resolved} resolved players (expected ~22)")
 
-        # ── Persist scores to match_scores table ────────────────────────────────────────
         payload = {**meta, "scores": scores}
         with open(jp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -618,12 +620,9 @@ def main():
         else:
             print(f"  \u2705 PERSISTED: {iid} ({len(scores)} players, {resolved} resolved, teams: {meta['teams']})")
 
-        # ── FIX-014: Atomic per-match point update ───────────────────────────────────────
         _update_points_for_match(db, iid, wk)
-
         processed += 1
 
-    # ── End-of-run summary ─────────────────────────────────────────────────────────────────
     if skipped_non_ipl:
         print(f"\n  \u26a0 Skipped {skipped_non_ipl} non-IPL scorecards \u2014 run scraper again to retry")
     if no_result_count:
@@ -634,7 +633,24 @@ def main():
         pp = db.update_player_season_pts()
         print(f"  season_pts updated: {pp} players with pts > 0.")
 
-    print(f"\n--- COMPLETE: {processed} ok, {failed} failed ---")
+    return {
+        "processed":       processed,
+        "failed":          failed,
+        "skipped_non_ipl": skipped_non_ipl,
+        "no_result_count": no_result_count,
+    }
+
+
+# ════ CLI ENTRY POINT
+
+def main():
+    print(f"\n--- IPL {IPL_YEAR} SCRAPER v{SCRAPER_VER} ---")
+    try:
+        result = run_full_scrape()
+    except RuntimeError as e:
+        print(f"  \u274c FATAL: {e}")
+        sys.exit(1)
+    print(f"\n--- COMPLETE: {result['processed']} ok, {result['failed']} failed ---")
 
 
 if __name__ == "__main__":
