@@ -1,6 +1,13 @@
 """
-IPL Fantasy 2026 — DatabaseManager                          Golden File v5.7
+IPL Fantasy 2026 — DatabaseManager                          Golden File v5.8
 ===========================================================================
+v5.8 (Phase 4):
+  calc_pts() and _normalise_overs() removed — now imported from
+    logic.scoring_engine (logic is identical, zero behaviour change).
+  rollover_season() and do_rollover() inline deadline + team-pick logic
+    replaced by calls to logic.rollover_engine helpers
+    (last_monday_deadline, already_rolled, pick_active_team).
+  All behaviour is preserved exactly; this is a pure structural refactor.
 v5.7:
   Schema:
     players.points          INTEGER — cumulative season fantasy pts (cap/vc-aware
@@ -14,9 +21,9 @@ v5.7:
                             between W1-W10.
   Logic:
     update_week_points() now also:
-      • writes points_per_match JSON onto every user_selections row.
-      • calls update_player_points() so players.points stays current.
-    update_player_points() — new method; aggregates awarded pts (cap/vc baked)
+      \u2022 writes points_per_match JSON onto every user_selections row.
+      \u2022 calls update_player_points() so players.points stays current.
+    update_player_points() \u2014 new method; aggregates awarded pts (cap/vc baked)
       from user_match_points per player and writes to players.points.
     get_players() returns points column.
     get_history() returns points_per_match per week row.
@@ -27,7 +34,6 @@ v5.3: rebuild_scores_and_points().
 """
 
 import json
-import math
 import re
 import sqlite3
 import threading
@@ -36,6 +42,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from config import DEADLINE_HOUR, DEADLINE_MIN, DB_VER  # noqa: F401
+from logic.scoring_engine import _normalise_overs, calc_pts  # noqa: F401
+from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team
 
 
 _SCHEMA = """
@@ -189,62 +197,6 @@ ORDER BY r.rank, r.display_name
 """
 
 
-def _normalise_overs(raw: float) -> float:
-    if raw <= 0: return 0.0
-    full_overs = math.floor(raw)
-    ball_digit = min(5, max(0, round((raw - full_overs) * 10)))
-    return full_overs + ball_digit / 6
-
-
-def calc_pts(s: dict) -> int:
-    if not s or not s.get("played"): return 0
-    runs    = max(0, int(s.get("runs",  0)))
-    balls   = max(0, int(s.get("balls", 0)))
-    fours   = max(0, min(runs, int(s.get("fours",  0))))
-    sixes   = max(0, int(s.get("sixes",   0)))
-    wickets = max(0, min(10,  int(s.get("wickets", 0))))
-    overs   = _normalise_overs(max(0.0, float(s.get("overs", 0))))
-    rc      = max(0, int(s.get("runsConceded",  s.get("runs_conceded",  0))))
-    maidens = max(0, int(s.get("maidens", 0)))
-    catches = max(0, min(10,  int(s.get("catches",  0))))
-    stump   = max(0, int(s.get("stumpings",     0)))
-    rod     = max(0, int(s.get("runOutDirect",  s.get("run_out_direct", 0))))
-    roa     = max(0, int(s.get("runOutAssist",  s.get("run_out_assist", 0))))
-    lbwb    = max(0, min(wickets, int(s.get("lbwBowled", s.get("lbw_bowled", 0)))))
-    duck    = bool(s.get("duck", False))
-    got_out = bool(s.get("gotOut", s.get("got_out", False)))
-    pts = 4
-    pts += runs + fours + sixes * 2
-    if   runs >= 100: pts += 16
-    elif runs >= 50:  pts += 8
-    elif runs >= 30:  pts += 4
-    if duck and got_out and balls >= 1: pts -= 2
-    if balls >= 10:
-        sr = (runs / balls) * 100
-        if   sr >  125: pts += 6
-        elif sr >= 110: pts += 4
-        elif sr >= 100: pts += 2
-        elif sr <   60: pts -= 4
-        elif sr <   70: pts -= 2
-    pts += wickets * 25 + lbwb * 8 + maidens * 12
-    if wickets >= 2: pts += 4
-    if wickets >= 3: pts += 4
-    if wickets >= 4: pts += 8
-    if wickets >= 5: pts += 8
-    if overs >= 2:
-        eco = rc / overs
-        if   eco >  12: pts -= 6
-        elif eco >= 11: pts -= 4
-        elif eco >= 10: pts -= 2
-        elif eco <   5: pts += 6
-        elif eco <   6: pts += 4
-        elif eco <   7: pts += 2
-    pts += catches * 8
-    if catches >= 3: pts += 4
-    pts += stump * 12 + rod * 12 + roa * 6
-    return round(pts)
-
-
 def _jloads(s, default):
     if not s: return default
     try:    return json.loads(s)
@@ -343,7 +295,7 @@ class DatabaseManager:
         con = sqlite3.connect(self._path, timeout=30)
         con.execute("PRAGMA busy_timeout = 30000")
         con.executescript(_SCHEMA)
-        # Safe migrations — ignore if column already exists
+        # Safe migrations \u2014 ignore if column already exists
         migrations = [
             "ALTER TABLE user_selections ADD COLUMN week_pts INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE players ADD COLUMN season_pts INTEGER NOT NULL DEFAULT 0",
@@ -355,7 +307,7 @@ class DatabaseManager:
             try:
                 con.execute(stmt); con.commit()
             except sqlite3.OperationalError:
-                pass  # column already exists — safe to skip
+                pass  # column already exists \u2014 safe to skip
         con.close()
 
     def get_meta(self, key, default=""):
@@ -484,7 +436,7 @@ class DatabaseManager:
         with self._write() as con:
             for row in score_rows:
                 sc       = _jloads(row["raw_score_json"], {})
-                base_pts = calc_pts(sc)
+                base_pts = calc_pts(sc)  # imported from logic.scoring_engine
                 con.execute("""
                     INSERT INTO player_match_points (match_id,player_id,week_no,base_pts,multiplier,final_pts,calculated_at)
                     VALUES (?,?,?,?,1.0,?,?)
@@ -498,7 +450,7 @@ class DatabaseManager:
 
     def update_player_season_pts(self) -> int:
         """
-        v5.6 — Set players.season_pts = SUM(base_pts) from player_match_points.
+        v5.6 \u2014 Set players.season_pts = SUM(base_pts) from player_match_points.
         Returns number of players with season_pts > 0.
         """
         with self._write() as con:
@@ -516,21 +468,14 @@ class DatabaseManager:
 
     def update_player_points(self) -> int:
         """
-        v5.7 — Set players.points = SUM of cap/vc-awarded pts from user_match_points.
-        Each player's total reflects the actual fantasy points earned across all
-        users' selections (averaged if selected by multiple users) — useful as a
-        form guide in the team picker.
-        In practice with 2 users we sum across all appearances and divide by user count.
+        v5.7 \u2014 Set players.points = SUM of cap/vc-awarded pts from user_match_points.
         Returns number of players with points > 0.
         """
         with self._read() as con:
-            # Count distinct users for averaging
             user_count = max(1, con.execute(
                 "SELECT COUNT(DISTINCT display_name) FROM user_selections"
             ).fetchone()[0])
 
-            # Sum awarded pts per player across all user_match_points rows
-            # (a player earns pts only in weeks they appear in that user's XI)
             awarded = con.execute("""
                 SELECT je.value AS player_id,
                        SUM(
@@ -560,18 +505,10 @@ class DatabaseManager:
 
     def update_week_points(self) -> int:
         """
-        v5.7 — Recompute week_pts AND points_per_match for every user_selections row,
+        v5.7 \u2014 Recompute week_pts AND points_per_match for every user_selections row,
         plus populate user_match_points for per-match granularity.
-
-        Key guarantee (W1-W10 isolation):
-          Each user_selections row owns its own points_per_match JSON blob:
-            { match_id: awarded_pts, ... }
-          This is scoped strictly to that row's (display_name, week_no), so W3 data
-          can never bleed into W4 even if both rows share the same tw_team_json.
-
         Returns number of user_selections rows updated.
         """
-        # ── Read ───────────────────────────────────────────────────────────────────
         with self._read() as con:
             sels = con.execute("""
                 SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
@@ -584,18 +521,15 @@ class DatabaseManager:
             ).fetchall():
                 pmp_map[(r["player_id"], r["match_id"])] = r["base_pts"]
 
-            # week_no -> [match_id, ...]  (only completed matches score)
             week_matches: dict = {}
             for r in con.execute(
                 "SELECT id, week_no FROM matches WHERE LOWER(status)='completed'"
             ).fetchall():
                 week_matches.setdefault(r["week_no"], []).append(r["id"])
 
-        # ── Compute ─────────────────────────────────────────────────────────────────
-        ump_rows   = []   # (display_name, week_no, match_id, pts)
-        wk_totals  = {}   # (display_name, week_no) -> int
-        # v5.7: per-row points_per_match blob {match_id: pts}
-        ppm_blobs  = {}   # (display_name, week_no) -> dict
+        ump_rows   = []
+        wk_totals  = {}
+        ppm_blobs  = {}
 
         for sel in sels:
             name = sel["display_name"]
@@ -608,7 +542,7 @@ class DatabaseManager:
             vc  = sel["tw_vc_id"]
 
             wk_total  = 0
-            match_blob = {}  # {match_id: pts} — isolated to this (user, week)
+            match_blob = {}
 
             for mid in week_matches.get(wk, []):
                 match_pts = 0
@@ -622,12 +556,10 @@ class DatabaseManager:
                 wk_total += match_pts
 
             wk_totals[(name, wk)]  = wk_total
-            ppm_blobs[(name, wk)]  = match_blob   # v5.7: own blob per week row
+            ppm_blobs[(name, wk)]  = match_blob
 
-        # ── Write ──────────────────────────────────────────────────────────────────
         updated = 0
         with self._write() as con:
-            # user_match_points (granular per-match lookup)
             for name, wk, mid, pts in ump_rows:
                 con.execute("""
                     INSERT INTO user_match_points (display_name, week_no, match_id, pts)
@@ -636,7 +568,6 @@ class DatabaseManager:
                         pts=excluded.pts, week_no=excluded.week_no
                 """, (name, wk, mid, pts))
 
-            # user_selections — write week_pts AND points_per_match together
             for (name, wk), pts in wk_totals.items():
                 ppm_json = json.dumps(ppm_blobs.get((name, wk), {}))
                 con.execute(
@@ -646,15 +577,11 @@ class DatabaseManager:
                 )
                 updated += 1
 
-        # v5.7: refresh players.points after every week recalc
         self.update_player_points()
         return updated
 
     def get_user_match_points(self, display_name: str) -> list:
-        """
-        v5.6 — Return per-match points for a user, joined with match metadata.
-        Sorted by week_no, match_id.
-        """
+        """v5.6 \u2014 Return per-match points for a user, joined with match metadata."""
         with self._read() as con:
             rows = con.execute("""
                 SELECT ump.display_name, ump.week_no, ump.match_id, ump.pts,
@@ -677,16 +604,7 @@ class DatabaseManager:
         ]
 
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
-        """
-        v5.7 — Full wipe + rebuild on server restart:
-        1. DELETE match_scores, player_match_points, user_match_points.
-        2. Reset season_pts, points, points_per_match, week_pts on all rows.
-        3. Re-ingest from JSON cache.
-        4. recalculate_points()  → player_match_points.
-        5. update_week_points()  → user_match_points + user_selections.{week_pts, points_per_match}.
-        6. update_player_season_pts() → players.season_pts.
-        7. update_player_points()     → players.points (already called inside update_week_points).
-        """
+        """v5.7 \u2014 Full wipe + rebuild on server restart."""
         if json_dir is None:
             json_dir = Path(self._path).parent / "matches"
         json_dir = Path(json_dir)
@@ -717,7 +635,7 @@ class DatabaseManager:
                         print(f"  [rebuild] skip {fp.name}: {e}")
 
         pmp_rows        = self.recalculate_points()
-        week_pts_rows   = self.update_week_points()   # also calls update_player_points()
+        week_pts_rows   = self.update_week_points()
         player_pts_rows = self.update_player_season_pts()
 
         return {
@@ -800,7 +718,6 @@ class DatabaseManager:
 
     def get_players(self) -> list:
         with self._read() as con:
-            # v5.7: return both season_pts (base, no multiplier) and points (cap/vc awarded)
             rows = con.execute(
                 "SELECT id,name,team,role,price,season_pts,points FROM players ORDER BY points DESC, season_pts DESC, name"
             ).fetchall()
@@ -819,7 +736,6 @@ class DatabaseManager:
              "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
              "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
              "week_pts": r["week_pts"],
-             # v5.7: per-week isolated match breakdown {match_id: pts}
              "points_per_match": _jloads(r["points_per_match"], {})}
             for r in rows
         ]
@@ -852,23 +768,16 @@ class DatabaseManager:
                         deadline_min=0, resolver_callback=None) -> dict:
         now = datetime.now(timezone.utc)
         if not force:
-            days_since_mon = now.weekday()
-            lmd = (now - timedelta(days=days_since_mon)).replace(
-                hour=deadline_hour, minute=deadline_min, second=0, microsecond=0, tzinfo=timezone.utc)
-            if lmd > now: lmd -= timedelta(days=7)
+            # Phase 4: deadline + already-rolled check via logic.rollover_engine
+            lmd      = last_monday_deadline(now, deadline_hour, deadline_min)
             last_raw = self.get_meta("_last_rollover", "")
-            if last_raw:
-                try:
-                    last_dt = datetime.fromisoformat(last_raw)
-                    if last_dt.tzinfo is None: last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    if lmd <= last_dt:
-                        return {"ok":True,"rolled":False,"new_week_no":None,
-                                "season_complete":False,"reason":"Already rolled for this deadline"}
-                except ValueError: pass
+            if already_rolled(last_raw, lmd):
+                return {"ok":True,"rolled":False,"new_week_no":None,
+                        "season_complete":False,"reason":"Already rolled for this deadline"}
         current_week = self.get_current_week()
         if current_week >= max_weeks:
             return {"ok":True,"rolled":False,"new_week_no":None,
-                    "season_complete":True,"reason":f"Season complete — {max_weeks} weeks reached"}
+                    "season_complete":True,"reason":f"Season complete \u2014 {max_weeks} weeks reached"}
         with self._read() as con:
             users = con.execute(
                 "SELECT display_name, MAX(week_no) AS cur_wk FROM user_selections GROUP BY display_name"
@@ -887,13 +796,12 @@ class DatabaseManager:
                     FROM user_selections WHERE display_name=? AND week_no=?
                 """, (uname, cur_wk)).fetchone()
                 if not cur_row: continue
-                nw_team = cur_row["nw_team_json"] or "[]"
-                nw_cap  = cur_row["nw_cap_id"]
-                nw_vc   = cur_row["nw_vc_id"]
-                if _jloads(nw_team,[]) == []:
-                    nw_team = cur_row["tw_team_json"] or "[]"
-                    nw_cap  = cur_row["tw_cap_id"]
-                    nw_vc   = cur_row["tw_vc_id"]
+                # Phase 4: draft→active pick via logic.rollover_engine
+                nw_team, nw_cap, nw_vc = pick_active_team(
+                    cur_row["nw_team_json"], cur_row["nw_cap_id"], cur_row["nw_vc_id"],
+                    cur_row["tw_team_json"], cur_row["tw_cap_id"], cur_row["tw_vc_id"],
+                    _jloads,
+                )
                 if resolver_callback is not None:
                     try:
                         resolved = resolver_callback(_jloads(nw_team,[]))
@@ -919,17 +827,11 @@ class DatabaseManager:
     def do_rollover(self) -> dict:
         """Legacy single-table rollover (kept for compat)."""
         now = datetime.now(timezone.utc)
-        days_since_mon = now.weekday()
-        lmd = (now - timedelta(days=days_since_mon)).replace(
-            hour=DEADLINE_HOUR, minute=DEADLINE_MIN, second=0, microsecond=0, tzinfo=timezone.utc)
-        if lmd > now: lmd -= timedelta(days=7)
+        # Phase 4: deadline + already-rolled check via logic.rollover_engine
+        lmd      = last_monday_deadline(now, DEADLINE_HOUR, DEADLINE_MIN)
         last_raw = self.get_meta("_last_rollover", "")
-        if last_raw:
-            try:
-                last_dt = datetime.fromisoformat(last_raw)
-                if last_dt.tzinfo is None: last_dt = last_dt.replace(tzinfo=timezone.utc)
-                if lmd <= last_dt: return {"ok": True, "rolled": False}
-            except ValueError: pass
+        if already_rolled(last_raw, lmd):
+            return {"ok": True, "rolled": False}
         with self._write() as con:
             con.execute("""
                 UPDATE user_selections SET
