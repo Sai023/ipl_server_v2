@@ -1,21 +1,20 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v12.7
+IPL Fantasy 2026 — Flask Server                             Golden File v12.8
 ===========================================================================
-v12.7 (this release):
-  /api/player-points/<n>: SELECT now includes season_pts + points from players
-    table. Each player object in the response gains:
-      season_pts  — base pts (no cap/vc multiplier), mirrors players.season_pts
-      points      — cap/vc-weighted season total, mirrors players.points
-    Frontend (_buildPointsTab, picker) can now read both fields directly from
-    this endpoint without a separate /api/players call.
-  /api/leaderboard: standings rows now include mvp.points and mvp.season_pts
-    so the leaderboard card can show a player's weighted form next to the MVP.
+v12.8 (Phase 5 — API Architect):
+  All route handlers are now pass-throughs: fetch via db_manager,
+  process via logic/ engines, return JSON.
+  api_rollover: no longer calls db.rollover_season(); instead orchestrates
+    rollover directly using logic.rollover_engine helpers + 4 new DAO methods.
+  api_player_points: uses CAP_MULT / VC_MULT from logic.scoring_engine.
+  api_audit_scores: imports calc_pts from logic.scoring_engine (not db_manager).
+  New endpoint: GET /api/version — returns full VERSION_MAP from config.py.
+  _jloads helper added at module level (needed by rollover route).
+v12.7: /api/player-points includes season_pts + points columns.
 v12.6: /api/user-match-points, update_player_season_pts on recalculate.
 v12.5: Ghost audit, v8 seed version.
 v12.4: sooryavanshi/suryavanshi semantic aliases.
 v12.3: On restart wipe match_scores + JSON cache.
-Phase 3: import tasks; /api/update-match-url uses tasks.start_bg_scrape()
-  instead of an inline subprocess.run() thread closure.
 """
 
 import collections
@@ -46,6 +45,8 @@ from db_manager import DatabaseManager
 import init_db
 import tasks
 from config import DB_PATH, DEADLINE_HOUR, DEADLINE_MIN, SERVER_VER
+from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team
+from logic.scoring_engine import calc_pts as _calc_pts, CAP_MULT, VC_MULT
 
 BASE_DIR   = Path(__file__).resolve().parent
 DATA_DIR   = BASE_DIR / "data"
@@ -81,6 +82,15 @@ _SEMANTIC_MAP = {
     "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
     "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
 }
+
+
+# ════ HELPERS
+
+def _jloads(s, default=None):
+    """Safe JSON loader — mirrors db_manager._jloads for use in route handlers."""
+    if not s: return default
+    try: return _json.loads(s)
+    except: return default
 
 
 # ════ PLAYER RESOLVER
@@ -222,10 +232,7 @@ def _db_con():
 # ════ STARTUP: CLEAR SCORE TABLES + JSON CACHE
 
 def _rebuild_scores_and_points():
-    """
-    v12.6 — Wipe all score tables + JSON cache on every restart.
-    After restart run: python scraper.py
-    """
+    """v12.6 — Wipe all score tables + JSON cache on every restart."""
     try:
         print("  [startup] Clearing score tables (match_scores, pmp, user_match_points, season_pts)...")
         with db._write() as con:
@@ -238,14 +245,12 @@ def _rebuild_scores_and_points():
             except Exception:
                 try: con.execute("UPDATE players SET season_pts = 0")
                 except Exception: pass
-
         matches_dir = DATA_DIR / "matches"
         deleted = 0
         if matches_dir.exists():
             for f in matches_dir.glob("*.json"):
                 try: f.unlink(); deleted += 1
                 except Exception as e2: print(f"  [startup] Could not delete {f.name}: {e2}")
-
         print(f"  [startup] \u2713 Cleared all score data. Deleted {deleted} cached JSON files.")
         print("  [startup] \u25ba Run: python scraper.py   to repopulate with fresh data.")
     except Exception as e:
@@ -267,7 +272,6 @@ def _audit_player_id_coverage():
                 "SELECT us.display_name, COALESCE(SUM(us.week_pts),0) AS pts "
                 "FROM user_selections us GROUP BY us.display_name"
             ).fetchall()}
-
         print("  [startup] === Player ID Coverage Audit ===")
         true_ghosts = set()
         for sel in sels:
@@ -282,12 +286,10 @@ def _audit_player_id_coverage():
                                    if prefix and p_id.startswith(prefix.group()) and p_id != pid][:4]
                     print(f"  [startup] \u26a0  TRUE GHOST '{pid}' ({name}/W{wk}): "
                           f"NOT in players table! Alternatives: {', '.join(suggestions) or 'none'}")
-
         if not true_ghosts:
             print("  [startup] \u2713 All selected player IDs exist in players table.")
             if not pmp_ids:
                 print("  [startup]   player_match_points is empty (normal after restart) \u2014 run: python scraper.py")
-
         print("  [startup] === Per-user cumulative totals (from week_pts) ===")
         for uname, pts in sorted(totals.items()):
             print(f"  [startup]   {uname}: {pts} pts")
@@ -360,6 +362,29 @@ def index():
 
 @app.route("/static/<path:filename>")
 def serve_static(filename): return send_from_directory(STATIC_DIR,filename)
+
+@app.route("/api/version", methods=["GET"])
+def api_version():
+    """Phase 5: Return the full VERSION_MAP and per-module version pins from config."""
+    from config import (VERSION_MAP, APP_VERSION,
+                        SERVER_VER as _sv, DB_VER, SCRAPER_VER, INIT_DB_VER,
+                        TASKS_VER, SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER,
+                        FUZZY_MATCH_VER)
+    return jsonify({
+        "ok":          True,
+        "app_version": APP_VERSION,
+        "modules": {
+            "server":          _sv,
+            "db_manager":      DB_VER,
+            "scraper":         SCRAPER_VER,
+            "init_db":         INIT_DB_VER,
+            "tasks":           TASKS_VER,
+            "scoring_engine":  SCORING_ENGINE_VER,
+            "rollover_engine": ROLLOVER_ENGINE_VER,
+            "fuzzy_match":     FUZZY_MATCH_VER,
+        },
+        "version_map": VERSION_MAP,
+    })
 
 @app.route("/api/state",methods=["GET"])
 def api_get_state():
@@ -467,18 +492,71 @@ def api_match():
 
 @app.route("/api/rollover",methods=["POST"])
 def api_rollover():
+    """
+    Phase 5 pass-through: orchestrates rollover using logic.rollover_engine
+    helpers + db_manager DAO methods. No business logic lives in db_manager.
+    JSON response shape is identical to the previous rollover_season() output.
+    """
     force=request.args.get("force","").strip() in ("1","true","yes")
     try:
-        def _resolver(ids):
+        now=datetime.now(timezone.utc)
+
+        if not force:
+            lmd     =last_monday_deadline(now, DEADLINE_HOUR, DEADLINE_MIN)
+            last_raw=db.get_meta("_last_rollover","")
+            if already_rolled(last_raw, lmd):
+                return jsonify({"ok":True,"rolled":False,"new_week_no":None,
+                                "season_complete":False,
+                                "reason":"Already rolled for this deadline"})
+
+        current_week=db.get_current_week()
+        if current_week>=MAX_WEEKS:
+            return jsonify({"ok":True,"rolled":False,"new_week_no":None,
+                            "season_complete":True,
+                            "reason":f"Season complete \u2014 {MAX_WEEKS} weeks reached"})
+
+        users=db.get_users_and_max_weeks()
+        if not users:
+            return jsonify({"ok":True,"rolled":False,"new_week_no":None,
+                            "season_complete":False,"reason":"No members found"})
+
+        new_week_no=int(users[0]["cur_wk"])+1
+        now_iso=now.isoformat()
+
+        for u in users:
+            uname =u["display_name"]
+            cur_wk=int(u["cur_wk"])
+            cur_row=db.get_selection_row(uname, cur_wk)
+            if not cur_row: continue
+
+            # logic.rollover_engine decides which team to promote
+            nw_team,nw_cap,nw_vc=pick_active_team(
+                cur_row["nw_team_json"],cur_row["nw_cap_id"],cur_row["nw_vc_id"],
+                cur_row["tw_team_json"],cur_row["tw_cap_id"],cur_row["tw_vc_id"],
+                _jloads,
+            )
+
+            # Resolve player IDs in the promoted team
             con=_db_con()
-            try: resolved,_=resolve_id_list(con,ids)
-            finally: con.close()
-            return resolved
-        result=db.rollover_season(force=force,max_weeks=MAX_WEEKS,deadline_hour=DEADLINE_HOUR,
-                                   deadline_min=DEADLINE_MIN,resolver_callback=_resolver)
-        return jsonify(result)
+            try:
+                resolved,_=resolve_id_list(con,_jloads(nw_team,[]))
+                nw_team=_json.dumps(resolved)
+            except Exception:
+                pass
+            finally:
+                con.close()
+
+            db.insert_rollover_week(uname, cur_wk+1, nw_team, nw_cap, nw_vc)
+
+        if not force:
+            db.set_last_rollover(now_iso)
+        db.set_meta("_saved", now_iso)
+
+        return jsonify({"ok":True,"rolled":True,"new_week_no":new_week_no,
+                        "season_complete":new_week_no>=MAX_WEEKS})
     except Exception as e:
-        _log(f"POST /api/rollover: {e}","error"); return jsonify({"error":str(e),"ok":False,"code":500}),500
+        _log(f"POST /api/rollover: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 @app.route("/api/seed-history",methods=["POST"])
 def api_seed_history():
@@ -520,9 +598,8 @@ def api_poll():
 @app.route("/api/player-points/<n>",methods=["GET"])
 def api_player_points(n):
     """
-    v12.7: player rows now include season_pts (base, no multiplier) and
-    points (cap/vc-weighted season total) from the players table, so the
-    frontend Points tab and picker can use both fields without an extra call.
+    v12.8: multiplier uses CAP_MULT / VC_MULT from logic.scoring_engine.
+    JSON response shape unchanged from v12.7.
     """
     name = n
     try:
@@ -564,7 +641,8 @@ def api_player_points(n):
                     ORDER BY m.week_no,m.id
                 """,ids+[wn]).fetchall()
                 for r in pts:
-                    mult=2.0 if r["player_id"]==cap else (1.5 if r["player_id"]==vc else 1.0)
+                    # Phase 5: use CAP_MULT / VC_MULT from logic.scoring_engine
+                    mult = CAP_MULT if r["player_id"]==cap else (VC_MULT if r["player_id"]==vc else 1.0)
                     by_player[r["player_id"]].append({
                         "match_id":r["match_id"],
                         "title":r["title"] or r["match_id"],
@@ -615,10 +693,6 @@ def api_player_points(n):
 
 @app.route("/api/user-match-points/<n>",methods=["GET"])
 def api_user_match_points(n):
-    """
-    v12.6 \u2014 Per-match user points from user_match_points (cap/vc applied).
-    Returns [{week_no, match_id, title, status, teams, pts}].
-    """
     try:
         if not n or len(n)>30:
             return jsonify({"error":"invalid name","code":400}),400
@@ -704,7 +778,6 @@ def api_update_match_url():
             con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
         con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
         con.commit(); con.close()
-        # Phase 3: background scrape via tasks.py (replaces inline subprocess.run closure)
         tasks.start_bg_scrape(match_id, BASE_DIR)
         return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
                         "message":"URL saved. Scraping started in background \u2014 refresh in ~30 seconds."})
@@ -715,7 +788,6 @@ def api_update_match_url():
 
 @app.route("/api/recalculate-points",methods=["POST"])
 def api_recalculate_points():
-    """v12.6+: recalculate + update season_pts + points."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
@@ -731,10 +803,14 @@ def api_recalculate_points():
 
 @app.route("/api/audit-scores/<n>",methods=["GET"])
 def api_audit_scores(n):
+    """
+    Phase 5: calc_pts imported from logic.scoring_engine at module level
+    (was an inline 'from db_manager import calc_pts' in prior versions).
+    JSON response shape unchanged.
+    """
     try:
         if not n or len(n)>30:
             return jsonify({"error":"invalid name","code":400}),400
-        from db_manager import calc_pts as _calc_pts
         with db._read() as con:
             con.row_factory=sqlite3.Row
             sels=con.execute(
@@ -752,7 +828,7 @@ def api_audit_scores(n):
                 ).fetchall()
                 player_details=[]; computed_total=0
                 for pid in ids:
-                    mult=2.0 if pid==cap else(1.5 if pid==vc else 1.0)
+                    mult=CAP_MULT if pid==cap else (VC_MULT if pid==vc else 1.0)
                     pr=con.execute("SELECT name,team,role FROM players WHERE id=?",(pid,)).fetchone()
                     p_name=pr["name"] if pr else pid
                     match_entries=[]
