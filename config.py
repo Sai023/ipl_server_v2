@@ -10,7 +10,7 @@ Rule: This file must have ZERO imports from other project modules.
 
 from pathlib import Path
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# ── Paths ───────────────────────────────────────────────────────────────────
 # All four scripts (server.py, db_manager.py, scraper.py, init_db.py) live
 # in the same directory as this file, so BASE_DIR is unambiguous.
 BASE_DIR = Path(__file__).resolve().parent
@@ -20,15 +20,15 @@ DB_PATH  = DATA_DIR / "fantasy.db"
 # ── Season ──────────────────────────────────────────────────────────────────
 IPL_YEAR = 2026
 
-# ── Deadline — Monday 14:00 SAST (12:00 UTC) ───────────────────────────────────────
+# ── Deadline — Monday 14:00 SAST (12:00 UTC) ────────────────────────────────
 DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
-# ── Versioning ────────────────────────────────────────────────────────────────
+# ── Versioning ──────────────────────────────────────────────────────────────
 APP_VERSION = "2.0.0-rc1"
 
 # Per-script version pins — mirrors the Golden File tag in each module header.
-# Update here whenever a module’s Golden File version bumps.
+# Update here whenever a module's Golden File version bumps.
 SERVER_VER  = "12.7"
 DB_VER      = "5.7"
 SCRAPER_VER = "10.8"
