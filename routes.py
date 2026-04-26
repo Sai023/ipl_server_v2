@@ -1,11 +1,14 @@
 """
-IPL Fantasy 2026 — API Route Handlers                       routes v1.0.1
+IPL Fantasy 2026 — API Route Handlers                       routes v1.1.0
 ===========================================================================
-v1.0.1 (bugfix): circular import resolved.
-  Imports from base.py instead of server.py.
-  `import server as _srv` removed — CURRENT_PUBLIC_URL accessed via
-  `import base as _base; _base.CURRENT_PUBLIC_URL`.
+v1.1.0 (Phase 8 — Scouting & UX):
+  /api/version now includes ROUTES_VER in the modules dict.
+  /api/players returns season_pts (base, no cap/vc) sorted DESC — already
+    present via db.get_players(); confirmed correct for scouting badges.
+  /api/state now returns player_pts {id: season_pts} via db.get_state();
+    ipl_glue.js uses this for Next Week tab badges without extra fetch.
 
+v1.0.1 (bugfix): circular import resolved via base.py.
 v1.0.0 (Phase 7): 24 @bp.route handlers in 8 groups.
 
 Dependency: base.py → routes.py  (routes never imports from server)
@@ -29,7 +32,7 @@ from base import (
 from config import (
     DB_PATH, DEADLINE_HOUR, DEADLINE_MIN,
     APP_VERSION, VERSION_MAP,
-    SERVER_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
+    SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, FUZZY_MATCH_VER,
 )
 import init_db
@@ -49,11 +52,15 @@ def api_version():
     return jsonify({
         "ok": True, "app_version": APP_VERSION,
         "modules": {
-            "server": SERVER_VER, "db_manager": DB_VER, "scraper": SCRAPER_VER,
-            "init_db": INIT_DB_VER, "tasks": TASKS_VER,
-            "scoring_engine": SCORING_ENGINE_VER,
+            "server":          SERVER_VER,
+            "routes":          ROUTES_VER,   # Phase 8: added
+            "db_manager":      DB_VER,
+            "scraper":         SCRAPER_VER,
+            "init_db":         INIT_DB_VER,
+            "tasks":           TASKS_VER,
+            "scoring_engine":  SCORING_ENGINE_VER,
             "rollover_engine": ROLLOVER_ENGINE_VER,
-            "fuzzy_match": FUZZY_MATCH_VER,
+            "fuzzy_match":     FUZZY_MATCH_VER,
         },
         "version_map": VERSION_MAP,
     })
@@ -110,6 +117,8 @@ def api_save_state():
 
 # ════════════════════════════════════════════════════════════════════════════
 # 3. PLAYERS
+# /api/players returns id, name, team, role, price, season_pts, points
+# sorted by season_pts DESC — correct for scouting (base score, no cap/vc).
 # ════════════════════════════════════════════════════════════════════════════
 
 @bp.route("/api/players", methods=["GET"])
