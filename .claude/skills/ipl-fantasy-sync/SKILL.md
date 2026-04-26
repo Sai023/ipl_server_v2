@@ -5,7 +5,7 @@ description: "Senior System Architect skill for IPL Fantasy 2026 (v2.0-stable). 
 
 # IPL Fantasy 2026 — Quick Reference  (`Sai023/ipl_server_v2` · `main`)
 
-> **Full canonical skill:** `SKILL.md` (root) — 28 KB, all sections including Lessons Learned, dependency graph, audit traces.
+> **Full canonical skill:** `SKILL.md` (root) — 28 KB, all sections.
 
 ---
 
@@ -24,11 +24,11 @@ config.py  ── single source: DB_PATH, DEADLINE_HOUR, APP_VERSION, VERSION_MA
                     └── server.py v13.0  Flask init, middleware, tunnel, registers blueprint
 ```
 
-**Import hierarchy rule:** Never import db_manager/server/tasks/scraper FROM logic/. Never import server FROM routes (use Blueprint injection). config.py imports stdlib only.
+**Import hierarchy rule:** Never import db_manager/server/tasks/scraper FROM logic/. config.py imports stdlib only. routes.py imports from server via safe deferred circular import (server defines all symbols before `from routes import bp`).
 
 ---
 
-## File Versions
+## File Versions (2.0.0-stable)
 
 | File | Ver | Role |
 |------|-----|------|
@@ -37,11 +37,26 @@ config.py  ── single source: DB_PATH, DEADLINE_HOUR, APP_VERSION, VERSION_MA
 | `logic/rollover_engine.py` | 1.0.0 | Monday 14:00 UTC deadline logic |
 | `logic/fuzzy_match.py` | 1.0.0 | Player name resolution |
 | `db_manager.py` | 5.9 | Pure DAO |
-| `routes.py` | 1.0.0 | All API route handlers (Blueprint) |
+| `routes.py` | 1.0.0 | **NEW** — 24 API handlers (Blueprint, 8 groups) |
 | `server.py` | 13.0 | Flask init + middleware + blueprint registration |
 | `tasks.py` | 1.0.0 | Daemon thread orchestration |
 | `scraper.py` | 10.10 | Cricbuzz ingestion |
 | `ipl_glue.js` | 7.5 | Version handshake on page load |
+
+---
+
+## routes.py Groups
+
+| # | Group | Endpoints |
+|---|-------|-----------|
+| 1 | System | `/api/version`, `/api/ping`, `/api/poll`, `/api/current-week` |
+| 2 | State | `GET/POST /api/state` |
+| 3 | Players | `/api/players`, `/api/resolve-player`, `/api/leaderboard` |
+| 4 | History | `/api/history/<n>`, `/api/player-points/<n>`, `/api/user-match-points/<n>`, `/api/debug-points/<n>` |
+| 5 | Save | `/api/save-next-week/<n>`, `/api/member/<n>`, `/api/match` |
+| 6 | Scoring | `/api/recalculate-points`, `/api/audit-scores/<n>`, `/api/clean-scores` |
+| 7 | Admin | `/api/rollover`, `/api/seed-history`, `/api/matches-status`, `/api/update-match-url` |
+| 8 | Static | `/`, `/static/<filename>`, `/manifest.json`, `/offline` |
 
 ---
 
@@ -55,7 +70,7 @@ curl http://localhost:5000/api/version
 **Post-restart:**
 ```powershell
 git pull && python server.py --tunnel cloudflare
-python scraper.py   # re-scrapes all completed matches
+python scraper.py
 ```
 
 **Moe & Sai audit:**
@@ -71,7 +86,9 @@ t = debug_calc_pts(score_dict, player_id="k04", cap_id="k04", vc_id="s05")
 print(t["steps"], t["base_pts"], t["multiplier"], t["final_pts"])
 ```
 
-**Add new logic rule:** Add to `logic/`, bump engine version in `config.py`, update VERSION_MAP, push config first then engine then consumer.
+**Add new logic rule:** Add to `logic/`, bump engine version in `config.py`, update VERSION_MAP, push config first → engine → consumer.
+
+**Add new route:** Add to appropriate group in `routes.py`. No logic in handler body — call `db.*` or `logic.*` only.
 
 ---
 
@@ -82,23 +99,23 @@ print(t["steps"], t["base_pts"], t["multiplier"], t["final_pts"])
 | `DEADLINE_HOUR` | 14 | **14:00 UTC = 16:00 SAST** |
 | `CAP_MULT` | 2.0 | In `logic/scoring_engine.py` |
 | `VC_MULT` | 1.5 | In `logic/scoring_engine.py` |
-| `BUDGET_TOTAL` | 100.0 CR | Server/Routes local constant |
-| `XI_SIZE` | 11 | Server/Routes local constant |
-| `MAX_WEEKS` | 8 | Server/Routes local constant |
+| `BUDGET_TOTAL` | 100.0 CR | Routes/Server local constant |
+| `XI_SIZE` | 11 | Routes/Server local constant |
+| `MAX_WEEKS` | 8 | Routes/Server local constant |
 
 ---
 
 ## Scoring Rules (summary)
 
-`played +4` | `runs +1 each` | `fours +1` | `sixes +2` | `30+ +4` | `50+ +8` | `100+ +16` | `duck -2`
-SR (>=10 balls): `>125 +6` | `>=110 +4` | `>=100 +2` | `<70 -2` | `<60 -4`
-`wickets *25` | `lbw/bowled +8` | `maidens +12` | `2wkt +4` | `3wkt +4` | `4wkt +8` | `5wkt +8`
-Eco (>=2 overs): `<5 +6` | `<6 +4` | `<7 +2` | `>12 -6` | `>11 -4` | `>10 -2`
+`played +4` | `runs +1` | `fours +1` | `sixes +2` | `30+ +4` | `50+ +8` | `100+ +16` | `duck -2`
+SR (≥10 balls): `>125 +6` | `≥110 +4` | `≥100 +2` | `<70 -2` | `<60 -4`
+`wickets ×25` | `lbw/bowled +8` | `maidens +12` | `2wkt +4` | `3wkt +4` | `4wkt +8` | `5wkt +8`
+Eco (≥2 overs): `<5 +6` | `<6 +4` | `<7 +2` | `>12 -6` | `>11 -4` | `>10 -2`
 `catch +8` | `3+ catches +4` | `stumping +12` | `direct RO +12` | `assist +6`
 
 ---
 
-## W1–W4 History Seed (current: `2026.v8.w3w4-defined`)
+## W1–W4 History Seed (`2026.v8.w3w4-defined`)
 
 ```
 Sai W1: k04 k19 s04 s05 s07 r01 r03 r11 m04 m07 m12  cap=k04 vc=s05
