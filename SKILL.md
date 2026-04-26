@@ -81,7 +81,7 @@ config.py
 | `init_db.py` | 1.0.0 | `_auto_seed_*`, `run_all_sync()` |
 | `tasks.py` | 1.0.0 | `start_bg_scrape()` daemon thread |
 | `scraper.py` | 10.10 | Cricbuzz ingestion, `run_full_scrape()` export |
-| `server.py` | 12.8 | Flask routes, `/api/version` |
+| `server.py` | 13.0 | Flask routes, `/api/version` |
 | `ipl_glue.js` | 7.5 | `_checkVersionHandshake()`, `IplApi.getVersion()` |
 | `Seed_Players.py` | v2 | Player roster (rr11=Sooryavanshi, c11 price=8.0) |
 | `Seed_Matches.py` | v3.3 | 74 matches, week labels W1-W10 |
