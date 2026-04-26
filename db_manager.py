@@ -25,6 +25,13 @@ Leaderboard fix (post-v5.9):
   written at scrape time.  Previously used SUM(ump.pts) from
   user_match_points, an ephemeral table cleared on restart, causing W3=0,
   W2 drift, and total ≠ sum(weekly).
+
+Phase 8 (scouting badges):
+  get_state() now includes a `player_pts` dict {id: season_pts} sourced
+  directly from the players table.  This allows ipl_glue.js to render
+  season_pts badges on Next Week player cards without a separate
+  /api/players call.  season_pts is the raw base score (no cap/vc
+  multiplier) — correct for scouting form guides.
 """
 
 import json
@@ -151,12 +158,6 @@ CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 # user_selections.week_pts is the authoritative value: written atomically by
 # the scraper at the moment each match is processed and never cleared between
 # restarts.  It is the same source the weekly breakdown list already reads.
-#
-# Changes from original:
-#   user_totals: SUM(us.week_pts) replaces SUM(ump.pts)       ← total fix
-#   user_totals: LEFT JOIN ump now scoped ump.week_no=us.week_no  ← cross-week fix
-#   user_totals: WHERE clause added for per-week filter        ← week filter fix
-#   scored_points / MVP CTEs: unchanged
 #
 _LEADERBOARD_SQL = """
 WITH
@@ -340,6 +341,15 @@ class DatabaseManager:
     # ── State ─────────────────────────────────────────────────────────────────
 
     def get_state(self) -> dict:
+        """
+        Returns the full app state consumed by ipl_glue.js on load.
+
+        Phase 8: now includes `player_pts` — a compact {player_id: season_pts}
+        dict built from the players table.  This lets the Next Week tab render
+        scouting badges (e.g. "318 Pts") without an additional /api/players
+        call.  season_pts is the raw base score (no cap/vc multiplier),
+        which is the correct metric for a form guide.
+        """
         with self._read() as con:
             rows = con.execute("""
                 SELECT display_name, tw_team_json, tw_cap_id, tw_vc_id,
@@ -373,9 +383,21 @@ class DatabaseManager:
                 if score_rows:
                     entry["scores"] = {sr["player_id"]: _jloads(sr["raw_score_json"],{}) for sr in score_rows}
                 matches.append(entry)
-        return {"members": members, "matches": matches,
-                "_saved": self.get_meta("_saved","never"),
-                "_last_rollover": self.get_meta("_last_rollover","")}
+
+            # Phase 8: compact scouting lookup for ipl_glue.js Next Week badges.
+            # season_pts = base pts, no cap/vc multiplier (correct for form guides).
+            player_pts_rows = con.execute(
+                "SELECT id, season_pts FROM players"
+            ).fetchall()
+            player_pts = {r["id"]: r["season_pts"] for r in player_pts_rows}
+
+        return {
+            "members": members,
+            "matches": matches,
+            "player_pts": player_pts,          # {id: season_pts} — Phase 8
+            "_saved": self.get_meta("_saved","never"),
+            "_last_rollover": self.get_meta("_last_rollover",""),
+        }
 
     def save_state(self, payload: dict) -> str:
         members = payload.get("members", {})
@@ -442,10 +464,6 @@ class DatabaseManager:
     # ── Points Calculation ────────────────────────────────────────────────────
 
     def recalculate_points(self, match_id=None) -> int:
-        """
-        Read match_scores, call calc_pts() from logic.scoring_engine for each row,
-        and write base_pts into player_match_points.
-        """
         with self._read() as con:
             if match_id:
                 score_rows = con.execute(
@@ -571,10 +589,9 @@ class DatabaseManager:
         self.update_player_points()
         return updated
 
-    # ── Rollover DAO (Phase 5) ────────────────────────────────────────────────
+    # ── Rollover DAO ──────────────────────────────────────────────────────────
 
     def get_users_and_max_weeks(self) -> list:
-        """Return [{display_name, cur_wk}] for all users. Used by api_rollover."""
         with self._read() as con:
             rows = con.execute(
                 "SELECT display_name, MAX(week_no) AS cur_wk "
@@ -583,7 +600,6 @@ class DatabaseManager:
         return [dict(r) for r in rows]
 
     def get_selection_row(self, display_name: str, week_no: int) -> dict | None:
-        """Return one user_selections row as a dict, or None if not found."""
         with self._read() as con:
             row = con.execute(
                 "SELECT tw_team_json, tw_cap_id, tw_vc_id, "
@@ -607,7 +623,6 @@ class DatabaseManager:
                   team_json, cap_id, vc_id))
 
     def set_last_rollover(self, iso: str) -> None:
-        """Write _last_rollover timestamp to meta."""
         with self._write() as con:
             con.execute(
                 "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
@@ -742,10 +757,15 @@ class DatabaseManager:
             return int(row["wn"]) if row else 1
 
     def get_players(self) -> list:
+        """
+        Returns all players sorted by season_pts DESC then name.
+        Includes: id, name, team, role, price, season_pts (base), points (cap/vc-weighted).
+        season_pts is the correct field for scouting — it is the unweighted base score.
+        """
         with self._read() as con:
             rows = con.execute(
                 "SELECT id,name,team,role,price,season_pts,points "
-                "FROM players ORDER BY points DESC, season_pts DESC, name"
+                "FROM players ORDER BY season_pts DESC, name"
             ).fetchall()
             return [dict(r) for r in rows]
 
