@@ -1,0 +1,264 @@
+"""
+IPL Fantasy 2026 — Shared Base Module                        base v1.0.0
+===========================================================================
+Bugfix: breaks the circular import between server.py and routes.py.
+
+Previously routes.py did `import server as _srv` to reach CURRENT_PUBLIC_URL,
+which forced Python to re-execute server.py while still mid-import, deadlocking
+on `from routes import bp` (bp not yet defined at that point).
+
+Fix — clean linear dependency graph:
+    config.py → base.py → routes.py → server.py
+
+base.py owns ALL shared state:
+  • Flask app singleton
+  • DatabaseManager singleton (db)
+  • Logging, rate limiter, _db_con, player resolver
+  • Path / game constants
+  • CURRENT_PUBLIC_URL (mutable — updated by server.py via `base.CURRENT_PUBLIC_URL = url`)
+
+Neither routes.py nor server.py imports from the other.
+"""
+
+import collections
+import json as _json
+import logging as _logging
+import re
+import sqlite3
+import threading
+import time
+import unicodedata
+from pathlib import Path
+
+from flask import Flask, request, jsonify, render_template
+from db_manager import DatabaseManager
+from config import DB_PATH
+
+# ── Paths / Game constants ──────────────────────────────────────────────────────────
+
+BASE_DIR   = Path(__file__).resolve().parent
+DATA_DIR   = BASE_DIR / "data"
+STATIC_DIR = BASE_DIR / "static"
+DATA_DIR.mkdir(exist_ok=True)
+
+BUDGET_TOTAL = 100.0
+XI_SIZE      = 11
+MAX_WEEKS    = 8
+
+_ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
+
+_SEMANTIC_MAP = {
+    "vk":"virat kohli","rohit":"rohit sharma","ms":"ms dhoni","msd":"ms dhoni",
+    "bumrah":"jasprit bumrah","bumpy":"jasprit bumrah","jadeja":"ravindra jadeja",
+    "sky":"suryakumar yadav","kl":"kl rahul","klr":"kl rahul",
+    "hp":"hardik pandya","h pandya":"hardik pandya","pandya":"hardik pandya",
+    "shami":"mohammed shami","siraj":"mohammed siraj","chahal":"yuzvendra chahal",
+    "sam":"sanju samson","ishan":"ishan kishan","ik":"ishan kishan",
+    "salt":"phil salt","klaasen":"heinrich klaasen","david":"tim david",
+    "shepherd":"romario shepherd","rutherford":"shimron rutherford",
+    "patidar":"rajat patidar","chakravarthy":"varun chakravarthy",
+    "chakra":"varun chakravarthy","chakar":"varun chakravarthy",
+    "vc":"varun chakravarthy","chahar":"deepak chahar","duffy":"jacob duffy",
+    "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
+    "ravindra":"rachin ravindra",
+    "sooryavanshi":"vaibhav sooryavanshi","suryavanshi":"vaibhav sooryavanshi",
+    "vaibhav":"vaibhav sooryavanshi",
+    "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
+    "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
+    "pant":"rishabh pant","noor":"noor ahmad","dube":"shivam dube",
+    "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
+    "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
+}
+
+
+# ── Player resolver ───────────────────────────────────────────────────────────────────
+
+def _normalise(s):
+    s = str(s).lower().strip()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[.\-'/]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+def _token_set_ratio(a, b):
+    ta = set(_normalise(a).split()); tb = set(_normalise(b).split())
+    if not ta or not tb: return 0.0
+    exp = set()
+    for t in ta:
+        if len(t)==1:
+            for x in tb:
+                if x.startswith(t): exp.add(x)
+        else: exp.add(t)
+    inter = exp & tb; union = exp | tb
+    return len(inter)/len(union) if union else 0.0
+
+def _load_all_players(con):
+    return [dict(r) for r in con.execute("SELECT id,name,team,role,price FROM players").fetchall()]
+
+def resolve_player_id(con, input_str, team_hint=None, fuzzy_threshold=0.40):
+    if not input_str: return None
+    raw=str(input_str).strip(); norm=_normalise(raw)
+    th=(team_hint or "").strip().upper() if team_hint else None
+    players=_load_all_players(con)
+    if not players: return None
+    for p in players:
+        if p["id"]==raw: return {**p,"_match_tier":1}
+    if th:
+        for p in players:
+            if _normalise(p["name"])==norm and p["team"].upper()==th: return {**p,"_match_tier":2}
+    for p in players:
+        if _normalise(p["name"])==norm: return {**p,"_match_tier":3}
+    st=_SEMANTIC_MAP.get(norm) or _SEMANTIC_MAP.get(raw.lower())
+    if st:
+        sn=_normalise(st)
+        if th:
+            for p in players:
+                if _normalise(p["name"])==sn and p["team"].upper()==th: return {**p,"_match_tier":4}
+        for p in players:
+            if _normalise(p["name"])==sn: return {**p,"_match_tier":4}
+    best=fuzzy_threshold; bp=None
+    for p in players:
+        sc=_token_set_ratio(norm,_normalise(p["name"]))
+        if th and p["team"].upper()==th: sc=min(1.0,sc+0.12)
+        if sc>best: best=sc; bp=p
+    if bp: return {**bp,"_match_tier":5}
+    words=norm.split(); last=words[-1] if words else norm
+    if len(last)>=3:
+        hits=[p for p in players if (_normalise(p["name"]).split() or [""])[-1]==last]
+        if hits:
+            if th:
+                th_hits=[p for p in hits if p["team"].upper()==th]
+                if th_hits: return {**th_hits[0],"_match_tier":6}
+            return {**hits[0],"_match_tier":6}
+    return None
+
+def resolve_id_list(con, id_or_name_list, display_name=None, week_no=None):
+    resolved=[]; log=[]; needs_patch=False
+    for item in id_or_name_list:
+        s=str(item).strip() if item else ""
+        if _ID_RE.match(s):
+            resolved.append(s); log.append({"input":s,"output":s,"tier":0,"action":"passthrough"}); continue
+        match=resolve_player_id(con,s)
+        if match:
+            canonical=match["id"]; action="corrected" if canonical!=s else "resolved"
+            if action=="corrected": needs_patch=True
+            resolved.append(canonical)
+            log.append({"input":s,"output":canonical,"name":match["name"],"team":match["team"],"tier":match["_match_tier"],"action":action})
+        else:
+            resolved.append(s); log.append({"input":s,"output":s,"tier":-1,"action":"unresolved"})
+            _log(f"[resolver] UNRESOLVED: '{s}'","warning")
+    if needs_patch and display_name and week_no is not None:
+        try:
+            con.execute("UPDATE user_selections SET nw_team_json=? WHERE display_name=? AND week_no=?",
+                        (_json.dumps(resolved),display_name,week_no))
+        except Exception as e:
+            _log(f"[resolver] Write-back failed: {e}","warning")
+    return resolved, log
+
+
+# ── Safe JSON loader ──────────────────────────────────────────────────────────────────
+
+def _jloads(s, default=None):
+    if not s: return default
+    try: return _json.loads(s)
+    except: return default
+
+
+# ── Logging ─────────────────────────────────────────────────────────────────────
+
+def _setup_logging():
+    fmt=_logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s",datefmt="%Y-%m-%d %H:%M:%S")
+    logger=_logging.getLogger("ipl"); logger.setLevel(_logging.DEBUG)
+    ch=_logging.StreamHandler(); ch.setFormatter(fmt); ch.setLevel(_logging.INFO); logger.addHandler(ch)
+    try:
+        from logging.handlers import RotatingFileHandler
+        fh=RotatingFileHandler(BASE_DIR/"server.log",maxBytes=1_000_000,backupCount=3,encoding="utf-8")
+        fh.setFormatter(fmt); fh.setLevel(_logging.DEBUG); logger.addHandler(fh)
+    except Exception as e:
+        print(f"  warning: log file error: {e}")
+    return logger
+
+_logger=_setup_logging()
+def _log(msg,level="info"): getattr(_logger,level,_logger.info)(msg)
+
+
+# ── DB connection factory ────────────────────────────────────────────────────────────────
+
+def _db_con():
+    con=sqlite3.connect(str(DB_PATH),timeout=30)
+    con.row_factory=sqlite3.Row
+    con.execute("PRAGMA journal_mode = WAL")
+    con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA busy_timeout = 30000")
+    return con
+
+
+# ── Rate limiter ────────────────────────────────────────────────────────────────────
+
+class _RateLimiter:
+    def __init__(self,max_calls=30,window_seconds=60):
+        self._max=max_calls; self._win=window_seconds
+        self._calls=collections.defaultdict(list); self._lock=threading.Lock()
+    def is_allowed(self,ip):
+        now=time.time()
+        with self._lock:
+            self._calls[ip]=[t for t in self._calls[ip] if now-t<self._win]
+            if len(self._calls[ip])>=self._max: return False
+            self._calls[ip].append(now); return True
+
+_write_limiter=_RateLimiter(30,60)
+
+def _check_rate(lim):
+    ip=request.remote_addr or "unknown"
+    if not lim.is_allowed(ip):
+        return jsonify({"error":"Too many requests","code":429}),429
+    return None
+
+
+# ── Singletons ───────────────────────────────────────────────────────────────────────
+
+db  = DatabaseManager(DB_PATH)
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR/"templates"),
+    static_folder=str(BASE_DIR/"static"),
+    static_url_path="/static",
+)
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
+
+
+# ── Flask error handlers + middleware ────────────────────────────────────────────────
+
+@app.errorhandler(sqlite3.IntegrityError)
+def _handle_integrity(e):
+    msg=str(e)
+    if "UNIQUE" in msg.upper(): return jsonify({"error":f"Duplicate record: {msg}","code":400}),400
+    if "CHECK" in msg.upper() or "FOREIGN KEY" in msg.upper(): return jsonify({"error":f"Constraint: {msg}","code":400}),400
+    return jsonify({"error":msg,"code":400}),400
+
+@app.errorhandler(sqlite3.OperationalError)
+def _handle_operational(e):
+    _log(f"SQLite error: {e}","error")
+    return jsonify({"error":"Database error","detail":str(e),"code":500}),500
+
+@app.errorhandler(500)
+def _handle_500(e):
+    _log(f"500: {e}","error"); return jsonify({"error":"Internal error","code":500}),500
+
+@app.errorhandler(404)
+def _handle_404(e):
+    try: return render_template("index.html"),200
+    except: return jsonify({"error":"Not found","code":404}),404
+
+@app.after_request
+def _security_headers(response):
+    response.headers["X-Content-Type-Options"]="nosniff"
+    response.headers["X-Frame-Options"]="DENY"
+    response.headers["Referrer-Policy"]="same-origin"
+    if request.path.startswith("/api/"): response.headers["Cache-Control"]="no-store"
+    return response
+
+
+# ── Mutable global — updated by server.py via `import base; base.CURRENT_PUBLIC_URL = url` ──
+
+CURRENT_PUBLIC_URL = ""
