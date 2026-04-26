@@ -18,6 +18,13 @@ v5.9 (Phase 5 — DAO refactor):
 v5.8 (Phase 4): Imported from logic.scoring_engine + logic.rollover_engine.
 v5.7: points_per_match, update_player_points(), cap/vc aggregation.
 v5.6: user_match_points, season_pts, per-match leaderboard.
+
+Leaderboard fix (post-v5.9):
+  _LEADERBOARD_SQL user_totals CTE now sources total_pts from
+  SUM(us.week_pts) in user_selections — the authoritative persisted value
+  written at scrape time.  Previously used SUM(ump.pts) from
+  user_match_points, an ephemeral table cleared on restart, causing W3=0,
+  W2 drift, and total ≠ sum(weekly).
 """
 
 import json
@@ -130,15 +137,41 @@ CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 """
 
 
+# ── Leaderboard SQL ────────────────────────────────────────────────────────
+#
+# FIX: user_totals.total_pts now reads SUM(us.week_pts) from user_selections.
+#
+# WHY: user_match_points (ump) is an ephemeral derived table — it is cleared
+# on every server restart and only repopulated for matches whose status is
+# 'completed' at the time update_week_points() runs.  Any week whose matches
+# hadn't settled (e.g. W3) would appear as 0, while weeks with partial
+# re-scrapes (W2) would drift.  The result was total_pts ≠ sum(weekly)
+# because the two figures were drawn from different sources.
+#
+# user_selections.week_pts is the authoritative value: written atomically by
+# the scraper at the moment each match is processed and never cleared between
+# restarts.  It is the same source the weekly breakdown list already reads.
+#
+# Changes from original:
+#   user_totals: SUM(us.week_pts) replaces SUM(ump.pts)       ← total fix
+#   user_totals: LEFT JOIN ump now scoped ump.week_no=us.week_no  ← cross-week fix
+#   user_totals: WHERE clause added for per-week filter        ← week filter fix
+#   scored_points / MVP CTEs: unchanged
+#
 _LEADERBOARD_SQL = """
 WITH
 user_totals AS (
+    -- SOURCE OF TRUTH: week_pts from user_selections (persisted at scrape time).
+    -- user_match_points is retained only for matches_counted granularity.
     SELECT us.display_name,
-           COALESCE(SUM(ump.pts), 0) AS total_pts,
-           COUNT(DISTINCT CASE WHEN ump.pts > 0 THEN ump.match_id END) AS matches_counted
+           COALESCE(SUM(us.week_pts), 0)                                    AS total_pts,
+           COUNT(DISTINCT CASE WHEN ump.pts > 0 THEN ump.match_id END)      AS matches_counted
     FROM  user_selections us
-    LEFT JOIN user_match_points ump ON ump.display_name = us.display_name
-        AND (CAST(:week_no AS INTEGER) IS NULL OR ump.week_no = CAST(:week_no AS INTEGER))
+    LEFT JOIN user_match_points ump
+          ON  ump.display_name = us.display_name
+          AND ump.week_no      = us.week_no
+    WHERE (CAST(:week_no AS INTEGER) IS NULL
+           OR us.week_no = CAST(:week_no AS INTEGER))
     GROUP BY us.display_name
 ),
 scored_points AS (
@@ -539,8 +572,6 @@ class DatabaseManager:
         return updated
 
     # ── Rollover DAO (Phase 5) ────────────────────────────────────────────────
-    # Pure SELECT / INSERT helpers called by server.py api_rollover().
-    # No rollover business logic lives here; that belongs in logic.rollover_engine.
 
     def get_users_and_max_weeks(self) -> list:
         """Return [{display_name, cur_wk}] for all users. Used by api_rollover."""
@@ -564,11 +595,6 @@ class DatabaseManager:
 
     def insert_rollover_week(self, display_name: str, new_week_no: int,
                               team_json: str, cap_id, vc_id) -> None:
-        """
-        INSERT OR IGNORE the new-week row produced by a rollover.
-        Both tw_ and nw_ columns receive the promoted team so the next
-        week starts with an active team and an editable draft.
-        """
         with self._write() as con:
             con.execute("""
                 INSERT OR IGNORE INTO user_selections
@@ -581,7 +607,7 @@ class DatabaseManager:
                   team_json, cap_id, vc_id))
 
     def set_last_rollover(self, iso: str) -> None:
-        """Write _last_rollover timestamp to meta (gate for next Monday's rollover)."""
+        """Write _last_rollover timestamp to meta."""
         with self._write() as con:
             con.execute(
                 "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
