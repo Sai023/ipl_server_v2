@@ -1,31 +1,25 @@
 """
-IPL Fantasy 2026 — Fuzzy Player Name Matcher         fuzzy_match v1.0.0
+IPL Fantasy 2026 — Fuzzy Player Name Matcher         fuzzy_match v1.1.0
 ===========================================================================
-Phase 4 — Extracted verbatim from scraper.py v10.9.
+v1.1.0 (Resilience Upgrade):
+  _generate_dynamic_player() added.
+    • Returns a fully-keyed player dict (id, name, team, role, price)
+      for any unknown player that survives all fuzzy tiers.
+    • ID strategy: `ext_{cricbuzz_id}` when a Cricbuzz numeric ID is
+      supplied (zero collision risk with Seed_Players.py short-form IDs
+      such as `c09`, `rr11`).  Falls back to `ext_{6-char md5}` when
+      no CB id is available.
+    • role defaults to "AR" — "UNCAPPED" is intentionally NOT used
+      because the DB schema enforces CHECK(role IN ('BAT','BOWL','AR','WK')).
+    • price defaults to 7.0 (midrange — does not affect fantasy budget
+      for existing users; only relevant if a future user drafts the player).
 
-Imports: stdlib (re, sqlite3, unicodedata) only — zero project imports.
-Logic is bit-for-bit identical to scraper.py v10.9; nothing has been
-changed, including known quirks (see _fuzzy_fielder note below).
+v1.0.0 (Phase 4): extracted verbatim from scraper.py v10.9.
 
-Public API
-----------
-_norm(s)
-    Normalise a name string for comparison (lower, strip accents, etc.).
-
-_build_player_index(con)
-    Build the in-memory player lookup dict from a sqlite3 Connection.
-    Returns: {by_name, by_surname, all, by_name_team, name_conflicts}.
-
-_fuzzy_match(name, idx, team_hint=None) -> str | None
-    Resolve a batter / bowler name string to a player ID.
-    Uses team_hint first for names flagged in name_conflicts.
-
-_fuzzy_fielder(name, idx, bowling_team=None) -> str | None
-    Resolve a fielder name string to a player ID.
-    Note: preserves the original `tf[0][" id"]` key (space before "id")
-    from scraper.py — intentionally not corrected under Phase 4 strict scope.
+Imports: stdlib (hashlib, re, sqlite3, unicodedata) only — zero project imports.
 """
 
+import hashlib
 import re
 import sqlite3
 import unicodedata
@@ -34,8 +28,6 @@ import unicodedata
 def _norm(s: str) -> str:
     """
     Normalise a player name for fuzzy comparison.
-    Identical to scraper.py v10.9 _norm().
-
     Steps: lowercase → NFD → strip combining marks → collapse punctuation → strip.
     """
     s = str(s).lower().strip()
@@ -45,18 +37,64 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _build_player_index(con: sqlite3.Connection) -> dict:
+def _generate_dynamic_player(
+    name: str,
+    team_code: str,
+    cricbuzz_id=None,
+) -> dict:
     """
-    v10.4: Build by_name_team and name_conflicts for team-aware disambiguation.
-    Identical to scraper.py v10.9 _build_player_index().
+    Generate a fully-keyed fallback player dict for a player not found in
+    Seed_Players.py.
+
+    Called by _auto_add_player() in scraper.py when all fuzzy tiers fail.
+    The returned dict contains every key the scraper and DB expect:
+        id    — unique, never collides with Seed_Players.py short IDs
+        name  — raw Cricbuzz display name (preserved for audit logs)
+        team  — uppercased IPL team code
+        role  — "AR" (satisfies DB CHECK constraint)
+        price — 7.0 (default midrange value)
+
+    ID strategy
+    -----------
+    1. ext_{cricbuzz_id}  when a Cricbuzz numeric player ID is available
+       e.g.  ext_1234567  — globally unique, matches Cricbuzz records.
+    2. ext_{6-char-md5}   fallback using MD5 of the normalised name when
+       no CB id is supplied.
+       e.g.  ext_a3f9b2
+
+    Both prefixes are outside [a-z]{1,3}\\d{1,2} so _ID_RE.match() in
+    the scraper correctly counts them as "unresolved" for stats reporting.
 
     Parameters
     ----------
-    con : sqlite3.Connection — open connection to the fantasy DB (players table).
+    name        : str  — player's display name from the scorecard
+    team_code   : str  — IPL team short code (e.g. "CSK", "MI"); may be ""
+    cricbuzz_id : int|str|None  — Cricbuzz numeric player ID if known
 
     Returns
     -------
-    dict with keys:
+    dict with keys: id, name, team, role, price
+    """
+    if cricbuzz_id:
+        pid = f"ext_{cricbuzz_id}"
+    else:
+        h   = hashlib.md5(_norm(name).encode()).hexdigest()[:6]
+        pid = f"ext_{h}"
+
+    return {
+        "id":    pid,
+        "name":  name,
+        "team":  (team_code or "").upper(),
+        "role":  "AR",    # "UNCAPPED" violates CHECK(role IN ('BAT','BOWL','AR','WK'))
+        "price": 7.0,
+    }
+
+
+def _build_player_index(con: sqlite3.Connection) -> dict:
+    """
+    v10.4: Build by_name_team and name_conflicts for team-aware disambiguation.
+
+    Returns dict with keys:
         by_name        : {norm_name → player_dict}
         by_surname     : {surname   → [player_dict, ...]}
         all            : [player_dict, ...]
@@ -85,7 +123,6 @@ def _fuzzy_match(name: str, idx: dict, team_hint: str = None) -> str | None:
     """
     v10.4: Resolve a batter / bowler name to a player ID.
     team_hint is used first for names in name_conflicts.
-    Identical to scraper.py v10.9 _fuzzy_match().
 
     Resolution tiers:
       1. Exact normalised name, with team hint for conflict names.
@@ -123,16 +160,11 @@ def _fuzzy_match(name: str, idx: dict, team_hint: str = None) -> str | None:
 def _fuzzy_fielder(name: str, idx: dict, bowling_team: str = None) -> str | None:
     """
     Resolve a fielder name to a player ID.
-    Identical to scraper.py v10.9 _fuzzy_fielder().
 
     Resolution tiers:
       1. Exact normalised name.
       2. Single-match surname, optionally filtered by bowling_team.
       3. Surname of last word in multi-word name, team-filtered.
-
-    Note: the key `tf[0][" id"]` (with a leading space) on the final branch
-    is preserved verbatim from scraper.py — not corrected under Phase 4
-    strict-scope rules.
     """
     n = _norm(name)
     if not n: return None
@@ -149,5 +181,5 @@ def _fuzzy_fielder(name: str, idx: dict, bowling_team: str = None) -> str | None
         if len(cands2) == 1: return cands2[0]["id"]
         if len(cands2) > 1 and bowling_team:
             tf = [c for c in cands2 if c["team"].upper() == bowling_team.upper()]
-            if len(tf) == 1: return tf[0][" id"]  # verbatim from scraper.py v10.9
+            if len(tf) == 1: return tf[0]["id"]  # fixed: was `tf[0][" id"]` typo
     return None
