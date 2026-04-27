@@ -19,12 +19,19 @@ v5.8 (Phase 4): Imported from logic.scoring_engine + logic.rollover_engine.
 v5.7: points_per_match, update_player_points(), cap/vc aggregation.
 v5.6: user_match_points, season_pts, per-match leaderboard.
 
-Leaderboard fix (post-v5.9):
-  _LEADERBOARD_SQL user_totals CTE now sources total_pts from
-  SUM(us.week_pts) in user_selections — the authoritative persisted value
-  written at scrape time.  Previously used SUM(ump.pts) from
-  user_match_points, an ephemeral table cleared on restart, causing W3=0,
-  W2 drift, and total ≠ sum(weekly).
+Leaderboard fix (post-v5.9) — fan-out elimination:
+  _LEADERBOARD_SQL previously LEFT JOINed user_match_points inside
+  user_totals to obtain matches_counted.  Because user_match_points has
+  one row per match, each user_selections row (one per week) fanned out
+  to N match-rows.  SUM(us.week_pts) then counted each week's total N
+  times — e.g. W2 (900 pts, 9 matches) → 8100, W1 (490 pts, 2 matches)
+  → 980, giving a bogus total of 9080 instead of 1390.
+
+  Fix: two independent CTEs, no cross-join.
+    user_totals  — SUM(week_pts) directly from user_selections (no join).
+    match_counts — COUNT(DISTINCT match_id) from user_match_points (no join).
+  Both are LEFT JOINed in the ranked CTE.  Total is now guaranteed to
+  equal the sum of the weekly columns displayed in the UI.
 
 Phase 8 (scouting badges):
   get_state() now includes a `player_pts` dict {id: season_pts} sourced
@@ -146,34 +153,46 @@ CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 
 # ── Leaderboard SQL ────────────────────────────────────────────────────────
 #
-# FIX: user_totals.total_pts now reads SUM(us.week_pts) from user_selections.
+# DESIGN: two independent CTEs, no cross-join between them.
 #
-# WHY: user_match_points (ump) is an ephemeral derived table — it is cleared
-# on every server restart and only repopulated for matches whose status is
-# 'completed' at the time update_week_points() runs.  Any week whose matches
-# hadn't settled (e.g. W3) would appear as 0, while weeks with partial
-# re-scrapes (W2) would drift.  The result was total_pts ≠ sum(weekly)
-# because the two figures were drawn from different sources.
+# user_totals  — reads ONLY from user_selections.
+#   SUM(week_pts) with no join.  One output row per user regardless of
+#   how many matches or match-point rows exist.  Cannot fan-out.
 #
-# user_selections.week_pts is the authoritative value: written atomically by
-# the scraper at the moment each match is processed and never cleared between
-# restarts.  It is the same source the weekly breakdown list already reads.
+# match_counts — reads ONLY from user_match_points.
+#   COUNT(DISTINCT match_id) with no join to user_selections.
+#   Cannot inflate total_pts.
+#
+# Both are LEFT JOINed in the ranked CTE so a user with no
+# user_match_points rows still appears with matches_counted = 0.
+#
+# Invariant: total_pts == SUM of the weekly pts values shown in the UI,
+# because both read exclusively from user_selections.week_pts.
+#
+# MVP (scored_points CTE) still uses player_match_points for per-player
+# awarded points — this is correct and does not affect total_pts.
 #
 _LEADERBOARD_SQL = """
 WITH
 user_totals AS (
-    -- SOURCE OF TRUTH: week_pts from user_selections (persisted at scrape time).
-    -- user_match_points is retained only for matches_counted granularity.
-    SELECT us.display_name,
-           COALESCE(SUM(us.week_pts), 0)                                    AS total_pts,
-           COUNT(DISTINCT CASE WHEN ump.pts > 0 THEN ump.match_id END)      AS matches_counted
-    FROM  user_selections us
-    LEFT JOIN user_match_points ump
-          ON  ump.display_name = us.display_name
-          AND ump.week_no      = us.week_no
-    WHERE (CAST(:week_no AS INTEGER) IS NULL
-           OR us.week_no = CAST(:week_no AS INTEGER))
-    GROUP BY us.display_name
+    -- Pure aggregate from user_selections — one row per user per week.
+    -- No join to user_match_points; cannot fan-out.
+    SELECT display_name,
+           COALESCE(SUM(week_pts), 0) AS total_pts
+    FROM   user_selections
+    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+            OR week_no = CAST(:week_no AS INTEGER))
+    GROUP  BY display_name
+),
+match_counts AS (
+    -- Per-user match count from user_match_points — separate CTE,
+    -- no join to user_selections; cannot inflate total_pts.
+    SELECT display_name,
+           COUNT(DISTINCT CASE WHEN pts > 0 THEN match_id END) AS matches_counted
+    FROM   user_match_points
+    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+            OR week_no = CAST(:week_no AS INTEGER))
+    GROUP  BY display_name
 ),
 scored_points AS (
     SELECT us.display_name, pmp.match_id, je.value AS player_id, pmp.base_pts,
@@ -181,37 +200,49 @@ scored_points AS (
                 WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
                 ELSE pmp.base_pts END AS awarded_pts
     FROM  user_selections us, JSON_EACH(us.tw_team_json) AS je
-    INNER JOIN player_match_points pmp ON pmp.player_id = je.value
-        AND pmp.week_no = us.week_no
-    WHERE (CAST(:week_no AS INTEGER) IS NULL OR us.week_no = CAST(:week_no AS INTEGER))
+    INNER JOIN player_match_points pmp
+           ON  pmp.player_id = je.value
+           AND pmp.week_no   = us.week_no
+    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+            OR us.week_no = CAST(:week_no AS INTEGER))
 ),
 mvp_data AS (
     SELECT display_name, MAX(awarded_pts) AS mvp_awarded_pts
-    FROM  scored_points GROUP BY display_name
+    FROM   scored_points GROUP BY display_name
 ),
 mvp_resolve AS (
     SELECT sp.display_name, MIN(sp.player_id) AS mvp_player_id, sp.awarded_pts AS mvp_pts
-    FROM  scored_points sp
-    INNER JOIN mvp_data md ON md.display_name=sp.display_name AND sp.awarded_pts=md.mvp_awarded_pts
-    GROUP BY sp.display_name, sp.awarded_pts
+    FROM   scored_points sp
+    INNER JOIN mvp_data md
+           ON  md.display_name   = sp.display_name
+           AND sp.awarded_pts    = md.mvp_awarded_pts
+    GROUP  BY sp.display_name, sp.awarded_pts
 ),
 ranked AS (
-    SELECT ut.display_name, ut.total_pts, ut.matches_counted,
-           COALESCE(mr.mvp_player_id,'') AS mvp_player_id,
-           COALESCE(mr.mvp_pts, 0)       AS mvp_pts,
+    SELECT ut.display_name,
+           ut.total_pts,
+           COALESCE(mc.matches_counted, 0) AS matches_counted,
+           COALESCE(mr.mvp_player_id, '')  AS mvp_player_id,
+           COALESCE(mr.mvp_pts, 0)         AS mvp_pts,
            DENSE_RANK() OVER (ORDER BY ut.total_pts DESC) AS rank
-    FROM  user_totals ut LEFT JOIN mvp_resolve mr USING (display_name)
+    FROM  user_totals ut
+    LEFT JOIN match_counts mc  USING (display_name)
+    LEFT JOIN mvp_resolve  mr  USING (display_name)
 ),
 league_benchmarks AS (
-    SELECT ROUND(AVG(total_pts),1) AS league_avg,
-           MAX(total_pts) AS top_score, COUNT(*) AS member_count
+    SELECT ROUND(AVG(total_pts), 1) AS league_avg,
+           MAX(total_pts)           AS top_score,
+           COUNT(*)                 AS member_count
     FROM  user_totals
 )
 SELECT r.rank, r.display_name, r.total_pts, r.matches_counted,
-       r.mvp_player_id, COALESCE(p.name, r.mvp_player_id) AS mvp_player_name,
-       r.mvp_pts, lb.league_avg, lb.top_score, lb.member_count
-FROM ranked r CROSS JOIN league_benchmarks lb
-LEFT JOIN players p ON p.id = r.mvp_player_id
+       r.mvp_player_id,
+       COALESCE(p.name, r.mvp_player_id) AS mvp_player_name,
+       r.mvp_pts,
+       lb.league_avg, lb.top_score, lb.member_count
+FROM  ranked r
+CROSS JOIN league_benchmarks lb
+LEFT  JOIN players p ON p.id = r.mvp_player_id
 ORDER BY r.rank, r.display_name
 """
 
@@ -344,11 +375,10 @@ class DatabaseManager:
         """
         Returns the full app state consumed by ipl_glue.js on load.
 
-        Phase 8: now includes `player_pts` — a compact {player_id: season_pts}
-        dict built from the players table.  This lets the Next Week tab render
-        scouting badges (e.g. "318 Pts") without an additional /api/players
-        call.  season_pts is the raw base score (no cap/vc multiplier),
-        which is the correct metric for a form guide.
+        Phase 8: includes `player_pts` — a compact {player_id: season_pts}
+        dict built from the players table.  Allows Next Week tab to render
+        scouting badges without an extra /api/players call.
+        season_pts = raw base score (no cap/vc multiplier).
         """
         with self._read() as con:
             rows = con.execute("""
@@ -384,19 +414,19 @@ class DatabaseManager:
                     entry["scores"] = {sr["player_id"]: _jloads(sr["raw_score_json"],{}) for sr in score_rows}
                 matches.append(entry)
 
-            # Phase 8: compact scouting lookup for ipl_glue.js Next Week badges.
-            # season_pts = base pts, no cap/vc multiplier (correct for form guides).
+            # Phase 8: scouting lookup — season_pts survives restarts
+            # (not cleared by _rebuild_scores_and_points).
             player_pts_rows = con.execute(
                 "SELECT id, season_pts FROM players"
             ).fetchall()
             player_pts = {r["id"]: r["season_pts"] for r in player_pts_rows}
 
         return {
-            "members": members,
-            "matches": matches,
-            "player_pts": player_pts,          # {id: season_pts} — Phase 8
-            "_saved": self.get_meta("_saved","never"),
-            "_last_rollover": self.get_meta("_last_rollover",""),
+            "members":        members,
+            "matches":        matches,
+            "player_pts":     player_pts,
+            "_saved":         self.get_meta("_saved", "never"),
+            "_last_rollover": self.get_meta("_last_rollover", ""),
         }
 
     def save_state(self, payload: dict) -> str:
@@ -754,14 +784,9 @@ class DatabaseManager:
             row = con.execute(
                 "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
             ).fetchone()
-            return int(row["wn"]) if row else 1
+            return int(row[\"wn\"]) if row else 1
 
     def get_players(self) -> list:
-        """
-        Returns all players sorted by season_pts DESC then name.
-        Includes: id, name, team, role, price, season_pts (base), points (cap/vc-weighted).
-        season_pts is the correct field for scouting — it is the unweighted base score.
-        """
         with self._read() as con:
             rows = con.execute(
                 "SELECT id,name,team,role,price,season_pts,points "
