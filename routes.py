@@ -1,12 +1,20 @@
 """
-IPL Fantasy 2026 — API Route Handlers                       routes v1.1.0
+IPL Fantasy 2026 — API Route Handlers                       routes v1.2.0
 ===========================================================================
+v1.2.0 (Backend Audit & Snapshot):
+  /api/audit-player-ids  — Ghost ID sweep (same logic as startup audit,
+    callable on demand). Returns JSON: ghosts list, user totals, validity flag.
+  /api/audit-blobs       — Pure DB read: SUM(points_per_match values) vs
+    week_pts for every user_selections row. Does NOT require match_scores.
+    This is the blob integrity check before any frontend merge work.
+  /api/snapshot          — Captures leaderboard + member summary + both audit
+    results to data/snapshot_*.json. These are the "Receipts" we compare
+    against after the Match Centre is built to prove no bugs were introduced.
+
 v1.1.0 (Phase 8 — Scouting & UX):
   /api/version now includes ROUTES_VER in the modules dict.
-  /api/players returns season_pts (base, no cap/vc) sorted DESC — already
-    present via db.get_players(); confirmed correct for scouting badges.
-  /api/state now returns player_pts {id: season_pts} via db.get_state();
-    ipl_glue.js uses this for Next Week tab badges without extra fetch.
+  /api/players returns season_pts (base, no cap/vc) sorted DESC.
+  /api/state now returns player_pts {id: season_pts} via db.get_state().
 
 v1.0.1 (bugfix): circular import resolved via base.py.
 v1.0.0 (Phase 7): 24 @bp.route handlers in 8 groups.
@@ -53,7 +61,7 @@ def api_version():
         "ok": True, "app_version": APP_VERSION,
         "modules": {
             "server":          SERVER_VER,
-            "routes":          ROUTES_VER,   # Phase 8: added
+            "routes":          ROUTES_VER,
             "db_manager":      DB_VER,
             "scraper":         SCRAPER_VER,
             "init_db":         INIT_DB_VER,
@@ -444,6 +452,243 @@ def api_clean_scores():
     except Exception as e:
         _log(f"POST /api/clean-scores: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 6b. AUDIT & SNAPSHOT  (v1.2.0 — backend receipt system)
+#
+# Run these THREE endpoints in sequence before any frontend work:
+#   1. GET  /api/audit-player-ids  → must return all_ids_valid: true
+#   2. GET  /api/audit-blobs       → must return all_blobs_valid: true
+#   3. POST /api/snapshot          → saves receipts to data/snapshot_*.json
+#
+# After the Match Centre is built, re-run the snapshot and diff the numbers.
+# ════════════════════════════════════════════════════════════════════════════
+
+@bp.route("/api/audit-player-ids", methods=["GET"])
+def api_audit_player_ids():
+    """
+    Ghost ID Sweep — callable on demand (same logic as startup audit).
+
+    A "ghost" is a player_id that appears in any user's tw_team_json
+    but does NOT exist in the players table.  Ghosts will appear as
+    "Unknown Player" in any UI that does a player lookup.
+
+    Does NOT require match_scores or player_match_points to be populated.
+    Safe to run immediately after a server restart.
+    """
+    try:
+        with db._read() as con:
+            all_players = {r["id"]: r["name"] for r in con.execute(
+                "SELECT id,name FROM players").fetchall()}
+            all_player_ids = set(all_players.keys())
+            sels = con.execute(
+                "SELECT display_name, week_no, tw_team_json "
+                "FROM user_selections ORDER BY display_name, week_no"
+            ).fetchall()
+            totals_rows = con.execute(
+                "SELECT display_name, COALESCE(SUM(week_pts),0) AS pts "
+                "FROM user_selections GROUP BY display_name"
+            ).fetchall()
+
+        totals = {r["display_name"]: r["pts"] for r in totals_rows}
+        ghosts = []
+        seen_ghosts = set()
+        for sel in sels:
+            name = sel["display_name"]; wk = sel["week_no"]
+            try: ids = _json.loads(sel["tw_team_json"] or "[]")
+            except: continue
+            for pid in ids:
+                if pid not in all_player_ids and pid not in seen_ghosts:
+                    seen_ghosts.add(pid)
+                    prefix_m = re.match(r'^[a-z]+', pid)
+                    suggestions = [
+                        f"{p_id}={p_nm}" for p_id, p_nm in all_players.items()
+                        if prefix_m and p_id.startswith(prefix_m.group()) and p_id != pid
+                    ][:4]
+                    ghosts.append({
+                        "ghost_id": pid,
+                        "first_seen_user": name,
+                        "first_seen_week": wk,
+                        "suggestions": suggestions,
+                    })
+
+        return jsonify({
+            "ok": True,
+            "all_ids_valid": len(ghosts) == 0,
+            "ghost_count": len(ghosts),
+            "ghosts": ghosts,
+            "user_totals": [
+                {"name": k, "total_pts": v} for k, v in sorted(totals.items())
+            ],
+            "players_in_db": len(all_player_ids),
+            "note": (
+                "PASS: All selected player IDs resolve to real players."
+                if len(ghosts) == 0
+                else f"FAIL: {len(ghosts)} ghost ID(s) found. "
+                     "Fix by updating Seed_Players.py and running it."
+            ),
+        })
+    except Exception as e:
+        _log(f"GET /api/audit-player-ids: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+@bp.route("/api/audit-blobs", methods=["GET"])
+def api_audit_blobs():
+    """
+    Blob Verification — pure DB read, no match_scores required.
+
+    For every user_selections row:
+      SUM(points_per_match.values())  must equal  week_pts
+
+    This is the authoritative check that the stored totals (which the
+    leaderboard reads) are internally consistent with the per-match
+    breakdown (which the History tab reads).
+
+    A mismatch means the two tabs will show conflicting totals — this
+    MUST be resolved before any frontend merge work begins.
+    """
+    try:
+        with db._read() as con:
+            rows = con.execute(
+                "SELECT display_name, week_no, week_pts, points_per_match "
+                "FROM user_selections ORDER BY display_name, week_no"
+            ).fetchall()
+
+        results = []; mismatches = []
+        for row in rows:
+            name = row["display_name"]; wk = row["week_no"]
+            stored = row["week_pts"]
+            try: blob = _json.loads(row["points_per_match"] or "{}")
+            except: blob = {}
+            blob_sum = sum(int(v) for v in blob.values())
+            is_match = stored == blob_sum
+            entry = {
+                "user": name,
+                "week_no": wk,
+                "stored_week_pts": stored,
+                "blob_sum": blob_sum,
+                "diff": stored - blob_sum,
+                "match": is_match,
+                "matches_in_blob": len(blob),
+            }
+            results.append(entry)
+            if not is_match:
+                mismatches.append(entry)
+
+        return jsonify({
+            "ok": True,
+            "all_blobs_valid": len(mismatches) == 0,
+            "mismatch_count": len(mismatches),
+            "mismatches": mismatches,
+            "rows_checked": len(results),
+            "details": results,
+            "note": (
+                "PASS: All points_per_match blobs sum correctly to week_pts."
+                if len(mismatches) == 0
+                else f"FAIL: {len(mismatches)} row(s) where blob sum != week_pts. "
+                     "Run POST /api/recalculate-points then re-check."
+            ),
+        })
+    except Exception as e:
+        _log(f"GET /api/audit-blobs: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+@bp.route("/api/snapshot", methods=["POST"])
+def api_snapshot():
+    """
+    Capture and save a receipt: leaderboard + member totals + both audit results.
+
+    Saved to data/snapshot_<iso>.json.  Run this BEFORE building the Match
+    Centre.  After the Match Centre is live, run it again and diff the two
+    files — numbers must be identical to prove no bugs were introduced.
+
+    Usage:
+      POST /api/snapshot
+      Response includes the full snapshot JSON + the filename it was saved to.
+    """
+    try:
+        # 1. Leaderboard (source of truth for totals)
+        leaderboard = db.get_leaderboard()
+
+        # 2. Ghost sweep
+        with db._read() as con:
+            all_players = {r["id"]: r["name"] for r in con.execute(
+                "SELECT id,name FROM players").fetchall()}
+            all_player_ids = set(all_players.keys())
+            sels = con.execute(
+                "SELECT display_name, week_no, tw_team_json "
+                "FROM user_selections ORDER BY display_name, week_no"
+            ).fetchall()
+            blob_rows = con.execute(
+                "SELECT display_name, week_no, week_pts, points_per_match "
+                "FROM user_selections ORDER BY display_name, week_no"
+            ).fetchall()
+
+        ghosts = []
+        seen_ghosts = set()
+        for sel in sels:
+            try: ids = _json.loads(sel["tw_team_json"] or "[]")
+            except: continue
+            for pid in ids:
+                if pid not in all_player_ids and pid not in seen_ghosts:
+                    seen_ghosts.add(pid)
+                    ghosts.append({"ghost_id": pid, "first_seen_user": sel["display_name"]})
+
+        # 3. Blob verification
+        blob_mismatches = []
+        for row in blob_rows:
+            stored = row["week_pts"]
+            try: blob = _json.loads(row["points_per_match"] or "{}")
+            except: blob = {}
+            blob_sum = sum(int(v) for v in blob.values())
+            if stored != blob_sum:
+                blob_mismatches.append({
+                    "user": row["display_name"], "week_no": row["week_no"],
+                    "stored_week_pts": stored, "blob_sum": blob_sum, "diff": stored - blob_sum,
+                })
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        snapshot = {
+            "captured_at": now_iso,
+            "backend_clean": len(ghosts) == 0 and len(blob_mismatches) == 0,
+            "audit_player_ids": {
+                "all_ids_valid": len(ghosts) == 0,
+                "ghost_count": len(ghosts),
+                "ghosts": ghosts,
+            },
+            "audit_blobs": {
+                "all_blobs_valid": len(blob_mismatches) == 0,
+                "mismatch_count": len(blob_mismatches),
+                "mismatches": blob_mismatches,
+            },
+            "leaderboard": leaderboard,
+        }
+
+        # Save to disk
+        safe_ts = now_iso.replace(":", "-").replace(".", "-")
+        snap_path = DATA_DIR / f"snapshot_{safe_ts}.json"
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(snap_path, "w") as fh:
+            _json.dump(snapshot, fh, indent=2)
+        _log(f"[snapshot] Saved receipt → {snap_path.name}")
+
+        return jsonify({
+            "ok": True,
+            "captured_at": now_iso,
+            "saved_to": snap_path.name,
+            "backend_clean": snapshot["backend_clean"],
+            "audit_summary": {
+                "ghost_count": len(ghosts),
+                "blob_mismatch_count": len(blob_mismatches),
+            },
+            "snapshot": snapshot,
+        })
+    except Exception as e:
+        _log(f"POST /api/snapshot: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════
