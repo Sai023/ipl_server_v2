@@ -24,8 +24,8 @@ Leaderboard fix (post-v5.9) — fan-out elimination:
   user_totals to obtain matches_counted.  Because user_match_points has
   one row per match, each user_selections row (one per week) fanned out
   to N match-rows.  SUM(us.week_pts) then counted each week's total N
-  times — e.g. W2 (900 pts, 9 matches) → 8100, W1 (490 pts, 2 matches)
-  → 980, giving a bogus total of 9080 instead of 1390.
+  times — e.g. W2 (900 pts, 9 matches) -> 8100, W1 (490 pts, 2 matches)
+  -> 980, giving a bogus total of 9080 instead of 1390.
 
   Fix: two independent CTEs, no cross-join.
     user_totals  — SUM(week_pts) directly from user_selections (no join).
@@ -39,6 +39,9 @@ Phase 8 (scouting badges):
   season_pts badges on Next Week player cards without a separate
   /api/players call.  season_pts is the raw base score (no cap/vc
   multiplier) — correct for scouting form guides.
+
+Syntax fix: get_current_week() row["wn"] had a stray backslash (row[\"wn\"])
+  introduced during the fan-out patch, causing SyntaxError on import.
 """
 
 import json
@@ -784,7 +787,7 @@ class DatabaseManager:
             row = con.execute(
                 "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
             ).fetchone()
-            return int(row[\"wn\"]) if row else 1
+            return int(row["wn"]) if row else 1
 
     def get_players(self) -> list:
         with self._read() as con:
