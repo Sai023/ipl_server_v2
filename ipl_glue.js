@@ -1,16 +1,23 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7.5
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.6
  * =========================================================================
- * v7.5 (Phase 6 — Integrator):
- *   • _checkVersionHandshake() — called on page load; hits /api/version and
- *     logs APP_VERSION + VERSION_MAP to the browser console with a styled
- *     group header. Confirms the frontend is talking to the Decoupled v2.0
- *     backend. Also dispatches ipl:version-ok with the payload.
- *   • IplApi.getVersion() — added to public API surface.
- *   • UI Safety: lock state uses ROLLOVER_HOUR_UTC=14 / ROLLOVER_MIN_UTC=0
- *     (Monday 14:00 UTC = 16:00 SAST). Confirmed to match rollover_engine.py
- *     DEADLINE_HOUR=14 — both sides lock at the same instant. ✓
+ * v7.6 (Phase 8 — Scouting & Mobile UX):
+ *   • season_pts badge on Next Week player cards (and all [data-pid] chips).
+ *     Source: _state.player_pts[pid] — embedded in /api/state by db_manager
+ *     Phase 8. Zero extra fetch. Falls back to _playerMap.season_pts.
+ *     Style: muted teal pill, opacity-75. Renders only when pts > 0.
+ *     Label reads "NNN Pts" — base score, never cap/vc weighted.
+ *   • Picker/swap list sorted by season_pts DESC. "Pts" sub-label injected
+ *     next to price in player rows. Sort uses _playerMap (from /api/players
+ *     which returns season_pts DESC from db_manager Phase 8).
+ *   • Mobile keyboard fix: _dismissKeyboard() calls
+ *     document.activeElement.blur() inside requestAnimationFrame so it fires
+ *     AFTER the DOM update completes. Hooked on ipl:saved event and on
+ *     capture-phase clicks on pick/swap/add/select buttons. Search text is
+ *     NOT cleared. The search input is NOT re-focused.
+ *   • Version handshake logs APP_VERSION 2.1.0 (reads from /api/version).
  *
+ * v7.5 (Phase 6): _checkVersionHandshake(), IplApi.getVersion().
  * v7.4: _playerMap cache, season_pts/points dual-column, match-by-match totals.
  * v7.3: Matches tab, user match pts, picker season_pts injection.
  * v7.2: _buildPointsTab() matchCount fix.
@@ -108,7 +115,7 @@
     if (_overlayVisible) _hideOverlay();
   }
 
-  // ── LEADERBOARD NORMALISATION ─────────────────────────────────────────────────
+  // ── LEADERBOARD NORMALISATION ─────────────────────────────────────────────
 
   function normaliseLeaderboard(raw) {
     if (!raw || typeof raw !== "object") {
@@ -131,7 +138,7 @@
     };
   }
 
-  // ── HTTP HELPERS ────────────────────────────────────────────────────────────
+  // ── HTTP HELPERS ─────────────────────────────────────────────────────────
 
   function _fetchJson(url, options) {
     options = options || {};
@@ -149,33 +156,32 @@
       });
   }
 
-  // ── VERSION HANDSHAKE (Phase 6) ───────────────────────────────────────────────
-  // Called once from _init(). Hits /api/version and logs the full
-  // VERSION_MAP to the browser console to confirm the decoupled backend.
+  // ── VERSION HANDSHAKE ────────────────────────────────────────────────────
+  // v7.6: logs APP_VERSION 2.1.0. Reads live from /api/version response.
 
   function _checkVersionHandshake() {
     _fetchJson("/api/version")
       .then(function (v) {
         if (!v || !v.ok) return;
         console.group(
-          "%c\uD83C\uDFCF IPL Fantasy " + v.app_version + " — Decoupled v2.0 Backend \u2713",
+          "%c\uD83C\uDFCF IPL Fantasy " + v.app_version + " \u2014 Decoupled v2.0 Backend \u2713",
           "color:#F5C518;font-weight:800;font-size:13px"
         );
         console.log("%cAPP_VERSION%c  " + v.app_version, "color:#5F7A9B;font-weight:600", "color:#00D4AA;font-weight:800");
         console.log("%cModule pins:", "color:#5F7A9B;font-weight:600", v.modules);
         console.log("%cMigration map:", "color:#5F7A9B;font-weight:600");
         Object.keys(v.version_map).sort().forEach(function (ver) {
-          console.log("  " + ver + " →", v.version_map[ver]);
+          console.log("  " + ver + " \u2192", v.version_map[ver]);
         });
         console.groupEnd();
         window.dispatchEvent(new CustomEvent("ipl:version-ok", { detail: v }));
       })
       .catch(function (err) {
-        console.warn("[IplGlue] /api/version handshake failed —", err.message || err);
+        console.warn("[IplGlue] /api/version handshake failed \u2014", err.message || err);
       });
   }
 
-  // ── ROLLOVER SCHEDULER ─────────────────────────────────────────────────────────
+  // ── ROLLOVER SCHEDULER ───────────────────────────────────────────────────
 
   function _msUntilNextRollover() {
     var now = new Date(); var utcDay = now.getUTCDay();
@@ -211,7 +217,7 @@
 
   var IplRollover = { scheduleNext: _scheduleNextRollover, cancelPending: _cancelRolloverTimer };
 
-  // ── PUBLIC API ────────────────────────────────────────────────────────────────────
+  // ── PUBLIC API ───────────────────────────────────────────────────────────
 
   var IplApi = {
 
@@ -240,7 +246,6 @@
       return _fetchJson("/api/user-match-points/" + encodeURIComponent(name));
     },
 
-    // Phase 6: /api/version endpoint — returns VERSION_MAP + module pins
     getVersion: function () { return _fetchJson("/api/version"); },
 
     saveNextWeek: function (name, picks) {
@@ -294,7 +299,7 @@
     seedHistory: function () { return _fetchJson("/api/seed-history", { method: "POST" }); },
   };
 
-  // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────────────
+  // ── 60-SECOND POLLING LOOP ───────────────────────────────────────────────
 
   function _pollCycle() {
     return _fetchJson("/api/poll")
@@ -318,10 +323,10 @@
   function startPolling() { if (_pollTimer) return; _pollCycle(); _pollTimer = setInterval(_pollCycle, POLL_INTERVAL_MS); }
   function stopPolling()  { if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; } }
 
-  // ── LIFECYCLE ───────────────────────────────────────────────────────────────────
+  // ── LIFECYCLE ────────────────────────────────────────────────────────────
 
   function _init() {
-    _checkVersionHandshake();     // Phase 6: confirm backend version on every page load
+    _checkVersionHandshake();
     IplApi.ping().catch(function () {});
     IplApi.getCurrentWeek().then(function (wk) {
       if (wk && wk.week_no != null) IplConfig.current_week = wk.week_no;
@@ -339,7 +344,7 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _init);
   else _init();
 
-  // ── EXPORTS ────────────────────────────────────────────────────────────────────
+  // ── EXPORTS ──────────────────────────────────────────────────────────────
 
   window.IplApi               = IplApi;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
@@ -351,25 +356,60 @@
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// v7.1 / v7.2 / v7.3 / v7.4 / v7.5  UI OVERRIDES
+// v7.1 / v7.2 / v7.3 / v7.4 / v7.5 / v7.6  UI OVERRIDES
 // Loaded after the inline script — these replace the original tab builders.
 // ════════════════════════════════════════════════════════════════════════════
 
 
-// ── v7.4: Shared player stats cache ───────────────────────────────────────────────────
+// ── v7.4: Shared player stats cache ──────────────────────────────────────────
+// /api/players returns season_pts DESC (db_manager Phase 8).
+// _playerMap preserves that order via _sort_idx for stable picker sort.
 var _playerMap = {};
 
 function _loadPlayerMap(cb) {
   IplApi.getPlayers().then(function(d) {
     if (d && d.players) {
       _playerMap = {};
-      d.players.forEach(function(p) { _playerMap[p.id] = p; });
+      d.players.forEach(function(p, i) {
+        _playerMap[p.id] = p;
+        _playerMap[p.id]._sort_idx = i;  // preserves DESC season_pts order from API
+      });
       if (typeof cb === 'function') cb();
     }
   }).catch(function() {});
 }
 
-// ── v7.1: History tab — weekly pts chip ──────────────────────────────────────────────
+// ── v7.6: Mobile keyboard dismiss ────────────────────────────────────────────
+// Fires document.activeElement.blur() inside requestAnimationFrame so it runs
+// AFTER the DOM update that triggered it. Does NOT clear search text or
+// re-focus any input.
+function _dismissKeyboard() {
+  requestAnimationFrame(function () {
+    try {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    } catch (e) {}
+  });
+}
+
+// Hook: capture-phase click on any pick / swap / add / select button.
+// requestAnimationFrame in _dismissKeyboard guarantees the click DOM update
+// lands first, then the blur fires on the next paint frame.
+document.addEventListener('click', function (e) {
+  var t = e.target;
+  if (!t) return;
+  var isAction = t.closest
+    ? t.closest('.pick-btn,.swap-btn,.add-btn,.select-btn,[data-action="pick"],[data-action="swap"]')
+    : false;
+  if (isAction) _dismissKeyboard();
+}, true /* capture */);
+
+// Also dismiss on successful save (ipl:saved fires after server ACK).
+window.addEventListener('ipl:saved', function () { _dismissKeyboard(); });
+
+
+// ── v7.1: History tab — weekly pts chip ──────────────────────────────────────
 _buildHistoryTab = function () {
   if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
     return (_username && !_historyData)
@@ -411,7 +451,7 @@ _buildHistoryTab = function () {
   return h + "</div>";
 };
 
-// ── v7.4: Leaderboard — per-week columns + cap/vc-weighted note ────────────────────
+// ── v7.4: Leaderboard — per-week columns + cap/vc-weighted note ──────────────
 _buildLeaderboardCard = function (lb) {
   var h = '<div class="card">';
   if (!lb || !lb.rankings || lb.rankings.length === 0) {
@@ -512,7 +552,7 @@ _buildPointsTab = function () {
     h += '<td style="text-align:right;font-size:11px;color:var(--muted)">' + basePts + '</td>';
     h += '<td>';
     if (p.matches && p.matches.length > 0)
-      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()" >Details</button>';
+      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()">Details</button>';
     h += '</td></tr>';
     if (p.matches && p.matches.length > 0) {
       h += '<tr><td colspan="6" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
@@ -581,7 +621,7 @@ _buildPointsTab = function () {
 };
 
 
-// ── v7.3: Matches tab — clean titles + My Pts column ───────────────────────────
+// ── v7.3: Matches tab — clean titles + My Pts column ────────────────────────
 var _umpData = null;
 
 function _loadUserMatchPoints() {
@@ -635,14 +675,106 @@ _buildMatchesTab = function () {
 };
 
 
-// ── v7.4: Player picker stats injection ──────────────────────────────────────────────
+// ── v7.6: Player picker — season_pts badges + sort DESC ──────────────────────
+//
+// _injectStatsToPicker() is called by the MutationObserver on every DOM
+// change, so it fires whenever the Next Week tab, search list, or swap
+// panel renders. Three behaviours:
+//
+// 1. Badge injection on [data-pid] chips (Next Week grid + picker rows)
+//    Source: _state.player_pts[pid] — embedded in /api/state, zero extra
+//    fetch. Falls back to _playerMap[pid].season_pts from /api/players.
+//    Style: muted teal pill, opacity-75. Label "NNN Pts". Only when > 0.
+//
+// 2. Sort: any unsorted [data-pid] container with >1 child is sorted by
+//    season_pts DESC using _playerMap._sort_idx (API-guaranteed order).
+//
+// 3. "Pts" column: injected next to price in .prow / picker rows as a
+//    secondary muted sub-label (does not add a table column — inline span).
 
 function _injectStatsToPicker() {
-  var rows = document.querySelectorAll('[data-pid], .prow, .player-row, .pick-row');
-  rows.forEach(function(row) {
-    if (row.querySelector('.ipl-pts-badge')) return;
+  // ── 1. season_pts badges ─────────────────────────────────────────────────
+  var chips = document.querySelectorAll('[data-pid]');
+  chips.forEach(function (chip) {
+    if (chip.querySelector('.ipl-sp-badge')) return;  // already done
 
-    var pid = row.getAttribute('data-pid') || (row.dataset && row.dataset.pid);
+    var pid = chip.getAttribute('data-pid');
+    if (!pid) return;
+
+    // Zero-fetch lookup: prefer _state.player_pts (embedded in state response)
+    var pts = 0;
+    if (window._state && window._state.player_pts && window._state.player_pts[pid] != null) {
+      pts = window._state.player_pts[pid];
+    } else if (_playerMap[pid]) {
+      pts = _playerMap[pid].season_pts || 0;
+    }
+    if (!pts) return;
+
+    var badge = document.createElement('span');
+    badge.className = 'ipl-sp-badge';
+    badge.title = 'Season base pts — no cap/vc multiplier (correct for scouting)';
+    badge.style.cssText = (
+      'display:inline-block;margin-left:5px;padding:1px 6px;'
+      + 'border-radius:99px;'
+      + 'background:rgba(0,212,170,.13);'
+      + 'color:var(--teal,#00D4AA);'
+      + 'font-size:9px;font-weight:700;'
+      + 'opacity:.75;vertical-align:middle;'
+      + 'letter-spacing:.01em;white-space:nowrap;'
+    );
+    badge.textContent = pts + ' Pts';
+
+    // Insert after player name, or after price, or append
+    var anchor = (
+      chip.querySelector('.prow-name,.player-name,[class*="p-name"]') ||
+      chip.querySelector('[class*="price"],.prow-price')
+    );
+    if (anchor) {
+      anchor.parentNode.insertBefore(badge, anchor.nextSibling);
+    } else {
+      chip.appendChild(badge);
+    }
+  });
+
+  // ── 2. Sort picker / swap lists by season_pts DESC ───────────────────────
+  // Targets scrollable player-list containers; re-orders child [data-pid]
+  // elements using _playerMap._sort_idx (index from /api/players DESC order).
+  var lists = document.querySelectorAll(
+    '.picker-list, .swap-list, .search-results, .player-list, ' +
+    '[class*="picker"] ul, [class*="search"] ul, [class*="player-list"] > ul'
+  );
+  lists.forEach(function (list) {
+    if (list.getAttribute('data-ipl-sorted')) return;
+    var items = Array.from(list.querySelectorAll('[data-pid]'));
+    if (items.length < 2) return;
+    // Only sort if at least one item has known pts — avoids scrambling
+    // a list that loaded before _playerMap was populated.
+    var hasData = items.some(function (el) {
+      var p = _playerMap[el.getAttribute('data-pid')];
+      return p && p.season_pts > 0;
+    });
+    if (!hasData) return;
+
+    list.setAttribute('data-ipl-sorted', '1');
+    items.sort(function (a, b) {
+      var pa = _playerMap[a.getAttribute('data-pid')] || {};
+      var pb = _playerMap[b.getAttribute('data-pid')] || {};
+      // Primary: season_pts DESC; secondary: _sort_idx (stable API order)
+      var diff = (pb.season_pts || 0) - (pa.season_pts || 0);
+      return diff !== 0 ? diff : (pa._sort_idx || 0) - (pb._sort_idx || 0);
+    });
+    // Re-append in sorted order (safe: moves existing DOM nodes)
+    items.forEach(function (el) { list.appendChild(el); });
+  });
+
+  // ── 3. Legacy .prow rows: keep existing ★ weighted badge, add base sub ───
+  // (Backwards-compatible with v7.4 .ipl-pts-badge for the weighted star pts)
+  var rows = document.querySelectorAll('.prow, .player-row, .pick-row');
+  rows.forEach(function (row) {
+    // Skip if already has either badge style
+    if (row.querySelector('.ipl-pts-badge, .ipl-sp-badge, .ipl-base-pts')) return;
+
+    var pid = row.getAttribute('data-pid');
     if (!pid) {
       var idEl = row.querySelector('.prow-id, [class*="prow-id"], .player-id');
       if (idEl) pid = idEl.textContent.trim();
@@ -655,6 +787,7 @@ function _injectStatsToPicker() {
     var points    = pInfo.points    || 0;
     var seasonPts = pInfo.season_pts || 0;
 
+    // Weighted pts star badge (gold — existing behaviour)
     var badge = document.createElement('span');
     badge.className = 'ipl-pts-badge';
     badge.title = 'Fantasy pts (Cap\xd72 / VC\xd71.5 weighted)';
@@ -663,13 +796,14 @@ function _injectStatsToPicker() {
       + 'font-size:10px;font-weight:800;vertical-align:middle';
     badge.textContent = '\u2605 ' + points;
 
+    // Base pts chip (muted teal — new in v7.6)
     var sub = document.createElement('span');
     sub.className = 'ipl-base-pts';
-    sub.title = 'Base pts (no cap/vc multiplier)';
+    sub.title = 'Season base pts (no cap/vc multiplier)';
     sub.style.cssText = 'display:inline-block;margin-left:4px;padding:1px 5px;'
-      + 'border-radius:99px;background:rgba(95,122,155,.2);color:var(--muted,#5F7A9B);'
-      + 'font-size:9px;font-weight:600;vertical-align:middle';
-    sub.textContent = seasonPts + 'b';
+      + 'border-radius:99px;background:rgba(0,212,170,.13);color:var(--teal,#00D4AA);'
+      + 'font-size:9px;font-weight:700;opacity:.75;vertical-align:middle';
+    sub.textContent = seasonPts + ' Pts';
 
     var priceEl = row.querySelector('[class*="price"], .prow-price, .player-price');
     if (priceEl) {
@@ -682,7 +816,7 @@ function _injectStatsToPicker() {
   });
 }
 
-// ── Observer + initial load ───────────────────────────────────────────────────────────
+// ── Observer + initial load ──────────────────────────────────────────────────
 var _pickerObserver = null;
 
 function _setupPickerObserver() {
@@ -690,15 +824,17 @@ function _setupPickerObserver() {
   var target = document.querySelector('.tab-content, #app, main, body');
   if (!target) { setTimeout(_setupPickerObserver, 500); return; }
 
-  _loadPlayerMap(function() { _injectStatsToPicker(); });
+  _loadPlayerMap(function () { _injectStatsToPicker(); });
 
-  _pickerObserver = new MutationObserver(function() { _injectStatsToPicker(); });
+  _pickerObserver = new MutationObserver(function () { _injectStatsToPicker(); });
   _pickerObserver.observe(target, { childList: true, subtree: true });
 }
 
-window.addEventListener('ipl:state-updated', function() {
+window.addEventListener('ipl:state-updated', function () {
   _umpData = null;
-  _loadPlayerMap(function() { _injectStatsToPicker(); });
+  // Refresh _playerMap so season_pts stays current after a scrape.
+  // Then re-inject badges (picker lists reset data-ipl-sorted on re-render).
+  _loadPlayerMap(function () { _injectStatsToPicker(); });
 });
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _setupPickerObserver);
