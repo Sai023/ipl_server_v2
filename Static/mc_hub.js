@@ -1,46 +1,28 @@
 /**
- * mc_hub.js — Match Centre Hub + Box Score Modal           Golden File v1.1
+ * mc_hub.js — Match Centre Hub + Box Score Modal           Golden File v1.2
  * ==========================================================================
- * v1.1 (Phase 9.4 — Box Score with dynamic multiplier rendering):
- *   _buildBoxScore(d):
- *   • Role badge — each player row shows a styled pill (BAT/BOWL/AR/WK)
- *     matching the app's existing badge colour scheme.
- *   • Multiplier logic — computed CLIENT-SIDE from p.is_cap / p.is_vc:
- *       Captain  → base_pts × 2   (annotation shown in gold below pts)
- *       V-C      → base_pts × 1.5 (annotation shown in teal below pts)
- *       Normal   → base_pts (no annotation)
- *     p.multiplier_str from the API is used as an authoritative fallback
- *     when is_cap / is_vc are both false but a multiplier was still applied.
- *   • Top scorer — identified as the player with the highest final_pts
- *     CLIENT-SIDE (does not rely solely on d.top_scorer from API); the
- *     row receives a gold left-border highlight via inline style.
- *   • MATCH TOTAL footer — computed as sum(p.final_pts) for all 11 players,
- *     independent of d.user_pts. If they differ a ⚠ indicator is shown.
+ * v1.2 (Phase 9.5 — Final Lock):
+ *   • _injectTabStyles() — makes the .tabs nav fully responsive on mobile.
+ *     The 9-tab row now scrolls horizontally with no wrapping, hidden
+ *     scrollbar, and smooth momentum scrolling on iOS. The Match Centre tab
+ *     is highlighted with a teal border so it’s easy to find when scrolled.
+ *     Injected once on DOMContentLoaded, idempotent (#ipl-tab-styles guard).
  *
- * v1.0 (Phase 9.3): Hub list, cache, modal shell, basic box score.
+ * v1.1 (Phase 9.4): Box Score Modal with dynamic multiplier rendering.
+ *   • Role badge (BAT/BOWL/AR/WK) as coloured pill per player row.
+ *   • Multiplier computed client-side (is_cap ×2 gold, is_vc ×1.5 teal).
+ *   • Top scorer identified client-side — 2px gold left-border highlight.
+ *   • MATCH TOTAL footer = sum(p.final_pts) — independent integrity check.
  *
- * Load order: after ipl_glue.js — overwrites the Phase 9.2 stub.
+ * v1.0 (Phase 9.3): Hub list, weekly groups, cache, modal shell.
  *
- * Data contract (from GET /api/match-details?user=<n>):
- *   d.match_no, d.week_no  → badge
- *   d.title                → headline
- *   d.venue, d.date_label, d.result → subtitle
- *   d.user_pts             → YOUR PTS box (gold)
- *   d.top_scorer           → TOP SCORER box (teal) — server hint
- *   d.cap_id, d.vc_id      → multiplier source of truth
- *   d.players[]:
- *     .player_id, .name, .role, .team
- *     .is_cap, .is_vc
- *     .base_pts            → raw score before multiplier
- *     .final_pts           → base_pts × multiplier (pre-calculated by server)
- *     .multiplier          → numeric (2.0 / 1.5 / 1.0)
- *     .multiplier_str      → "88×2" / "76×1.5" — server-formatted fallback
+ * Load order: AFTER ipl_glue.js — overwrites Phase 9.2 stub in ipl_glue.js.
  */
 
 (function () {
   'use strict';
 
-  // ── Module state ──────────────────────────────────────────────────────────
+  // ── Module state ──────────────────────────────────────────────────────
   var _mcData    = null;
   var _mcLoading = false;
 
@@ -49,7 +31,56 @@
     _mcLoading = false;
   });
 
-  // ── Safe fallbacks for globals defined in index.html inline script ────────
+  // ── Responsive tab nav (Phase 9.5) ───────────────────────────────────────
+  /**
+   * _injectTabStyles()
+   * Makes the .tabs row scroll horizontally on narrow screens so all 9 tabs
+   * remain accessible without wrapping or clipping.
+   *
+   * Responsive rules:
+   *   .tabs         — overflow-x:auto, no wrapping, hidden scrollbar
+   *   .tab-btn      — flex-shrink:0 so buttons never compress below min-width
+   *   Match Centre  — teal border accent to aid discovery when scrolled
+   *   @media ≤480px — smaller font/padding for tighter screens
+   */
+  function _injectTabStyles() {
+    if (document.getElementById('ipl-tab-styles')) return;
+    var s = document.createElement('style');
+    s.id  = 'ipl-tab-styles';
+    s.textContent = [
+      /* Make .tabs horizontally scrollable on any screen width */
+      '.tabs{',
+        'display:flex;',
+        'flex-wrap:nowrap;',                    /* prevent wrapping */
+        'overflow-x:auto;',                     /* horizontal scroll */
+        '-webkit-overflow-scrolling:touch;',    /* iOS momentum scroll */
+        'scrollbar-width:none;',                /* Firefox hidden scrollbar */
+        'gap:4px;',
+        'padding-bottom:2px;',                  /* room for focus ring */
+      '}',
+      /* Hide WebKit scrollbar */
+      '.tabs::-webkit-scrollbar{display:none;}',
+      /* Prevent tab buttons from shrinking below their natural width */
+      '.tab-btn{flex-shrink:0;}',
+      /* Match Centre tab — teal accent border so it stands out when scrolled */
+      '.tab-btn.active[onclick*="match-centre"]{',
+        'border-color:rgba(0,210,255,.55)!important;',
+        'color:var(--ipl-teal,#00d2ff)!important;',
+      '}',
+      /* Narrow screen: slightly tighter tab buttons */
+      '@media(max-width:480px){',
+        '.tab-btn{font-size:11px;padding:5px 9px;}',
+      '}',
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', _injectTabStyles);
+  else
+    _injectTabStyles();
+
+  // ── Safe fallbacks for globals in index.html inline script ──────────────
   function _esc(s) {
     return typeof esc === 'function' ? esc(s)
       : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -70,8 +101,7 @@
       : (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
   }
 
-  // ── Role badge ────────────────────────────────────────────────────────────
-  // Matches the colour scheme of the app's existing _roleBadge() helper.
+  // ── Role badge pill ──────────────────────────────────────────────────────────
   var _ROLE_COLOURS = {
     WK:   { bg: 'rgba(251,191,36,.18)',  txt: '#FBBF24' },
     BAT:  { bg: 'rgba(52,211,153,.18)',  txt: '#34D399' },
@@ -89,7 +119,7 @@
          + 'background:' + c.bg + ';color:' + c.txt + '">' + _esc(r) + '</span>';
   }
 
-  // ── Season stat box ───────────────────────────────────────────────────────
+  // ── Season stat box ────────────────────────────────────────────────────────
   function _statBox(val, lbl, gold) {
     return '<div class="mc-stat-box">'
          + '<div class="mc-stat-val' + (gold ? ' gold' : '') + '">' + val + '</div>'
@@ -97,15 +127,14 @@
          + '</div>';
   }
 
-  // ── Hub renderer ──────────────────────────────────────────────────────────
+  // ── Hub renderer ────────────────────────────────────────────────────────
   function _renderHub(d) {
     var s = d.season || {};
     var h = '<div id="match-centre-tab">';
 
-    // Season stats bar
     h += '<div class="mc-stats-bar">';
-    h += _statBox(s.total_pts    || 0, 'Total Pts',   false);
-    h += _statBox(s.matches_played|| 0, 'Matches',    false);
+    h += _statBox(s.total_pts     || 0, 'Total Pts',   false);
+    h += _statBox(s.matches_played|| 0, 'Matches',     false);
     h += _statBox(s.avg_per_match || 0, 'Avg / Match', false);
     var bestLbl = s.best_match
       ? _esc(s.best_match.replace(/ vs .*/, '') || 'Best')
@@ -113,7 +142,6 @@
     h += _statBox(s.best_pts || 0, bestLbl, true);
     h += '</div>';
 
-    // Week groups
     var weeks = d.weeks || [];
     if (!weeks.length) {
       h += '<p class="empty" style="text-align:center;padding:24px 0">No matches yet.</p>';
@@ -152,93 +180,60 @@
              + _esc(m.result) + '</div>';
         h += '</div>';
         h += '<div class="mc-mright">';
-        h += '<span class="mc-mpts' + (pts === 0 && !upcoming ? ' zero' : '') + '">'
-           + (upcoming ? '\u2014' : pts) + '</span>';
-        h += '<span class="mc-spill' + (upcoming ? ' upcoming' : '') + '">'
-           + (upcoming ? 'Upcoming' : 'Completed') + '</span>';
+        h += '<span class="mc-mpts' + (pts === 0 && !upcoming ? ' zero' : '') + '">' + (upcoming ? '\u2014' : pts) + '</span>';
+        h += '<span class="mc-spill' + (upcoming ? ' upcoming' : '') + '">' + (upcoming ? 'Upcoming' : 'Completed') + '</span>';
         h += '</div>';
-        h += '</div>'; // .match-card
+        h += '</div>';
       });
     });
 
-    h += '</div>'; // #match-centre-tab
+    h += '</div>';
     return h;
   }
 
-  // ── Box Score modal ───────────────────────────────────────────────────────
-  /**
-   * _buildBoxScore(d)
-   *
-   * Multiplier styling:
-   *   Captain  → final_pts shown in gold (#F5C518); below: "base × 2" in gold
-   *   VC       → final_pts shown in teal (#00d2ff);  below: "base × 1.5" in teal
-   *   Normal   → final_pts in teal (var(--ipl-teal))
-   *
-   * Top-scorer row identified client-side (max final_pts), marked with a
-   * 2px gold left-border so it is visually distinct.
-   *
-   * Footer MATCH TOTAL = sum(p.final_pts) computed here, independent of
-   * d.user_pts. A mismatch shows a small ⚠ indicator.
-   */
+  // ── Box Score modal builder ──────────────────────────────────────────────
   function _buildBoxScore(d) {
     var players = d.players || [];
 
-    // ── Identify top scorer client-side ──────────────────────────────────
-    var topIdx  = -1;
-    var topPts  = -1;
+    // Client-side top scorer (max final_pts)
+    var topIdx = -1, topPts = -1;
     players.forEach(function (p, i) {
       if ((p.final_pts || 0) > topPts) { topPts = p.final_pts || 0; topIdx = i; }
     });
 
-    // ── Compute match total client-side ──────────────────────────────────
+    // Client-side match total (independent integrity check)
     var computedTotal = 0;
     players.forEach(function (p) { computedTotal += (p.final_pts || 0); });
-    var serverTotal   = d.user_pts || 0;
-    var totalsMatch   = (computedTotal === serverTotal);
+    var serverTotal  = d.user_pts || 0;
+    var totalsMatch  = (computedTotal === serverTotal);
 
     var h = '';
+    h += '<button class="mm-close" onclick="_closeMatchModal()">' + '\u00D7' + '</button>';
 
-    // Close button
-    h += '<button class="mm-close" onclick="_closeMatchModal()">\u00D7</button>';
-
-    // Match badge
-    var badge = [d.match_no || '', d.week_no ? 'Week ' + d.week_no : '']
-      .filter(Boolean).join(' \u00B7 ');
+    var badge = [d.match_no || '', d.week_no ? 'Week ' + d.week_no : ''].filter(Boolean).join(' \u00B7 ');
     if (badge) h += '<div class="mm-badge">' + _esc(badge) + '</div>';
-
-    // Headline + subtitle
     h += '<div class="mm-title">' + _esc(d.title || d.match_id || '') + '</div>';
     var sub = [d.venue, d.date_label, d.result].filter(Boolean).map(_esc).join(' \u00B7 ');
     if (sub) h += '<div class="mm-sub">' + sub + '</div>';
 
-    // ── Score boxes ───────────────────────────────────────────────────────
+    // Score boxes
     h += '<div class="mm-scores">';
-
-    // YOUR PTS
-    h += '<div class="mm-sbox">'
-       + '<div class="mm-slbl">Your Pts</div>'
-       + '<div class="mm-sval">' + serverTotal + '</div>'
-       + '</div>';
-
-    // TOP SCORER — use client-side winner; fall back to server hint
+    h += '<div class="mm-sbox"><div class="mm-slbl">Your Pts</div>'
+       + '<div class="mm-sval">' + serverTotal + '</div></div>';
     var tsName = (topIdx >= 0 && topPts > 0) ? players[topIdx].name : null;
     var tsPts  = (topIdx >= 0 && topPts > 0) ? topPts : null;
     if (!tsName && d.top_scorer) { tsName = d.top_scorer.name; tsPts = d.top_scorer.pts; }
-
-    h += '<div class="mm-sbox top">'
-       + '<div class="mm-slbl">Top Scorer</div>'
+    h += '<div class="mm-sbox top"><div class="mm-slbl">Top Scorer</div>'
        + '<div class="mm-sval">' + (tsPts != null ? tsPts : '\u2014') + '</div>'
        + (tsName ? '<div class="mm-sname">' + _esc(tsName) + '</div>' : '')
        + '</div>';
+    h += '</div>';
 
-    h += '</div>'; // .mm-scores
-
-    // ── Player list ───────────────────────────────────────────────────────
+    // Player list
     if (!players.length) {
       h += '<div class="mm-loading">No player data yet for this match.</div>';
     } else {
       h += '<div class="mm-xi-lbl">Your XI \u00B7 Points This Match</div>';
-
       players.forEach(function (p, idx) {
         var isCap  = !!p.is_cap;
         var isVc   = !!p.is_vc;
@@ -247,69 +242,49 @@
         var final_ = p.final_pts || 0;
         var zero   = final_ === 0;
 
-        // Multiplier annotation string
+        // Multiplier annotation
         var multAnnot = '';
-        if (isCap && base > 0) {
-          multAnnot = base + ' \u00D7 2';          // "88 × 2"
-        } else if (isVc && base > 0) {
-          multAnnot = base + ' \u00D7 1.5';        // "76 × 1.5"
-        } else if (p.multiplier_str) {
-          multAnnot = p.multiplier_str;             // server fallback
-        }
+        if      (isCap && base > 0)       multAnnot = base + ' \u00D7 2';
+        else if (isVc  && base > 0)       multAnnot = base + ' \u00D7 1.5';
+        else if (p.multiplier_str)         multAnnot = p.multiplier_str;
 
-        // Points colour
-        var ptsColour = zero
-          ? 'var(--dim,#3D5572)'
-          : isCap
-            ? '#F5C518'                             // gold for captain
-            : 'var(--ipl-teal,#00d2ff)';            // teal for everyone else
-
-        // Annotation colour
+        // Colour rules
+        var ptsColour   = zero ? 'var(--dim,#3D5572)'
+                        : isCap ? '#F5C518'
+                        : 'var(--ipl-teal,#00d2ff)';
         var annotColour = isCap ? '#F5C518' : 'var(--ipl-teal,#00d2ff)';
-
-        // Top-scorer row border
-        var rowBorder = isTop
-          ? 'border-left:2px solid #F5C518;padding-left:6px;margin-left:-6px;'
-          : '';
+        var rowBorder   = isTop ? 'border-left:2px solid #F5C518;padding-left:6px;margin-left:-6px;' : '';
 
         var cBdg  = isCap ? '<span class="badge badge-c" style="font-size:9px;padding:1px 5px">C</span>'  : '';
         var vcBdg = isVc  ? '<span class="badge badge-vc" style="font-size:9px;padding:1px 5px">VC</span>' : '';
 
         h += '<div class="mm-prow" style="' + rowBorder + '">';
         h += '<div class="mm-pnum">' + (idx + 1) + '</div>';
-        h += '<div class="mm-pav ' + _avCls(p.team) + '">'
-           + _esc(_ini(p.name || p.player_id || '')) + '</div>';
-
+        h += '<div class="mm-pav ' + _avCls(p.team) + '">' + _esc(_ini(p.name || p.player_id || '')) + '</div>';
         h += '<div class="mm-pinfo">';
-        // Name + C/VC badges
-        h += '<div class="mm-pname">'
-           + _esc(p.name || p.player_id || '') + cBdg + vcBdg + '</div>';
-        // Role badge + team sub-line
+        h += '<div class="mm-pname">' + _esc(p.name || p.player_id || '') + cBdg + vcBdg + '</div>';
+        // Role pill + team sub-line
         var rolePillHtml = _rolePill(p.role);
-        var teamStr = p.team ? _esc(p.team) : '';
+        var teamStr      = p.team ? _esc(p.team) : '';
         if (rolePillHtml || teamStr) {
           h += '<div class="mm-psub" style="display:flex;align-items:center;gap:5px;margin-top:2px">'
              + (rolePillHtml || '')
              + (teamStr ? '<span style="color:var(--muted,#5F7A9B)">' + teamStr + '</span>' : '')
              + '</div>';
         }
-        h += '</div>'; // .mm-pinfo
-
+        h += '</div>';
         // Points + multiplier annotation
         h += '<div class="mm-ppts" style="color:' + ptsColour + '">';
         h += zero ? '0' : final_;
         if (multAnnot) {
-          h += '<span class="mm-pmult" style="color:' + annotColour + '">'
-             + _esc(multAnnot) + '</span>';
+          h += '<span class="mm-pmult" style="color:' + annotColour + '">' + _esc(multAnnot) + '</span>';
         }
-        h += '</div>'; // .mm-ppts
-
-        h += '</div>'; // .mm-prow
+        h += '</div>';
+        h += '</div>';
       });
     }
 
-    // ── Match Total footer ────────────────────────────────────────────────
-    // Computed client-side — independent integrity check.
+    // Footer — client-side computed total
     var mismatchHtml = '';
     if (!totalsMatch && players.length > 0) {
       mismatchHtml = ' <span title="Server total: ' + serverTotal + '" '
@@ -323,7 +298,7 @@
     return h;
   }
 
-  // ── Public: open modal ────────────────────────────────────────────────────
+  // ── Public: open modal ──────────────────────────────────────────────────
   window._openMatchModal = function (matchId) {
     if (!matchId) return;
     var user = window._username;
@@ -361,13 +336,13 @@
       });
   };
 
-  // ── Public: close modal ───────────────────────────────────────────────────
+  // ── Public: close modal ──────────────────────────────────────────────────
   window._closeMatchModal = function () {
     var el = document.getElementById('mc-modal-backdrop');
     if (el) el.remove();
   };
 
-  // ── Public: hub tab builder (overrides Phase 9.2 stub) ───────────────────
+  // ── Public: hub tab builder (final — overrides all previous stubs) ────────
   window._buildMatchCentreTab = function () {
     if (!window._username) {
       return '<div id="match-centre-tab" class="card">'

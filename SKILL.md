@@ -1,52 +1,53 @@
 ---
 name: ipl-fantasy-sync
-description: "End-to-end orchestrator for the IPL 2026 Fantasy system (v2.1.0-stable). Governs the layered architecture across config.py, logic/ engines, db_manager.py DAO, tasks.py, scraper.py, server.py, routes.py, and ipl_glue.js. Senior System Architect persona — prioritise modularity, one-file-at-a-time pushes, zero logic duplication."
+description: "End-to-end orchestrator for the IPL 2026 Fantasy system (v2.2.0-match-centre). Governs the layered architecture across config.py, logic/ engines, db_manager.py DAO, tasks.py, scraper.py, server.py, routes.py, ipl_glue.js, and mc_hub.js. Senior System Architect persona — prioritise modularity, one-file-at-a-time pushes, zero logic duplication."
 ---
 
 # IPL Fantasy 2026 — ipl_server_v2  (`Sai023/ipl_server_v2`)
-## Skill Version: v2.1.0-stable  |  APP_VERSION: 2.1.0-stable  |  Branch: `main`
+## Skill Version: v2.2.0-match-centre  |  APP_VERSION: 2.2.0-match-centre  |  Branch: `main`
 
 ---
 
-## 1. ARCHITECTURE OVERVIEW — v2.1.0-stable
+## 1. ARCHITECTURE OVERVIEW — v2.2.0-match-centre
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  ipl_glue.js  (v7.7)  — Browser / UI                        │
+┌────────────────────────────────────────────────────────────────┐
+│  ipl_glue.js  (v7.8)  — Browser / UI Integration Layer        │
+│  mc_hub.js    (v1.2)  — Match Centre Hub + Box Score Modal    │
 │  index.html + templates/  — Jinja2 rendering                 │
-└───────────────────────┬──────────────────────────────────────┘
+└───────────────────────┱────────────────────────────────────────┘
                         │ HTTP / JSON
-┌───────────────────────▼──────────────────────────────────────┐
+┌───────────────────────▼────────────────────────────────────────┐
 │  base.py  — Shared State (Flask app, db singleton, logging)  │
 │  server.py  (v13.2)  — Thin Flask Initialiser                │
 │  • Registers Blueprint:  from routes import bp               │
 │  • Startup: ephemeral tables cleared, week_pts PRESERVED     │
 │  • Tunnel, banner, __main__                                  │
-├──────────────────────────────────────────────────────────────┤
-│  routes.py  (v1.1.0) — API Router (Blueprint)                │
-│  • All 24 @bp.route handlers in 8 labelled groups            │
+├────────────────────────────────────────────────────────────────┤
+│  routes.py  (v1.3.0) — API Router (Blueprint)                │
+│  • All handlers in 9 labelled groups (inc. Match Centre)     │
 │  • Imports shared state from base.py (no circular import)    │
-└──────────┬─────────────────────┬────────────────────────────┘
+└──────────┴─────────────────────┴──────────────────────────────────┘
            │                     │
-┌──────────▼──────────┐  ┌───────▼────────────────────────────┐
+┌──────────▼─────────┐  ┌─────▼────────────────────────────────┐
 │  db_manager.py      │  │  logic/  package                   │
 │  (v5.9 — pure DAO)  │  │  ┌──────────────────────────────┐  │
 │  SELECT/INSERT/     │  │  │ scoring_engine.py  (v1.1.0)  │  │
 │  UPDATE only.       │  │  │ rollover_engine.py (v1.0.0)  │  │
 │  No IPL rules.      │  │  │ fuzzy_match.py     (v1.1.0)  │  │
-└──────────┬──────────┘  └──┴──────────────────────────────┴──┘
+└──────────┴─────────┘  └──┴────────────────────────────┴──┘
            │                     │
-┌──────────▼──────────────────── ▼────────────────────────────┐
+┌──────────▼────────────────────── ▼───────────────────────────┐
 │  tasks.py (v1.0.0)  — Background Thread Orchestrator        │
 │  scraper.py (v10.11) — Cricbuzz ingestion + resilience      │
 │  init_db.py (v1.0.0) — Startup auto-seed                   │
-└───────────────────────┬──────────────────────────────────────┘
+└───────────────────────┴──────────────────────────────────────┘
                         │ All import from ↓
-┌───────────────────────▼──────────────────────────────────────┐
+┌───────────────────────▼────────────────────────────────────────┐
 │  config.py  (v1.0.0)  — Single Source of Truth              │
 │  DB_PATH, DEADLINE_HOUR/MIN, IPL_YEAR, APP_VERSION,         │
 │  VERSION_MAP, per-module version pins                        │
-└──────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -72,7 +73,7 @@ config.py
 
 ---
 
-## 3. FILE VERSIONS (2.1.0-stable)
+## 3. FILE VERSIONS (2.2.0-match-centre)
 
 | File | Version | Role |
 |------|---------|------|
@@ -82,12 +83,13 @@ config.py
 | `logic/rollover_engine.py` | 1.0.0 | Monday 14:00 UTC deadline logic |
 | `logic/fuzzy_match.py` | 1.1.0 | Player name resolution + `_generate_dynamic_player()` |
 | `db_manager.py` | 5.9 | Pure DAO — fan-out SQL fixed |
-| `routes.py` | 1.1.0 | 24 API handlers (Blueprint, 8 groups); ROUTES_VER in /api/version |
+| `routes.py` | 1.3.0 | API handlers (Blueprint, 9 groups); Match Centre endpoints |
 | `server.py` | 13.2 | Flask init + non-destructive startup + blueprint registration |
 | `tasks.py` | 1.0.0 | Daemon thread orchestration |
 | `scraper.py` | 10.11 | Cricbuzz ingestion + FIX-015/016/017/018 resilience |
 | `init_db.py` | 1.0.0 | `_auto_seed_*`, `run_all_sync()` |
-| `ipl_glue.js` | 7.7 | `_patchXiGrid` badge injection, mobile blur, version handshake |
+| `ipl_glue.js` | 7.8 | API client, polling, CSS injection, tab overrides |
+| `mc_hub.js` | 1.2 | Match Centre hub renderer + Box Score modal |
 | `Seed_Players.py` | v2 | Player roster |
 | `Seed_Matches.py` | v3.3 | 74 matches, week labels W1-W10 |
 
@@ -142,59 +144,38 @@ db.update_player_season_pts()           # pmp → players.season_pts
 db.update_player_points()               # cap/vc-weighted → players.points
 ```
 
-**Rollover DAO (called by `routes.api_rollover`):**
-```python
-db.get_users_and_max_weeks()          # [{display_name, cur_wk}]
-db.get_selection_row(name, week_no)   # dict | None
-db.insert_rollover_week(name, new_wk, team_json, cap_id, vc_id)
-db.set_last_rollover(iso)
-```
-
 **State includes `player_pts` (Phase 8):**
-`get_state()` returns `player_pts: {id: season_pts}` from the players table. Used by `ipl_glue.js` Next Week badges — zero extra fetch.
+`get_state()` returns `player_pts: {id: season_pts}` from the players table.
 
-### 4.4 `routes.py` v1.1.0 — API Router (Phase 7+)
+### 4.4 `routes.py` v1.3.0 — API Router (Phase 7+)
 
-```python
-from routes import bp
-app.register_blueprint(bp)  # in server.py
-```
-
-**8 route groups:**
+**9 route groups:**
 
 | # | Group | Endpoints |
 |---|-------|-----------|
-| 1 | System | `/api/version` (includes ROUTES_VER), `/api/ping`, `/api/poll`, `/api/current-week` |
+| 1 | System | `/api/version`, `/api/ping`, `/api/poll`, `/api/current-week` |
 | 2 | State | `GET/POST /api/state` |
-| 3 | Players | `/api/players` (season_pts DESC), `/api/resolve-player`, `/api/leaderboard` |
+| 3 | Players | `/api/players`, `/api/resolve-player`, `/api/leaderboard` |
 | 4 | History | `/api/history/<n>`, `/api/player-points/<n>`, `/api/user-match-points/<n>`, `/api/debug-points/<n>` |
 | 5 | Save | `/api/save-next-week/<n>`, `/api/member/<n>`, `/api/match` |
 | 6 | Scoring | `/api/recalculate-points`, `/api/audit-scores/<n>`, `/api/clean-scores` |
+| 6b | Audit | `/api/audit-player-ids`, `/api/audit-blobs`, `/api/snapshot` |
+| 6c | Match Centre | `/api/match-centre`, `/api/match-details/<match_id>` |
 | 7 | Admin | `/api/rollover`, `/api/seed-history`, `/api/matches-status`, `/api/update-match-url` |
 | 8 | Static | `/`, `/static/<filename>`, `/manifest.json`, `/offline` |
 
-Route handlers: validate → `db.*` → `logic.*` → `jsonify()`.
-
 ### 4.5 `server.py` v13.2 — Thin Initialiser
 
-Contains: imports from `base.py`, blueprint registration, startup functions, tunnel, banner, `__main__`.
+Non-destructive startup: clears ephemeral tables only (`match_scores`, `player_match_points`, `user_match_points`). Never clears `week_pts` or `season_pts`.
 
-Does NOT contain: any `@app.route` decorators (all in `routes.py`), shared state (all in `base.py`).
+### 4.6 `ipl_glue.js` v7.8 + `mc_hub.js` v1.2 — Frontend
 
-**Non-destructive startup (v13.2):** `_rebuild_scores_and_points()` clears ONLY ephemeral derived tables (`match_scores`, `player_match_points`, `user_match_points`, JSON cache). It does NOT touch `week_pts` or `season_pts`. See §8.6.
-
-### 4.6 `tasks.py` v1.0.0 — Background Threads
-```python
-tasks.start_bg_scrape(match_id, BASE_DIR)  # named daemon thread
-```
-Calls `scraper.run_full_scrape(db)` in-process — no subprocess.
-
-### 4.7 `ipl_glue.js` v7.7 — Frontend Integration Layer
-
-- `_checkVersionHandshake()` on every page load → `/api/version` → console group.
-- `ROLLOVER_HOUR_UTC = 14` (Monday 14:00 UTC = 16:00 SAST).
-- `_patchXiGrid()` — wraps the inline `_buildXiGrid()` to inject season_pts badges at template render time. See §8.8.
-- `_dismissKeyboard()` — `requestAnimationFrame(blur)` after pick/swap. See §8.9.
+- `IplApi.getMatchCentre(name)` → `GET /api/match-centre?user=<name>`
+- `IplApi.getMatchDetails(matchId, name)` → `GET /api/match-details/<id>?user=<name>`
+- `_buildMatchCentreTab()` in mc_hub.js: cache-first, spinner while fetching.
+- `_openMatchModal(matchId)`: lazy fetch, bottom-sheet animation.
+- `_injectTabStyles()` (mc_hub.js v1.2): responsive horizontal-scroll tab nav for 9 tabs on mobile.
+- `ipl:state-updated` resets `_mcData` so new scraper runs auto-refresh hub.
 
 ---
 
@@ -204,14 +185,11 @@ Calls `scraper.run_full_scrape(db)` in-process — no subprocess.
 ```bash
 curl http://localhost:5000/api/version
 ```
-Browser: DevTools → Console → `🏏 IPL Fantasy 2.1.0 — Decoupled v2.0 Backend ✓`
 
 ### 5.2 Post-Restart Workflow
 ```powershell
 git pull
 python server.py --tunnel cloudflare
-# week_pts and season_pts are preserved — leaderboard shows correct
-# historical values immediately without re-scraping.
 python scraper.py   # only needed to score NEW matches
 ```
 
@@ -239,11 +217,17 @@ _SAI_W5_CAP  = "..."
 ```bash
 curl http://localhost:5000/api/audit-scores/Sai
 curl http://localhost:5000/api/audit-scores/Moe
+curl http://localhost:5000/api/audit-player-ids
+curl http://localhost:5000/api/audit-blobs
 ```
-```python
-from logic.scoring_engine import debug_calc_pts
-t = debug_calc_pts(score, player_id="k04", cap_id="k04", vc_id="s05")
-print(t["steps"], t["base_pts"], t["multiplier"], t["final_pts"])
+
+### 5.7 Match Centre Receipts
+```bash
+# Before frontend work
+curl http://localhost:5000/api/audit-player-ids   # must return all_ids_valid:true
+curl http://localhost:5000/api/audit-blobs         # must return all_blobs_valid:true
+curl -X POST http://localhost:5000/api/snapshot    # saves data/snapshot_*.json
+# After Match Centre is live — compare snapshot files to prove no regressions
 ```
 
 ---
@@ -270,6 +254,11 @@ print(t["steps"], t["base_pts"], t["multiplier"], t["final_pts"])
 | POST | `/api/recalculate-points` | Rebuild all pts |
 | GET | `/api/audit-scores/{n}` | Step audit via `logic.scoring_engine` |
 | POST | `/api/clean-scores` | Wipe scoring tables |
+| GET | `/api/audit-player-ids` | Ghost sweep — IDs in selections not in players table |
+| GET | `/api/audit-blobs` | Blob sum vs week_pts per user_selections row |
+| POST | `/api/snapshot` | Save receipt: leaderboard + both audits → data/snapshot_*.json |
+| GET | `/api/match-centre?user=<n>` | **Phase 9** Hub: all matches grouped by week with user_match_pts |
+| GET | `/api/match-details/<id>?user=<n>` | **Phase 9** Box Score: historical XI snapshot, per-player pts + C/VC |
 | POST | `/api/rollover[?force=1]` | In-controller via rollover_engine |
 | POST | `/api/seed-history` | Draft-preserving re-seed |
 | GET | `/api/matches-status` | All match statuses |
@@ -295,161 +284,49 @@ else:
 - FIX-017: Per-player `try/except` → `NON_BLOCKING_ERROR` — one bad entry doesn't kill innings.
 - FIX-018: Per-match `try/except` → `MATCH_FAILED` — one bad scorecard doesn't kill the run.
 
-**Background scrape isolation:** `tasks._scrape_bg()` wraps in try/except — scrape failure never kills Flask.
-
-**Ghost audit:** `_audit_player_id_coverage()` runs on every server start.
-
 ---
 
 ## 8. LESSONS LEARNED — Internal Context
 
 ### 8.1 subprocess → Daemon Threads (Phase 3)
 Old: `subprocess.run([sys.executable, "scraper.py"])` — new Python interpreter, DB race conditions.
-New: `tasks.start_bg_scrape(match_id, BASE_DIR)` — in-process daemon thread, shared WAL pool, named `scrape-{match_id}`.
+New: `tasks.start_bg_scrape(match_id, BASE_DIR)` — in-process daemon thread, shared WAL pool.
 
 ### 8.2 Timezone Alignment
 `DEADLINE_HOUR = 14` = **14:00 UTC = 16:00 SAST**. Both `rollover_engine.py` and `ipl_glue.js` (`ROLLOVER_HOUR_UTC=14`) agree.
 
 ### 8.3 base.py Circular Import Fix (Phase 7 → Stable)
-`base.py` owns all shared state (Flask `app`, `db`, logging, limiter). `routes.py` imports from `base.py` only. `server.py` imports both. No cycle.
+`base.py` owns all shared state. `routes.py` imports from `base.py` only. `server.py` imports both. No cycle.
 
 ### 8.4 W1-W10 Variable Aliasing
-NEVER `_SAI_W3_TEAM = _SAI_W2_TEAM` — shared reference mutates both. Always own literal even if currently identical.
+NEVER `_SAI_W3_TEAM = _SAI_W2_TEAM` — shared reference mutates both. Always own literal.
 
 ### 8.5 SQLite WAL Mode + Concurrency
-
-All connections use `PRAGMA journal_mode = WAL`. This enables:
-- **Concurrent reads** — multiple threads/requests can read simultaneously.
-- **Single writer** — `_write()` context manager holds `threading.Lock()` for exclusive writes.
-- **Busy timeout** — `PRAGMA busy_timeout = 30000` prevents deadlock on contention.
-
-The pattern across the codebase:
-```python
-@contextmanager
-def _write(self):
-    with self._wlock:          # threading.Lock — one writer at a time
-        con = self._connect()
-        con.execute("BEGIN IMMEDIATE")
-        yield con
-        con.commit()
-```
-
-Thread-local connections (`threading.local()`) ensure each thread gets its own SQLite connection handle, preventing cursor conflicts in multi-request Flask scenarios.
+All connections use `PRAGMA journal_mode = WAL`. `_write()` holds `threading.Lock()`. Thread-local connections.
 
 ### 8.6 Non-Destructive Startup (server.py v13.2)
-
-**The regression:** `_rebuild_scores_and_points()` previously ran two statements on every server start:
-```python
-# REMOVED — these were the destructive lines:
-con.execute("UPDATE user_selections SET week_pts = 0")       # ← wiped leaderboard
-con.execute("UPDATE players SET season_pts = 0, points = 0") # ← wiped scouting badges
-```
-
-**Why it was catastrophic:**
-- `week_pts` in `user_selections` is the **source of truth for the leaderboard**. Wiping it on restart meant W3=632 became W3=0 in the UI, even though the DB Browser showed the correct value from before startup.
-- `season_pts` in `players` powers the scouting badges in `ipl_glue.js`. Wiping it made all `_state.player_pts` values zero → the badge guard `if (!pts) return` skipped every player.
-
-**The fix:** Startup now clears ONLY the ephemeral derived tables:
-```python
-# EPHEMERAL — safe to clear (repopulated by scraper):
-con.execute("DELETE FROM match_scores")
-con.execute("DELETE FROM player_match_points")
-con.execute("DELETE FROM user_match_points")
-# + data/matches/*.json cache files
-
-# SOURCE OF TRUTH — NEVER clear at startup:
-# user_selections.week_pts      ← leaderboard totals
-# user_selections.points_per_match ← history tab detail
-# players.season_pts            ← scouting badges
-# players.points                ← weighted display
-```
-
-**Rule:** `week_pts` and `season_pts`/`points` are written at scrape time and survive indefinitely. They are only reset by `rebuild_scores_and_points()` (explicit admin full-rebuild) or by `update_week_points()` / `update_player_season_pts()` after a fresh scrape.
+Startup clears ONLY ephemeral tables: `match_scores`, `player_match_points`, `user_match_points`, JSON cache.
+NEVER clears: `user_selections.week_pts`, `user_selections.points_per_match`, `players.season_pts`, `players.points`.
 
 ### 8.7 Leaderboard Fan-Out Bug + Fix
-
-**The regression:** `_LEADERBOARD_SQL` had a single `user_totals` CTE:
-```sql
--- BROKEN: LEFT JOIN fans out user_selections to N match rows
-SELECT display_name, SUM(us.week_pts) AS total_pts, COUNT(...) AS matches_counted
-FROM user_selections us
-LEFT JOIN user_match_points ump ON ump.display_name = us.display_name
-                                AND ump.week_no = us.week_no
-GROUP BY display_name
-```
-
-`user_match_points` has one row **per match**, so a W2 row (week_pts=900, 9 matches) fanned out to 9 rows. `SUM(us.week_pts)` counted 900 nine times (8100) + 490 twice (980) = **9080** instead of 1390.
-
-**The fix:** Two independent CTEs — no cross-join between them:
-```sql
--- FIXED: two independent CTEs, LEFT JOINed only in ranked
-user_totals  → pure SUM(week_pts) FROM user_selections (no join)
-match_counts → COUNT(DISTINCT match_id) FROM user_match_points (no join)
--- Both LEFT JOINed in ranked CTE — total_pts cannot fan-out
-```
-
-**Invariant:** `total_pts` (leaderboard Total column) == `SUM` of all weekly columns shown in the UI, because both read exclusively from `user_selections.week_pts`.
+Two independent CTEs (`user_totals`, `match_counts`) — no cross-join. `total_pts == SUM(week_pts)` invariant.
 
 ### 8.8 `_patchXiGrid()` — Template-Time Badge Injection
+Overrides `window._buildXiGrid` to stamp `data-pid` and inject `season_pts` badges at render time. Co-indexed on `team[i]`.
 
-**The problem:** The v7.6 approach used a `MutationObserver` searching for `[data-pid]` elements. The inline script's `_buildXiGrid()` function generated card HTML **without `data-pid` attributes**, so `querySelectorAll('[data-pid]')` returned nothing and badges never rendered.
-
-**The fix (`ipl_glue.js` v7.7):** Override `_buildXiGrid` at the source:
-
-```js
-var _orig = window._buildXiGrid;
-window._buildXiGrid = function(team, cap, vc) {
-  var html = _orig(team, cap, vc);      // call original
-  var tmp = document.createElement('div');
-  tmp.innerHTML = html;                  // parse to DOM
-  var grid = (tmp.children.length === 1) ? tmp.firstElementChild : tmp;
-  var cards = Array.from(grid.children); // one card per player
-
-  cards.forEach(function(card, i) {
-    var pid = team[i];                   // co-indexed — always safe
-    card.setAttribute('data-pid', pid); // stamp for observer backup
-
-    var pts = (window._state && window._state.player_pts)
-              ? window._state.player_pts[pid] || 0
-              : (_playerMap[pid] && _playerMap[pid].season_pts) || 0;
-    if (!pts) return;
-
-    var badge = document.createElement('span');
-    badge.className = 'ipl-sp-badge';
-    badge.style.cssText = 'background:rgba(0,212,170,0.13);color:#00D4AA;'
-      + 'pointer-events:none;position:relative;z-index:1;' + /* ... */;
-    badge.textContent = pts + ' Pts';
-
-    var nameEl = card.querySelector('[class*="name"],[class*="title"]')
-                 || card.firstElementChild;
-    if (nameEl) nameEl.appendChild(badge);
-    else card.appendChild(badge);
-  });
-
-  return tmp.innerHTML;                  // return modified HTML
-};
+### 8.9 Match Centre Data Flow (Phase 9)
 ```
+GET /api/match-centre?user=Sai
+  → reads: matches, user_match_points, user_selections
+  → returns: season stats + weeks[] with per-match user_match_pts
+  → mc_hub.js caches in _mcData; invalidated on ipl:state-updated
 
-**Co-indexing safety:** `_buildXiGrid(team, cap, vc)` renders exactly one card element per element in `team[]`, always in the same order. `grid.children[i]` maps 1:1 to `team[i]`. This is guaranteed by the inline script's render loop. Fallback filter (`.children.length >= 2`) handles grids with non-card header children.
-
-**Data source:** `_state.player_pts[pid]` (embedded in `/api/state` response — zero extra HTTP fetch). Falls back to `_playerMap[pid].season_pts` from `/api/players` cache. Uses `season_pts` (base, unweighted) — the correct metric for scouting form guides.
-
-**Visual safety:** `pointer-events:none` prevents the badge span from intercepting C/VC button tap events. `position:relative;z-index:1` ensures it renders above background layers without floating above the buttons.
-
-### 8.9 Mobile Keyboard Dismiss
-
-```js
-function _dismissKeyboard() {
-  requestAnimationFrame(function () {    // wait for DOM paint to complete
-    document.activeElement.blur();       // then drop the keyboard
-  });
-}
-// Hooks:
-document.addEventListener('click', /* capture phase */, true);  // pick/swap buttons
-window.addEventListener('ipl:saved', _dismissKeyboard);         // post-save ACK
+card click → _openMatchModal(match_id)
+  → GET /api/match-details/<id>?user=Sai
+  → reads tw_team_json from the week the match belongs to (historical accuracy)
+  → joins player_match_points + players
+  → mc_hub.js renders: role pill, C×2/VC×1.5 annotation, top scorer border, computed MATCH TOTAL
 ```
-
-`requestAnimationFrame` ensures blur fires **after** the DOM update that caused the keyboard to appear, not during it. Search text is not cleared. The input is not re-focused.
 
 ---
 
@@ -469,13 +346,9 @@ _upsert_match() → db.recalculate_points(match_id) → db.update_week_points()
 # End of all matches: db.update_player_season_pts()
 ```
 
-### 9.3 `/api/player-points/<n>` — Self-Contained
-```json
-{"ok":true,"name":"Sai","total_pts":412,
- "players":[{"id":"k04","season_pts":187,"points":374,"total_pts":218,"is_cap":true,
-             "matches":[{"base_pts":109,"multiplier":2.0,"final_pts":218}]}],
- "weeks":[{"week_no":1,"week_pts":412,"points_per_match":{"ipl26_m04":218}}]}
-```
+### 9.3 `/api/match-details` — Historical Accuracy Guarantee
+Reads `tw_team_json` from `week_no` of the match, not the latest week.
+Even if user changed squad next week, box score shows the XI that was active.
 
 ---
 
@@ -491,19 +364,6 @@ _upsert_match() → db.recalculate_points(match_id) → db.update_week_points()
 | Economy | ≥2 overs: <5 +6, <6 +4, <7 +2, >12 -6, >11 -4, >10 -2 |
 | Fielding | catch +8 (3+ bonus +4), stumping +12, direct RO +12, assist +6 |
 | **Multipliers** | **Captain ×2.0 (`CAP_MULT`), Vice-Captain ×1.5 (`VC_MULT`)** |
-
-**Audit traces:**
-```python
-# Moe — Phil Salt CAP: 72r 48b 8×4 3×6
-debug_calc_pts({"played":True,"runs":72,"balls":48,"fours":8,"sixes":3,"got_out":True},
-               player_id="r03", cap_id="r03", vc_id="s04")
-# base_pts=104, multiplier=2.0, final_pts=208
-
-# Sai — Varun Chakravarthy CAP: 3wkt 1lbw 1maiden 4ov 24rc
-debug_calc_pts({"played":True,"overs":4.0,"runs_conceded":24,"wickets":3,"lbw_bowled":1,"maidens":1},
-               player_id="k04", cap_id="k04", vc_id="s05")
-# base_pts=109, multiplier=2.0, final_pts=218
-```
 
 ---
 
@@ -523,7 +383,7 @@ meta            (key, value)  — _seed_version, _last_rollover, _saved
 ```
 
 **Ephemeral tables** (cleared on restart): `match_scores`, `player_match_points`, `user_match_points`.
-**Persistent tables** (never cleared on restart): `players.season_pts`, `players.points`, `user_selections.week_pts`, `user_selections.points_per_match`.
+**Persistent tables** (never cleared): `players.season_pts`, `players.points`, `user_selections.week_pts`, `user_selections.points_per_match`.
 
 ---
 
@@ -531,7 +391,7 @@ meta            (key, value)  — _seed_version, _last_rollover, _saved
 
 `{team_prefix}{num:02d}` — `c`=CSK `d`=DC `g`=GT `k`=KKR `l`=LSG `m`=MI `p`=PBKS `r`=RCB `rr`=RR `s`=SRH
 
-Dynamic (unknown) players: `ext_{cricbuzz_id}` or `ext_{6-char-md5}` — generated by `_generate_dynamic_player()`.
+Dynamic (unknown) players: `ext_{cricbuzz_id}` — generated by `_generate_dynamic_player()`.
 
 | ID | Player | Note |
 |----|--------|------|
@@ -546,7 +406,7 @@ Dynamic (unknown) players: `ext_{cricbuzz_id}` or `ext_{6-char-md5}` — generat
 
 ---
 
-## 13. HISTORY SEED (init_db.py — `2026.v8.w3w4-defined`)
+## 13. HISTORY SEED (init_db.py)
 
 ```
 Sai W1: k04 k19 s04 s05 s07 r01 r03 r11 m04 m07 m12  cap=k04 vc=s05
@@ -583,8 +443,8 @@ W5+: add own literal variables, extend _HISTORY_SEED, bump _SEED_VERSION
 | FIX-014 | v10.8 | Per-match atomic point update |
 | Phase 3 | v10.9 | `run_full_scrape()` export |
 | Phase 4 | v10.10 | Fuzzy → `logic/fuzzy_match.py` |
-| FIX-015 | v10.11 | `_generate_dynamic_player()` — auto-add unknown players with `ext_*` IDs |
-| FIX-016 | v10.11 | Defensive `.get()` extraction — `KeyError` eliminated |
+| FIX-015 | v10.11 | `_generate_dynamic_player()` — auto-add unknown players |
+| FIX-016 | v10.11 | Defensive `.get()` extraction |
 | FIX-017 | v10.11 | Per-player `try/except` → `NON_BLOCKING_ERROR` |
 | FIX-018 | v10.11 | Per-match `try/except` → `MATCH_FAILED` + auto-advance |
 
@@ -592,12 +452,12 @@ W5+: add own literal variables, extend _HISTORY_SEED, bump _SEED_VERSION
 
 ## 16. INTEGRITY GUARDRAILS
 
-- **Ghost IDs:** `_audit_player_id_coverage()` on every start — logs true ghosts (IDs in selections but not in players table).
-- **Week isolation:** each `user_selections` row has its own `points_per_match` blob.
-- **Audit:** `GET /api/audit-scores/{n}` cross-checks stored vs computed.
-- **No-result:** empty scores, 0 pts, status=completed.
-- **Fan-out prevention:** `_LEADERBOARD_SQL` uses two independent CTEs — `user_totals` and `match_counts` never joined to each other. `total_pts` == `SUM(week_pts)` always.
-- **Non-destructive startup:** `week_pts` and `season_pts` are never cleared at server restart. Only ephemeral derived tables are wiped.
+- **Ghost IDs:** `GET /api/audit-player-ids` — IDs in selections not in players table.
+- **Blob integrity:** `GET /api/audit-blobs` — `sum(points_per_match.values()) == week_pts` per row.
+- **Receipts:** `POST /api/snapshot` — saves leaderboard + both audits to `data/snapshot_*.json`.
+- **Match Centre integrity:** `MATCH TOTAL` footer in mc_hub.js = `sum(p.final_pts)` client-side, independent of server `user_pts`. Mismatch shows ⚠.
+- **Fan-out prevention:** `_LEADERBOARD_SQL` uses two independent CTEs — `total_pts == SUM(week_pts)` always.
+- **Non-destructive startup:** `week_pts` and `season_pts` never cleared at restart.
 - **Push order:** `config.py` → `logic/` engine → `db_manager.py`/`routes.py`/`server.py`. One file per commit.
-- **Dynamic player IDs:** `ext_{cricbuzz_id}` prefix — zero collision with `[a-z]{1,3}\d{1,2}` Seed IDs.
+- **Dynamic player IDs:** `ext_{cricbuzz_id}` prefix — zero collision with Seed IDs.
 - **Variable aliasing:** NEVER `_SAI_W3_TEAM = _SAI_W2_TEAM` — always own literal.
