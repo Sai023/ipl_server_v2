@@ -1,22 +1,22 @@
 """
-IPL Fantasy 2026 — API Route Handlers                       routes v1.2.0
+IPL Fantasy 2026 — API Route Handlers                       routes v1.3.0
 ===========================================================================
+v1.3.0 (Phase 9.1 — Match Centre Backend):
+  /api/match-centre          — Hub endpoint (requires ?user=<name>).
+    Returns all matches grouped by week. Each match entry includes:
+    match_id, teams, venue, date_label, result, status, user_match_pts.
+    Season summary (total_pts, matches_played, avg_per_match, best_pts,
+    best_match) included at the top level. Single fetch — no live tracking.
+  /api/match-details/<match_id> — Box Score endpoint (requires ?user=<name>).
+    Returns the user's historical XI snapshot for that specific match with
+    per-player pts and C/VC multipliers applied. Reads tw_team_json from
+    the week the match belongs to — historically accurate even if the user
+    changed their squad in later weeks. No writes, no live logic.
+
 v1.2.0 (Backend Audit & Snapshot):
-  /api/audit-player-ids  — Ghost ID sweep (same logic as startup audit,
-    callable on demand). Returns JSON: ghosts list, user totals, validity flag.
-  /api/audit-blobs       — Pure DB read: SUM(points_per_match values) vs
-    week_pts for every user_selections row. Does NOT require match_scores.
-    This is the blob integrity check before any frontend merge work.
-  /api/snapshot          — Captures leaderboard + member summary + both audit
-    results to data/snapshot_*.json. These are the "Receipts" we compare
-    against after the Match Centre is built to prove no bugs were introduced.
+  /api/audit-player-ids, /api/audit-blobs, /api/snapshot
 
-v1.1.0 (Phase 8 — Scouting & UX):
-  /api/version now includes ROUTES_VER in the modules dict.
-  /api/players returns season_pts (base, no cap/vc) sorted DESC.
-  /api/state now returns player_pts {id: season_pts} via db.get_state().
-
-v1.0.1 (bugfix): circular import resolved via base.py.
+v1.1.0 (Phase 8 — Scouting & UX): player_pts badge support.
 v1.0.0 (Phase 7): 24 @bp.route handlers in 8 groups.
 
 Dependency: base.py → routes.py  (routes never imports from server)
@@ -30,7 +30,7 @@ from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, jsonify, render_template, send_from_directory
 
-import base as _base  # access CURRENT_PUBLIC_URL as _base.CURRENT_PUBLIC_URL (mutable)
+import base as _base
 from base import (
     db, _db_con, _log, _write_limiter, _check_rate,
     resolve_player_id, resolve_id_list, _ID_RE, _jloads,
@@ -125,8 +125,6 @@ def api_save_state():
 
 # ════════════════════════════════════════════════════════════════════════════
 # 3. PLAYERS
-# /api/players returns id, name, team, role, price, season_pts, points
-# sorted by season_pts DESC — correct for scouting (base score, no cap/vc).
 # ════════════════════════════════════════════════════════════════════════════
 
 @bp.route("/api/players", methods=["GET"])
@@ -455,28 +453,11 @@ def api_clean_scores():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 6b. AUDIT & SNAPSHOT  (v1.2.0 — backend receipt system)
-#
-# Run these THREE endpoints in sequence before any frontend work:
-#   1. GET  /api/audit-player-ids  → must return all_ids_valid: true
-#   2. GET  /api/audit-blobs       → must return all_blobs_valid: true
-#   3. POST /api/snapshot          → saves receipts to data/snapshot_*.json
-#
-# After the Match Centre is built, re-run the snapshot and diff the numbers.
+# 6b. AUDIT & SNAPSHOT
 # ════════════════════════════════════════════════════════════════════════════
 
 @bp.route("/api/audit-player-ids", methods=["GET"])
 def api_audit_player_ids():
-    """
-    Ghost ID Sweep — callable on demand (same logic as startup audit).
-
-    A "ghost" is a player_id that appears in any user's tw_team_json
-    but does NOT exist in the players table.  Ghosts will appear as
-    "Unknown Player" in any UI that does a player lookup.
-
-    Does NOT require match_scores or player_match_points to be populated.
-    Safe to run immediately after a server restart.
-    """
     try:
         with db._read() as con:
             all_players = {r["id"]: r["name"] for r in con.execute(
@@ -490,10 +471,8 @@ def api_audit_player_ids():
                 "SELECT display_name, COALESCE(SUM(week_pts),0) AS pts "
                 "FROM user_selections GROUP BY display_name"
             ).fetchall()
-
         totals = {r["display_name"]: r["pts"] for r in totals_rows}
-        ghosts = []
-        seen_ghosts = set()
+        ghosts = []; seen_ghosts = set()
         for sel in sels:
             name = sel["display_name"]; wk = sel["week_no"]
             try: ids = _json.loads(sel["tw_team_json"] or "[]")
@@ -506,28 +485,15 @@ def api_audit_player_ids():
                         f"{p_id}={p_nm}" for p_id, p_nm in all_players.items()
                         if prefix_m and p_id.startswith(prefix_m.group()) and p_id != pid
                     ][:4]
-                    ghosts.append({
-                        "ghost_id": pid,
-                        "first_seen_user": name,
-                        "first_seen_week": wk,
-                        "suggestions": suggestions,
-                    })
-
+                    ghosts.append({"ghost_id": pid, "first_seen_user": name,
+                                   "first_seen_week": wk, "suggestions": suggestions})
         return jsonify({
-            "ok": True,
-            "all_ids_valid": len(ghosts) == 0,
-            "ghost_count": len(ghosts),
-            "ghosts": ghosts,
-            "user_totals": [
-                {"name": k, "total_pts": v} for k, v in sorted(totals.items())
-            ],
+            "ok": True, "all_ids_valid": len(ghosts) == 0,
+            "ghost_count": len(ghosts), "ghosts": ghosts,
+            "user_totals": [{"name": k, "total_pts": v} for k, v in sorted(totals.items())],
             "players_in_db": len(all_player_ids),
-            "note": (
-                "PASS: All selected player IDs resolve to real players."
-                if len(ghosts) == 0
-                else f"FAIL: {len(ghosts)} ghost ID(s) found. "
-                     "Fix by updating Seed_Players.py and running it."
-            ),
+            "note": ("PASS: All selected player IDs resolve to real players." if len(ghosts) == 0
+                     else f"FAIL: {len(ghosts)} ghost ID(s) found."),
         })
     except Exception as e:
         _log(f"GET /api/audit-player-ids: {e}", "error")
@@ -536,60 +502,31 @@ def api_audit_player_ids():
 
 @bp.route("/api/audit-blobs", methods=["GET"])
 def api_audit_blobs():
-    """
-    Blob Verification — pure DB read, no match_scores required.
-
-    For every user_selections row:
-      SUM(points_per_match.values())  must equal  week_pts
-
-    This is the authoritative check that the stored totals (which the
-    leaderboard reads) are internally consistent with the per-match
-    breakdown (which the History tab reads).
-
-    A mismatch means the two tabs will show conflicting totals — this
-    MUST be resolved before any frontend merge work begins.
-    """
     try:
         with db._read() as con:
             rows = con.execute(
                 "SELECT display_name, week_no, week_pts, points_per_match "
                 "FROM user_selections ORDER BY display_name, week_no"
             ).fetchall()
-
         results = []; mismatches = []
         for row in rows:
-            name = row["display_name"]; wk = row["week_no"]
             stored = row["week_pts"]
             try: blob = _json.loads(row["points_per_match"] or "{}")
             except: blob = {}
             blob_sum = sum(int(v) for v in blob.values())
             is_match = stored == blob_sum
-            entry = {
-                "user": name,
-                "week_no": wk,
-                "stored_week_pts": stored,
-                "blob_sum": blob_sum,
-                "diff": stored - blob_sum,
-                "match": is_match,
-                "matches_in_blob": len(blob),
-            }
+            entry = {"user": row["display_name"], "week_no": row["week_no"],
+                     "stored_week_pts": stored, "blob_sum": blob_sum,
+                     "diff": stored - blob_sum, "match": is_match,
+                     "matches_in_blob": len(blob)}
             results.append(entry)
-            if not is_match:
-                mismatches.append(entry)
-
+            if not is_match: mismatches.append(entry)
         return jsonify({
-            "ok": True,
-            "all_blobs_valid": len(mismatches) == 0,
-            "mismatch_count": len(mismatches),
-            "mismatches": mismatches,
-            "rows_checked": len(results),
-            "details": results,
-            "note": (
-                "PASS: All points_per_match blobs sum correctly to week_pts."
-                if len(mismatches) == 0
-                else f"FAIL: {len(mismatches)} row(s) where blob sum != week_pts. "
-                     "Run POST /api/recalculate-points then re-check."
-            ),
+            "ok": True, "all_blobs_valid": len(mismatches) == 0,
+            "mismatch_count": len(mismatches), "mismatches": mismatches,
+            "rows_checked": len(results), "details": results,
+            "note": ("PASS: All points_per_match blobs sum correctly to week_pts." if len(mismatches) == 0
+                     else f"FAIL: {len(mismatches)} row(s) where blob sum != week_pts."),
         })
     except Exception as e:
         _log(f"GET /api/audit-blobs: {e}", "error")
@@ -598,22 +535,8 @@ def api_audit_blobs():
 
 @bp.route("/api/snapshot", methods=["POST"])
 def api_snapshot():
-    """
-    Capture and save a receipt: leaderboard + member totals + both audit results.
-
-    Saved to data/snapshot_<iso>.json.  Run this BEFORE building the Match
-    Centre.  After the Match Centre is live, run it again and diff the two
-    files — numbers must be identical to prove no bugs were introduced.
-
-    Usage:
-      POST /api/snapshot
-      Response includes the full snapshot JSON + the filename it was saved to.
-    """
     try:
-        # 1. Leaderboard (source of truth for totals)
         leaderboard = db.get_leaderboard()
-
-        # 2. Ghost sweep
         with db._read() as con:
             all_players = {r["id"]: r["name"] for r in con.execute(
                 "SELECT id,name FROM players").fetchall()}
@@ -626,9 +549,7 @@ def api_snapshot():
                 "SELECT display_name, week_no, week_pts, points_per_match "
                 "FROM user_selections ORDER BY display_name, week_no"
             ).fetchall()
-
-        ghosts = []
-        seen_ghosts = set()
+        ghosts = []; seen_ghosts = set()
         for sel in sels:
             try: ids = _json.loads(sel["tw_team_json"] or "[]")
             except: continue
@@ -636,8 +557,6 @@ def api_snapshot():
                 if pid not in all_player_ids and pid not in seen_ghosts:
                     seen_ghosts.add(pid)
                     ghosts.append({"ghost_id": pid, "first_seen_user": sel["display_name"]})
-
-        # 3. Blob verification
         blob_mismatches = []
         for row in blob_rows:
             stored = row["week_pts"]
@@ -645,49 +564,338 @@ def api_snapshot():
             except: blob = {}
             blob_sum = sum(int(v) for v in blob.values())
             if stored != blob_sum:
-                blob_mismatches.append({
-                    "user": row["display_name"], "week_no": row["week_no"],
-                    "stored_week_pts": stored, "blob_sum": blob_sum, "diff": stored - blob_sum,
-                })
-
+                blob_mismatches.append({"user": row["display_name"], "week_no": row["week_no"],
+                                        "stored_week_pts": stored, "blob_sum": blob_sum,
+                                        "diff": stored - blob_sum})
         now_iso = datetime.now(timezone.utc).isoformat()
         snapshot = {
             "captured_at": now_iso,
             "backend_clean": len(ghosts) == 0 and len(blob_mismatches) == 0,
-            "audit_player_ids": {
-                "all_ids_valid": len(ghosts) == 0,
-                "ghost_count": len(ghosts),
-                "ghosts": ghosts,
-            },
-            "audit_blobs": {
-                "all_blobs_valid": len(blob_mismatches) == 0,
-                "mismatch_count": len(blob_mismatches),
-                "mismatches": blob_mismatches,
-            },
+            "audit_player_ids": {"all_ids_valid": len(ghosts) == 0,
+                                 "ghost_count": len(ghosts), "ghosts": ghosts},
+            "audit_blobs": {"all_blobs_valid": len(blob_mismatches) == 0,
+                            "mismatch_count": len(blob_mismatches), "mismatches": blob_mismatches},
             "leaderboard": leaderboard,
         }
-
-        # Save to disk
         safe_ts = now_iso.replace(":", "-").replace(".", "-")
         snap_path = DATA_DIR / f"snapshot_{safe_ts}.json"
         snap_path.parent.mkdir(parents=True, exist_ok=True)
         with open(snap_path, "w") as fh:
             _json.dump(snapshot, fh, indent=2)
         _log(f"[snapshot] Saved receipt → {snap_path.name}")
+        return jsonify({"ok": True, "captured_at": now_iso, "saved_to": snap_path.name,
+                        "backend_clean": snapshot["backend_clean"],
+                        "audit_summary": {"ghost_count": len(ghosts),
+                                          "blob_mismatch_count": len(blob_mismatches)},
+                        "snapshot": snapshot})
+    except Exception as e:
+        _log(f"POST /api/snapshot: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 6c. MATCH CENTRE  (Phase 9.1)
+#
+# GET /api/match-centre          ?user=<display_name>
+#   Hub view — all matches grouped by week with the user's per-match points.
+#   Includes season summary (total, avg, best). Single network request.
+#   Read-only, no live tracking, no writes.
+#
+# GET /api/match-details/<match_id>  ?user=<display_name>
+#   Box Score — user's historical XI snapshot for ONE match. Reads
+#   tw_team_json from the week that match belongs to, so later team
+#   changes do not corrupt the historical record.
+#   Read-only, no writes.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _match_ordinal(match_id: str) -> str:
+    """'ipl26_m12' → 'M12';  fallback strips non-digits."""
+    m = re.search(r'_m(\d+)$', match_id, re.IGNORECASE)
+    if m: return "M" + m.group(1)
+    digits = re.sub(r'[^0-9]', '', match_id)
+    return ("M" + digits) if digits else match_id
+
+
+@bp.route("/api/match-centre", methods=["GET"])
+def api_match_centre():
+    """
+    Match Centre Hub.
+
+    Query param: ?user=<display_name>  (required)
+
+    Response contract:
+    {
+      "ok": true,
+      "name": "Rohan",
+      "season": {
+        "total_pts": 1363, "matches_played": 9,
+        "avg_per_match": 151, "best_pts": 284, "best_match": "RCB vs CSK"
+      },
+      "weeks": [
+        {
+          "week_no": 1, "week_pts": 661,
+          "matches_played": 3, "total_matches": 3,
+          "matches": [
+            {
+              "match_id": "ipl26_m1", "match_no": "M1",
+              "title": "RCB vs CSK",
+              "teams": ["RCB", "CSK"],
+              "venue": "Chinnaswamy",
+              "date_label": "Mar 22",
+              "result": "RCB won by 7 wkts",
+              "status": "completed",
+              "user_match_pts": 284
+            }, ...
+          ]
+        }, ...
+      ]
+    }
+    """
+    n = (request.args.get("user") or "").strip()
+    if not n or len(n) > 30:
+        return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
+    try:
+        with db._read() as con:
+            match_rows = con.execute(
+                "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
+                "FROM matches ORDER BY week_no, id"
+            ).fetchall()
+            ump_rows = con.execute(
+                "SELECT match_id, pts FROM user_match_points WHERE display_name=?", (n,)
+            ).fetchall()
+            wk_rows = con.execute(
+                "SELECT week_no, week_pts FROM user_selections "
+                "WHERE display_name=? ORDER BY week_no", (n,)
+            ).fetchall()
+
+        ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
+        wk_totals = {r["week_no"]: r["week_pts"] for r in wk_rows}
+
+        weeks_map: dict = {}
+        best_pts = 0
+        best_match = ""
+
+        for mr in match_rows:
+            wk      = mr["week_no"]
+            raw     = _jloads(mr["raw_json"], {})
+            teams   = _jloads(mr["teams_json"], [])
+            user_pts = ump_map.get(mr["id"], 0)
+
+            if user_pts > best_pts:
+                best_pts  = user_pts
+                best_match = mr["title"] or mr["id"]
+
+            # Pull venue / result from raw_json; keys vary by scraper version
+            venue  = (raw.get("venue") or raw.get("location") or
+                      raw.get("ground") or raw.get("stadium") or "")
+            result = (raw.get("result") or raw.get("match_result") or
+                      raw.get("matchResult") or "")
+
+            entry = {
+                "match_id":   mr["id"],
+                "match_no":   _match_ordinal(mr["id"]),
+                "title":      mr["title"] or mr["id"],
+                "teams":      teams,
+                "venue":      venue,
+                "date_label": mr["date_label"],
+                "result":     result,
+                "status":     (mr["status"] or "upcoming").lower(),
+                "user_match_pts": user_pts,
+            }
+            if wk not in weeks_map:
+                weeks_map[wk] = {
+                    "week_no":  wk,
+                    "week_pts": wk_totals.get(wk, 0),
+                    "matches":  [],
+                }
+            weeks_map[wk]["matches"].append(entry)
+
+        weeks = sorted(weeks_map.values(), key=lambda w: w["week_no"])
+        for w in weeks:
+            completed = sum(1 for m in w["matches"]
+                            if m["status"] == "completed")
+            w["matches_played"] = completed
+            w["total_matches"]  = len(w["matches"])
+
+        total_pts      = sum(ump_map.values())
+        matches_played = sum(
+            1 for mr in match_rows
+            if (mr["status"] or "").lower() == "completed" and mr["id"] in ump_map
+        )
+        avg_per_match = round(total_pts / matches_played) if matches_played else 0
 
         return jsonify({
             "ok": True,
-            "captured_at": now_iso,
-            "saved_to": snap_path.name,
-            "backend_clean": snapshot["backend_clean"],
-            "audit_summary": {
-                "ghost_count": len(ghosts),
-                "blob_mismatch_count": len(blob_mismatches),
+            "name": n,
+            "season": {
+                "total_pts":      total_pts,
+                "matches_played": matches_played,
+                "avg_per_match":  avg_per_match,
+                "best_pts":       best_pts,
+                "best_match":     best_match,
             },
-            "snapshot": snapshot,
+            "weeks": weeks,
         })
     except Exception as e:
-        _log(f"POST /api/snapshot: {e}", "error")
+        _log(f"GET /api/match-centre?user={n}: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+@bp.route("/api/match-details/<match_id>", methods=["GET"])
+def api_match_details(match_id):
+    """
+    Box Score for one match.
+
+    Query param: ?user=<display_name>  (required)
+
+    Returns the user's historical XI snapshot for that match, with per-player
+    pts and C/VC multipliers applied.  Reads tw_team_json from the week this
+    match belongs to — historically accurate regardless of later team changes.
+
+    Response contract:
+    {
+      "ok": true,
+      "match_id": "ipl26_m1", "match_no": "M1",
+      "title": "RCB vs CSK", "week_no": 1,
+      "venue": "Chinnaswamy", "date_label": "Mar 22",
+      "result": "RCB won by 7 wkts", "status": "completed",
+      "user_pts": 284,
+      "cap_id": "vk18rcb", "vc_id": "jb93mi",
+      "top_scorer": {"player_id": "vk18rcb", "name": "Virat Kohli", "pts": 176},
+      "players": [
+        {
+          "player_id": "vk18rcb", "name": "Virat Kohli",
+          "role": "BAT", "team": "RCB",
+          "is_cap": true, "is_vc": false,
+          "base_pts": 88, "multiplier": 2.0,
+          "final_pts": 176, "multiplier_str": "88×2"
+        }, ...
+      ]
+    }
+    """
+    n = (request.args.get("user") or "").strip()
+    if not n or len(n) > 30:
+        return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
+    try:
+        with db._read() as con:
+            mr = con.execute(
+                "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
+                "FROM matches WHERE id=?", (match_id,)
+            ).fetchone()
+            if not mr:
+                return jsonify({"error": f"match '{match_id}' not found", "code": 404}), 404
+
+            wk  = mr["week_no"]
+            raw = _jloads(mr["raw_json"], {})
+
+            # Historical XI: read from the week this match belongs to
+            sel = con.execute(
+                "SELECT tw_team_json, tw_cap_id, tw_vc_id "
+                "FROM user_selections WHERE display_name=? AND week_no=?",
+                (n, wk)
+            ).fetchone()
+
+            if not sel:
+                return jsonify({
+                    "ok": True, "name": n,
+                    "match_id": match_id, "match_no": _match_ordinal(match_id),
+                    "title": mr["title"] or match_id, "week_no": wk,
+                    "venue": "", "date_label": mr["date_label"],
+                    "result": "", "status": (mr["status"] or "upcoming").lower(),
+                    "user_pts": 0, "cap_id": None, "vc_id": None,
+                    "top_scorer": None, "players": [],
+                    "note": f"No selection found for '{n}' in week {wk}",
+                })
+
+            team_ids = _jloads(sel["tw_team_json"], [])
+            cap_id   = sel["tw_cap_id"]
+            vc_id    = sel["tw_vc_id"]
+
+            # Per-player base pts for this match
+            pmp_map: dict = {}
+            player_info: dict = {}
+            if team_ids:
+                ph = ",".join("?" * len(team_ids))
+                for r in con.execute(
+                    f"SELECT player_id, base_pts FROM player_match_points "
+                    f"WHERE match_id=? AND player_id IN ({ph})",
+                    [match_id] + team_ids
+                ).fetchall():
+                    pmp_map[r["player_id"]] = r["base_pts"]
+                for r in con.execute(
+                    f"SELECT id, name, role, team FROM players WHERE id IN ({ph})",
+                    team_ids
+                ).fetchall():
+                    player_info[r["id"]] = dict(r)
+
+            # Authoritative per-match total from user_match_points
+            ump_row = con.execute(
+                "SELECT pts FROM user_match_points "
+                "WHERE display_name=? AND match_id=?", (n, match_id)
+            ).fetchone()
+            user_total = ump_row["pts"] if ump_row else 0
+
+        venue  = (raw.get("venue") or raw.get("location") or
+                  raw.get("ground") or raw.get("stadium") or "")
+        result = (raw.get("result") or raw.get("match_result") or
+                  raw.get("matchResult") or "")
+
+        players_out = []
+        for pid in team_ids:
+            base_pts  = pmp_map.get(pid, 0)
+            is_cap    = pid == cap_id
+            is_vc     = pid == vc_id
+            mult      = 2.0 if is_cap else (1.5 if is_vc else 1.0)
+            final_pts = round(base_pts * mult)
+            info      = player_info.get(pid, {"id": pid, "name": pid,
+                                               "role": "", "team": ""})
+            mult_str  = ""
+            if is_cap and base_pts > 0:
+                mult_str = f"{base_pts}\u00d72"
+            elif is_vc and base_pts > 0:
+                mult_str = f"{base_pts}\u00d71.5"
+
+            players_out.append({
+                "player_id":      pid,
+                "name":           info.get("name", pid),
+                "role":           info.get("role", ""),
+                "team":           info.get("team", ""),
+                "is_cap":         is_cap,
+                "is_vc":          is_vc,
+                "base_pts":       base_pts,
+                "multiplier":     mult,
+                "final_pts":      final_pts,
+                "multiplier_str": mult_str,
+            })
+
+        players_out.sort(key=lambda x: -x["final_pts"])
+        top = (players_out[0] if players_out and players_out[0]["final_pts"] > 0
+               else None)
+
+        return jsonify({
+            "ok":         True,
+            "name":       n,
+            "match_id":   match_id,
+            "match_no":   _match_ordinal(match_id),
+            "title":      mr["title"] or match_id,
+            "week_no":    wk,
+            "teams":      _jloads(mr["teams_json"], []),
+            "venue":      venue,
+            "date_label": mr["date_label"],
+            "result":     result,
+            "status":     (mr["status"] or "upcoming").lower(),
+            "user_pts":   user_total,
+            "cap_id":     cap_id,
+            "vc_id":      vc_id,
+            "top_scorer": {
+                "player_id": top["player_id"],
+                "name":      top["name"],
+                "pts":       top["final_pts"],
+            } if top else None,
+            "players": players_out,
+        })
+    except Exception as e:
+        _log(f"GET /api/match-details/{match_id}?user={n}: {e}", "error")
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
