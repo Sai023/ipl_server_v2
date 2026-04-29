@@ -611,6 +611,7 @@ function render(state){
       {id:"history",label:"History \uD83D\uDCD6"},
       {id:"points",label:"Points \uD83D\uDCCA"},
       {id:"leaderboard",label:"Leaderboard"},
+      {id:"match-centre",label:"Match Centre \uD83C\uDFAF"},
       {id:"matches",label:"Matches"},
       {id:"members",label:"Members"},
       {id:"admin",label:"Admin \u2699\uFE0F"},
@@ -618,14 +619,15 @@ function render(state){
       html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
     });
     html+='</div>';
-    if     (_activeTab==="team")        {html+=_buildThisWeekCard();html+=_buildDevTools();}
-    else if(_activeTab==="next")        html+=_buildNextWeekCard();
-    else if(_activeTab==="history")     html+=_buildHistoryTab();
-    else if(_activeTab==="points")      html+=_buildPointsTab();
-    else if(_activeTab==="leaderboard") html+=_buildLeaderboardCard(_leaderboard);
-    else if(_activeTab==="matches")     html+=_buildMatchesCard(matches);
-    else if(_activeTab==="members")     html+=_buildMembersCard(memberNames);
-    else if(_activeTab==="admin")       html+=_buildAdminTab();
+    if     (_activeTab==="team")         {html+=_buildThisWeekCard();html+=_buildDevTools();}
+    else if(_activeTab==="next")         html+=_buildNextWeekCard();
+    else if(_activeTab==="history")      html+=_buildHistoryTab();
+    else if(_activeTab==="points")       html+=_buildPointsTab();
+    else if(_activeTab==="leaderboard")  html+=_buildLeaderboardCard(_leaderboard);
+    else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
+    else if(_activeTab==="matches")      html+=_buildMatchesCard(matches);
+    else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
+    else if(_activeTab==="admin")        html+=_buildAdminTab();
   }
   html+='</div>';
   $app.innerHTML=html;
@@ -683,6 +685,6 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=75"></script>
+<script src="/static/ipl_glue.js?v=76"></script>
 </body>
 </html>

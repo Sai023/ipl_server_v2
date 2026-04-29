@@ -1,17 +1,18 @@
 /**
- * ipl_glue.js — Frontend Integration Layer                 Golden File v7.5
+ * ipl_glue.js — Frontend Integration Layer                 Golden File v7.6
  * =========================================================================
- * v7.5 (this release):
- *   • Safe Boot — 5-second timeout in _init(). If /api/state hasn’t
- *     resolved by then the loading spinner is force-hidden and the error
- *     banner fires so the user sees an actionable message instead of an
- *     infinite spinner.
+ * v7.6 (Phase 9.2 — Match Centre Scaffolding):
+ *   • _injectMCStyles() — self-contained CSS block injected into <head>.
+ *     Defines --ipl-teal:#00d2ff and --ipl-teal-soft:rgba(0,210,255,.13)
+ *     on :root, plus full component classes for .match-card and .match-modal
+ *     sheet (backdrop, header, score boxes, player rows, total footer).
+ *   • _buildMatchCentreTab stub — returns a scaffold <div id="match-centre-tab">
+ *     so the tab renders immediately; full builder replaces it in Phase 9.3.
+ *   • IplApi additions: getMatchCentre(name), getMatchDetails(matchId, name).
  *
- * v7.4: _playerMap cache, _injectStatsToPicker, per-week leaderboard
- *       columns, match-by-match team totals, getUserMatchPoints API.
+ * v7.5: Safe Boot — 5-second timeout.
+ * v7.4: _playerMap cache, per-week leaderboard columns, match-by-match totals.
  * v7.3: Matches tab with My Pts column.
- * v7.2: _buildPointsTab() matchCount fix.
- * v7.1: History tab weekly pts chip, Leaderboard per-week columns.
  */
 
 (function (window) {
@@ -21,14 +22,14 @@
   var MAINTENANCE_DELAY = 1500;
   var ROLLOVER_HOUR_UTC = 14;
   var ROLLOVER_MIN_UTC  = 0;
-  var SAFE_BOOT_MS      = 5000; // v7.5: max ms to wait before showing error
+  var SAFE_BOOT_MS      = 5000;
 
   var _lastStateEtag  = null;
   var _overlayTimer   = null;
   var _overlayVisible = false;
   var _pollTimer      = null;
   var _rolloverTimer  = null;
-  var _safeBootTimer  = null; // v7.5
+  var _safeBootTimer  = null;
 
   var IplConfig = {
     budget:       100.0,
@@ -210,6 +211,15 @@
     getPlayerPoints:    function (name) { return _fetchJson("/api/player-points/" + encodeURIComponent(name)); },
     getUserMatchPoints: function (name) { return _fetchJson("/api/user-match-points/" + encodeURIComponent(name)); },
 
+    // ── Phase 9.1: Match Centre endpoints ─────────────────────────────────
+    getMatchCentre:  function (name) {
+      return _fetchJson("/api/match-centre?user=" + encodeURIComponent(name));
+    },
+    getMatchDetails: function (matchId, name) {
+      return _fetchJson("/api/match-details/" + encodeURIComponent(matchId)
+                        + "?user=" + encodeURIComponent(name));
+    },
+
     saveNextWeek: function (name, picks) {
       return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -303,17 +313,11 @@
     window.addEventListener("ipl:saved",             function () { _lastStateEtag = null; });
     window.addEventListener("ipl:rollover-triggered", function () { _lastStateEtag = null; _pollCycle(); });
 
-    // ── v7.5: SAFE BOOT — 5-second timeout ────────────────────────────────
-    // If the app-loading screen is still visible after SAFE_BOOT_MS it means
-    // /api/state never resolved. Hide the spinner and surface an error banner
-    // so the user isn’t stuck staring at an infinite loader.
     _safeBootTimer = setTimeout(function () {
       var loading = document.getElementById("app-loading");
       if (loading && !loading.classList.contains("hidden")) {
-        // Force-hide spinner
         loading.classList.add("hidden");
         setTimeout(function () { if (loading) loading.remove(); }, 450);
-        // Surface error banner
         var banner = document.getElementById("error-banner");
         if (banner) {
           banner.textContent = "\u26a0\ufe0f  Could not connect to server \u2014 please check your connection or refresh the page.";
@@ -323,12 +327,10 @@
       }
     }, SAFE_BOOT_MS);
 
-    // Cancel the safe boot timer as soon as we receive a valid state
     window.addEventListener("ipl:state-updated", function _clearSafeBoot() {
       if (_safeBootTimer) { clearTimeout(_safeBootTimer); _safeBootTimer = null; }
       window.removeEventListener("ipl:state-updated", _clearSafeBoot);
     });
-    // ───────────────────────────────────────────────────────────────────
 
     window.dispatchEvent(new CustomEvent("ipl:ready"));
   }
@@ -349,7 +351,6 @@
 
 // ════════════════════════════════════════════════════════════════════════════
 // v7.4  UI OVERRIDES
-// Loaded after the inline script — these replace the original tab builders.
 // ════════════════════════════════════════════════════════════════════════════
 
 
@@ -667,8 +668,147 @@ function _setupPickerObserver() {
 
 window.addEventListener('ipl:state-updated', function() {
   _umpData = null;
+  _mcData  = null; // invalidate Match Centre cache on state change
   _loadPlayerMap(function() { _injectStatsToPicker(); });
 });
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _setupPickerObserver);
 else setTimeout(_setupPickerObserver, 800);
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// v7.6  MATCH CENTRE — CSS Injection + Scaffold   (Phase 9.2)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * _injectMCStyles()
+ * Idempotent — guards on #ipl-mc-styles. Called once on DOMContentLoaded.
+ *
+ * CSS architecture:
+ *  :root variables  — --ipl-teal, --ipl-teal-soft
+ *  Season stats bar — .mc-stats-bar, .mc-stat-box, .mc-stat-val, .mc-stat-lbl
+ *  Week group       — .mc-week-hdr, .mc-week-lbl, .mc-week-pts
+ *  Match card       — .match-card (+ hover, upcoming modifier)
+ *                     .mc-mno, .mc-mbody, .mc-mtitle, .mc-mmeta
+ *                     .mc-mright, .mc-mpts, .mc-spill (status pill)
+ *  Modal backdrop   — .match-modal-backdrop  (@keyframes mcFade)
+ *  Modal sheet      — .match-modal           (@keyframes mcSlide)
+ *  Modal internals  — .mm-close, .mm-badge, .mm-title, .mm-sub
+ *                     .mm-scores, .mm-sbox, .mm-slbl, .mm-sval, .mm-sname
+ *                     .mm-xi-lbl, .mm-prow, .mm-pnum, .mm-pav
+ *                     .mm-pinfo, .mm-pname, .mm-psub
+ *                     .mm-ppts, .mm-pmult, .mm-total, .mm-tlbl, .mm-tval
+ *                     .mm-loading
+ */
+function _injectMCStyles() {
+  if (document.getElementById('ipl-mc-styles')) return;
+  var s = document.createElement('style');
+  s.id = 'ipl-mc-styles';
+  s.textContent = [
+    /* CSS custom properties — teal theme */
+    ':root{--ipl-teal:#00d2ff;--ipl-teal-soft:rgba(0,210,255,.13);}',
+    /* Season stats bar */
+    '.mc-stats-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px;}',
+    '.mc-stat-box{background:#0E1E35;border:1px solid rgba(0,210,255,.14);border-radius:10px;padding:11px 6px;text-align:center;}',
+    '.mc-stat-val{font-size:21px;font-weight:900;color:var(--ipl-teal);line-height:1;}',
+    '.mc-stat-val.gold{color:#F5C518;}',
+    '.mc-stat-lbl{font-size:9px;color:var(--muted,#5F7A9B);text-transform:uppercase;letter-spacing:.06em;margin-top:3px;}',
+    /* Week group header */
+    '.mc-week-hdr{display:flex;align-items:center;justify-content:space-between;',
+    'padding:10px 0 6px;border-bottom:1px solid rgba(0,210,255,.1);margin-bottom:8px;}',
+    '.mc-week-lbl{font-size:11px;font-weight:700;color:var(--ipl-teal);text-transform:uppercase;letter-spacing:.07em;}',
+    '.mc-week-pts{font-size:13px;font-weight:800;color:#F5C518;}',
+    /* Match card */
+    '.match-card{display:flex;align-items:center;gap:10px;padding:11px 12px;',
+    'background:rgba(0,210,255,.04);border:1px solid rgba(0,210,255,.08);border-radius:10px;',
+    'margin-bottom:6px;cursor:pointer;transition:background .16s,border-color .16s;',
+    '-webkit-tap-highlight-color:transparent;}',
+    '.match-card:hover,.match-card:active{background:var(--ipl-teal-soft);border-color:rgba(0,210,255,.28);}',
+    '.match-card.mc-upcoming{opacity:.55;cursor:default;pointer-events:none;}',
+    '.mc-mno{font-size:10px;font-weight:700;color:var(--muted,#5F7A9B);min-width:24px;text-align:center;}',
+    '.mc-mbody{flex:1;min-width:0;}',
+    '.mc-mtitle{font-size:13px;font-weight:700;color:var(--text,#D8E8F5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+    '.mc-mmeta{font-size:10px;color:var(--muted,#5F7A9B);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+    '.mc-mright{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;}',
+    '.mc-mpts{font-size:18px;font-weight:900;color:var(--ipl-teal);line-height:1;}',
+    '.mc-mpts.zero{color:var(--dim,#3D5572);}',
+    '.mc-spill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:9px;font-weight:700;',
+    'text-transform:uppercase;letter-spacing:.04em;background:rgba(0,212,170,.14);color:#00D4AA;}',
+    '.mc-spill.upcoming{background:rgba(95,122,155,.14);color:#5F7A9B;}',
+    /* Modal backdrop */
+    '.match-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(7,17,31,.88);',
+    'display:flex;align-items:flex-end;justify-content:center;animation:mcFade .2s ease;}',
+    '@keyframes mcFade{from{opacity:0}to{opacity:1}}',
+    /* Modal sheet */
+    '.match-modal{background:#0E1E35;border:1px solid rgba(0,210,255,.18);border-radius:18px 18px 0 0;',
+    'width:100%;max-width:560px;max-height:90vh;overflow-y:auto;padding:20px 16px 36px;',
+    'animation:mcSlide .24s ease;position:relative;}',
+    '@keyframes mcSlide{from{transform:translateY(36px);opacity:0}to{transform:translateY(0);opacity:1}}',
+    /* Modal — close button */
+    '.mm-close{position:absolute;top:14px;right:14px;background:rgba(255,255,255,.07);',
+    'border:none;border-radius:50%;width:28px;height:28px;',
+    'color:var(--muted,#5F7A9B);font-size:14px;cursor:pointer;',
+    'display:flex;align-items:center;justify-content:center;}',
+    /* Modal — header */
+    '.mm-badge{display:inline-block;font-size:10px;font-weight:700;color:var(--ipl-teal);',
+    'background:var(--ipl-teal-soft);border-radius:4px;padding:2px 7px;margin-bottom:5px;}',
+    '.mm-title{font-size:16px;font-weight:800;color:var(--text,#D8E8F5);margin:0 0 2px;}',
+    '.mm-sub{font-size:11px;color:var(--muted,#5F7A9B);margin-bottom:14px;}',
+    /* Modal — score boxes (YOUR PTS / TOP SCORER) */
+    '.mm-scores{display:flex;gap:10px;margin-bottom:16px;}',
+    '.mm-sbox{flex:1;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:11px 13px;}',
+    '.mm-slbl{font-size:9px;font-weight:700;color:var(--muted,#5F7A9B);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px;}',
+    '.mm-sval{font-size:26px;font-weight:900;color:#F5C518;line-height:1;}',
+    '.mm-sbox.top .mm-sval{font-size:20px;color:var(--ipl-teal);}',
+    '.mm-sname{font-size:12px;font-weight:700;color:var(--text,#D8E8F5);margin-top:2px;}',
+    /* Modal — XI label */
+    '.mm-xi-lbl{font-size:10px;font-weight:700;color:var(--muted,#5F7A9B);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;}',
+    /* Modal — player rows */
+    '.mm-prow{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);}',
+    '.mm-pnum{font-size:11px;color:var(--dim,#3D5572);min-width:16px;text-align:center;}',
+    '.mm-pav{width:32px;height:32px;border-radius:50%;background:#1A3050;',
+    'display:flex;align-items:center;justify-content:center;',
+    'font-size:11px;font-weight:700;color:var(--text,#D8E8F5);flex-shrink:0;}',
+    '.mm-pinfo{flex:1;min-width:0;}',
+    '.mm-pname{font-size:13px;font-weight:600;color:var(--text,#D8E8F5);display:flex;align-items:center;gap:4px;}',
+    '.mm-psub{font-size:10px;color:var(--muted,#5F7A9B);margin-top:1px;}',
+    '.mm-ppts{font-size:16px;font-weight:900;color:var(--ipl-teal);flex-shrink:0;text-align:right;}',
+    '.mm-ppts.zero{color:var(--dim,#3D5572);font-size:14px;}',
+    '.mm-pmult{font-size:10px;color:var(--muted,#5F7A9B);display:block;}',
+    /* Modal — match total footer */
+    '.mm-total{display:flex;justify-content:space-between;align-items:center;',
+    'padding:12px 0 0;margin-top:4px;border-top:2px solid rgba(0,210,255,.15);}',
+    '.mm-tlbl{font-size:12px;font-weight:700;color:var(--muted,#5F7A9B);text-transform:uppercase;letter-spacing:.06em;}',
+    '.mm-tval{font-size:22px;font-weight:900;color:#F5C518;}',
+    /* Modal — loading / error states */
+    '.mm-loading{text-align:center;padding:32px 16px;color:var(--muted,#5F7A9B);font-size:13px;}',
+  ].join('');
+  document.head.appendChild(s);
+}
+
+// Auto-inject on load — idempotent, safe to call multiple times
+if (document.readyState === 'loading')
+  document.addEventListener('DOMContentLoaded', _injectMCStyles);
+else
+  _injectMCStyles();
+
+
+/**
+ * Match Centre tab scaffold.
+ * Returns the hidden container <div id="match-centre-tab"> with a loading
+ * placeholder. The full renderer (_buildMatchCentreTab) is installed in
+ * Phase 9.3 and replaces this stub via the same global name.
+ *
+ * index.html render() calls: typeof _buildMatchCentreTab === 'function'
+ * so this stub is picked up immediately after Phase 9.2 ships.
+ */
+var _mcData   = null;   // cache: populated by Phase 9.3 renderer
+var _mcLoading = false;
+
+if (typeof window._buildMatchCentreTab === 'undefined') {
+  window._buildMatchCentreTab = function () {
+    return '<div id="match-centre-tab" class="card" style="min-height:120px">'
+         + '<div class="mm-loading">\u23F3 Match Centre loading\u2026</div>'
+         + '</div>';
+  };
+}
