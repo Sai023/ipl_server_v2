@@ -31,6 +31,12 @@ name: IPL 2026 Daily Scrape (cloud safety-net)
 
 on:
   workflow_dispatch:
+    inputs:
+      force_full_rescrape:
+        description: 'Wipe data/matches/*.json before scraping so every completed match is re-fetched from Cricbuzz. Used by the host site Refresh button.'
+        required: false
+        default: 'false'
+        type: boolean
   schedule:
     # Run at 18:30 UTC (midnight IST) and 21:30 UTC (3am IST).
     # Both fire AFTER the local server's daily 23:55 IST discovery
@@ -82,6 +88,24 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
 
+      - name: 5b. Force-wipe match JSON cache (only when invoked with force_full_rescrape)
+        # scraper.py at scraper.py:615 short-circuits on `data/matches/match_NN.json`
+        # existing, which means already-scraped matches never get refreshed even
+        # if Cricbuzz updated the scorecard (late stats corrections, scoring
+        # changes, etc). The host's Refresh button dispatches this workflow with
+        # force_full_rescrape=true to force a full re-fetch; the scheduled cron
+        # runs leave the cache alone (they're for picking up newly-completed
+        # matches and don't need to redo old ones).
+        #
+        # The host's per-match Save & Scrape commits a deletion of the single
+        # match_NN.json before dispatching, so that one match re-scrapes
+        # without needing this global wipe.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full_rescrape == true }}
+        run: |
+          echo "force_full_rescrape=true: clearing data/matches/*.json"
+          rm -f data/matches/*.json
+          ls -la data/matches/ || true
+
       - name: 6. Run Cricbuzz scorecard scraper
         # scraper v11.0 is a pure consumer — reads matches.scorecard_url,
         # fetches scorecards, recalculates points. No discovery attempted.
@@ -113,7 +137,13 @@ jobs:
           git add -f data/matches/*.json 2>/dev/null || true
           git add -f data/fantasy.db     2>/dev/null || true
 
-          if [ -z "$(git status --porcelain --cached)" ]; then
+          # `git diff --cached --quiet` exits 0 when nothing is staged, 1 when
+          # something is. The previous version used `git status --porcelain
+          # --cached` which is invalid syntax (git status has no --cached
+          # flag — it exits 129 and `set -e` kills the workflow before commit,
+          # making the whole scrape look like a silent success that produced
+          # nothing). This is the right primitive.
+          if git diff --cached --quiet; then
             echo "No data changes — nothing to commit."
             exit 0
           fi

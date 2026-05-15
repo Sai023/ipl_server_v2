@@ -223,6 +223,7 @@ def _repo_slug() -> str | None:
 
 
 def dispatch_workflow(workflow_filename: str, ref: str = "main",
+                      inputs: dict | None = None,
                       log=print) -> tuple[bool, str]:
     """
     POST to GitHub's workflow_dispatch endpoint to trigger a workflow run.
@@ -232,6 +233,12 @@ def dispatch_workflow(workflow_filename: str, ref: str = "main",
     Render can't reach Cricbuzz directly, but the GitHub Actions runner
     can fetch scorecards for known cricbuzz_ids — so we ask Actions to do
     it on our behalf.
+
+    `inputs` maps the workflow's declared `inputs:` to runtime values. Pass
+    {"force_full_rescrape": "true"} to make daily_sync.yml wipe the
+    match-JSON cache and fully re-scrape every completed match. Strings,
+    not booleans — GitHub's dispatch API requires string-typed inputs even
+    when the workflow declares `type: boolean`.
 
     Requires GITHUB_TOKEN with **actions: write** scope (in addition to
     contents: write for the push path). If the token lacks the scope,
@@ -247,7 +254,10 @@ def dispatch_workflow(workflow_filename: str, ref: str = "main",
         return False, "could not resolve repo slug (set GITHUB_REPOSITORY env)"
 
     url = f"https://api.github.com/repos/{slug}/actions/workflows/{workflow_filename}/dispatches"
-    body = json.dumps({"ref": ref}).encode("utf-8")
+    payload: dict = {"ref": ref}
+    if inputs:
+        payload["inputs"] = inputs
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={

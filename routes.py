@@ -983,13 +983,32 @@ def api_update_match_url():
             # Actions runner sees the new URL on checkout, then dispatch the
             # daily_sync workflow so it scrapes immediately rather than
             # waiting for the next scheduled run at 18:30 / 21:30 UTC.
+            #
+            # Critically, we also DELETE this match's cached JSON before the
+            # push. scraper.py at scraper.py:615 short-circuits on the
+            # presence of data/matches/match_NN.json \u2014 without deleting it,
+            # the workflow checks out a cached file, the scraper sees it,
+            # skips this match, and we get a "data: scrape ..." commit with
+            # no real change. Targeted deletion = targeted re-scrape.
+            try:
+                mno_match = re.search(r'(\d+)\s*$', match_id)
+                if mno_match:
+                    mns = mno_match.group(1).zfill(2)
+                    jp = DATA_DIR / "matches" / f"match_{mns}.json"
+                    if jp.exists():
+                        jp.unlink()
+                        _log(f"Deleted cached {jp.name} so workflow re-scrapes M{mns}")
+            except Exception as e:
+                _log(f"Could not delete cached match JSON for {match_id}: {e}",
+                     "warn")
             _push_if_hosted(f"admin-url:{match_id}={cb_id}")
             dispatched, dmsg = cloud_sync.dispatch_workflow(
                 "daily_sync.yml", ref="main", log=_log,
             )
             if dispatched:
-                msg = ("URL saved, pushed to git, cloud scrape triggered. "
-                       "Click Refresh in 60-90s to see new scores.")
+                msg = ("URL saved, cached scorecard wiped, push & cloud "
+                       "scrape triggered. Click Refresh in 60-90s to see "
+                       "new scores.")
             else:
                 msg = (f"URL saved & pushed. Scrape NOT triggered: {dmsg}. "
                        f"Check PAT has actions:write scope. Falls back to "
@@ -1064,8 +1083,15 @@ def api_sync_now():
             # Best-effort dispatch. If the PAT lacks actions:write the
             # request fails 403; we surface that in the response so the
             # operator can fix the PAT, but the pull half still counts.
+            # `force_full_rescrape=true` makes the workflow wipe the
+            # data/matches/*.json cache before running scraper.py — without
+            # this, scraper.py at scraper.py:615 silently skips every
+            # match it has previously cached and the workflow produces no
+            # new commits, no new data, no visible UI change.
             dispatched, dmsg = cloud_sync.dispatch_workflow(
-                "daily_sync.yml", ref="main", log=_log,
+                "daily_sync.yml", ref="main",
+                inputs={"force_full_rescrape": "true"},
+                log=_log,
             )
             return jsonify({
                 "ok":         True,
