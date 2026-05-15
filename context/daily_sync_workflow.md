@@ -109,6 +109,82 @@ An operator can trigger the workflow manually from the GitHub Actions
 UI without waiting for a cron — useful for catching up after a long
 local offline period.
 
+### 9. Phase 11 — `force_full_rescrape` input + step 5b wipe
+
+The HOSTED-mode Refresh button on the Render site calls
+`cloud_sync.dispatch_workflow("daily_sync.yml",
+inputs={"force_full_rescrape": "true"})`. To honour that, the workflow
+declares a boolean input and a conditional step:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      force_full_rescrape:
+        type: boolean
+        default: 'false'
+
+# step 5b
+if: ${{ github.event_name == 'workflow_dispatch'
+        && inputs.force_full_rescrape == 'true' }}
+run: rm -f data/matches/*.json
+```
+
+**Why this exists:** [scraper.py:615](../scraper.py:615) skips any
+match whose `data/matches/match_NN.json` already exists. Without the
+wipe, a workflow run after every match has been scraped at least once
+produces zero changes — completed matches stay frozen at their first
+scrape, even if Cricbuzz later updated the scorecard (late stats
+corrections, etc.).
+
+**Critical gotcha — string comparison, not boolean.** Type-`boolean`
+workflow_dispatch inputs are serialised as the **strings** `"true"` /
+`"false"` when passed via the REST API. Writing
+`inputs.force_full_rescrape == true` (literal Boolean) returns
+`false` → step skipped silently → workflow finishes green with no
+data. Must be `== 'true'` with quotes.
+
+**Scheduled runs skip the wipe** — the condition's `event_name`
+clause excludes the cron paths. Daily scheduled scrapes are about
+*new* matches; they don't need to redo old ones.
+
+### 10. Phase 11 — pull-rebase + 3-retry push
+
+The hosted Render server is now also a writer to `fantasy.db`
+(user picks, rollover, admin URL changes via the `_push_if_hosted`
+wrapper in `routes.py`). A workflow push and a host push can race.
+
+Step 7 now does (after `git commit`):
+
+```bash
+for attempt in 1 2 3; do
+  if git pull --rebase --autostash origin main; then
+    if git push origin main; then exit 0; fi
+  else
+    git rebase --abort || true        # binary conflict on fantasy.db
+    [ $attempt -eq 3 ] && exit 1
+  fi
+  sleep 5
+done
+```
+
+Narrows the conflict window to ~1s between rebase and push. Three
+retries handles the case where the host pushes a write between our
+rebase and our push.
+
+On unresolvable binary conflict (rare; git can't merge SQLite blobs),
+the workflow exits non-zero with a loud log line. The next scheduled
+run produces a fresh scrape commit; the host's write that won the
+race is already on remote and preserved.
+
+### 11. Phase 11 — `git status` syntax fix
+
+The previous version used `git status --porcelain --cached`. `--cached`
+is **not** a valid `git status` flag — it exits 129 and `set -e`
+killed the workflow before commit. The whole scrape silently produced
+nothing. Now uses `git diff --cached --quiet`, which is the correct
+primitive (exits 0 = nothing staged, exits 1 = something staged).
+
 ## Called by / Calls into
 
 - **Called by:**

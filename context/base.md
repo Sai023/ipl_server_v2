@@ -122,7 +122,7 @@ Cross-references to [user_capabilities.md](user_capabilities.md):
 | `_db_con` | `routes.py`, `server.py` | **Live.** |
 | `_RateLimiter`, `_write_limiter`, `_check_rate` | `routes.py` write endpoints | **Live.** |
 | `db`, `app` | Everything | **Live singletons.** |
-| `STATIC_DIR` | `routes.py` (`/static/<filename>`) | **Live.** |
+| `STATIC_DIR` | `routes.py` (`/static/<filename>`); Flask `static_folder` argument | **Live.** Capital-S **`"Static"`** since Phase 11 — Windows is case-insensitive so lowercase worked locally, but Linux (Render / Codespaces) treats `static` ≠ `Static` and 404s every `/static/*` asset, leaving the UI stuck on "Loading your league..." |
 | `BASE_DIR`, `DATA_DIR` | Re-derived from `config.py` | **Duplicated** — not dead, just redundant. |
 | `BUDGET_TOTAL`, `XI_SIZE`, `MAX_WEEKS` | `routes.py`, `server.py` | **Live.** |
 | `CURRENT_PUBLIC_URL` | `server.py` writes, `routes.py` reads | **Live.** |

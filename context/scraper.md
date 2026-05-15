@@ -135,7 +135,28 @@ If Cricbuzz reports the match as `"no result"`, `"abandoned"`, or
 A successfully scraped match gets its full payload (meta + scores)
 written to `data/matches/match_NN.json`. On the next run, if the file
 exists and is > 500 bytes, the match is treated as "already scraped"
-and skipped. To force a re-scrape, delete that file.
+and skipped — the short-circuit lives at
+[scraper.py:615](../scraper.py:615): `if jp.exists() and jp.stat().st_size > 500: continue`.
+
+To force a re-scrape, delete that file.
+
+**Phase 11 — this is load-bearing for Refresh:**
+
+The HOSTED Render server can't reach Cricbuzz, so the site's Refresh
+button dispatches the `daily_sync.yml` workflow. But the workflow
+just re-runs scraper.py — which would short-circuit on every cached
+file and produce no new data. The button would look successful and
+do nothing.
+
+Two flows depend on bypassing this cache from outside:
+
+| Trigger | What gets wiped | Where |
+|---|---|---|
+| Refresh button | `data/matches/*.json` (global) | Workflow step 5b, gated on `inputs.force_full_rescrape == 'true'` |
+| Save & Scrape on one match | `data/matches/match_NN.json` (single file) | `routes.api_update_match_url` deletes it before pushing, so the workflow checks out a tree where only that match is uncached |
+
+The 500-byte threshold is the historical guard against earlier
+truncated writes. Don't lower it without revisiting that history.
 
 ### 5. Strike-rate / economy guards in scoring
 `process_cricbuzz_scorecard` only writes the raw stats — the SR and

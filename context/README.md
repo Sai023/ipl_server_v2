@@ -26,7 +26,8 @@ that's the live workbook with every item's status (`fixed` / `kept` /
 | Hotfix | +feature | M51/M52/M53 schedule drift fixed; M53 wrong CB ID cleared; Preview-state auto-recovery added to scraper; UI display number regex fixed. |
 | D | −70 lines | `apply_multiplier` deleted; `api_audit_scores` rewritten to use `debug_calc_pts`; path constants unified; UTF-8 stdout at boot. |
 | E | doc-only | Docstring drift in `logic/__init__.py`, `rollover_engine.py`, `mc_hub.js`; `Seed_Matches.py --force` flag removed; README "Daily Sync" section + troubleshooting refresh. |
-| **Total** | **~−1,300 lines** | No behavioural regressions; live API surface preserved; **`Sai W1-W2` audit total computed via refactored path = stored value, bit-identical**. |
+| **Cleanup total** | **~−1,300 lines** | No behavioural regressions; live API surface preserved; **`Sai W1-W2` audit total computed via refactored path = stored value, bit-identical**. |
+| **Phase 11** | **+~500 lines, new infra** | HOSTED mode for Render/Codespaces deploy: env-aware boot, `cloud_sync.py` (git pull / push / workflow_dispatch), per-write `_push_if_hosted`, `monday_rollover.yml` cron, `daily_sync.yml` `force_full_rescrape` + pull-rebase retry, `render.yaml` blueprint. Local mode unchanged. |
 
 ### What's still open
 
@@ -56,13 +57,13 @@ along the dependency chain:
 | Phase | Theme | Files |
 |-------|-------|-------|
 | 0 | User capabilities & docs audit | `user_capabilities.md`, `docs_audit.md` |
-| 1 | Foundation | `config.md`, `base.md`, `logic_package.md` |
+| 1 | Foundation | `config.md`, `base.md`, `logic_package.md`, **`cloud_sync.md`** (Phase 11) |
 | 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md` |
 | 3 | Data Layer | `db_manager.md`, `init_db.md` |
 | 4 | Ingestion | `scraper.md`, `tasks.md`, `seed_players.md`, `seed_matches.md` |
 | 5 | API & Server | `routes.md`, `server.md` |
 | 6 | Frontend | `index_html.md`, `ipl_glue.md`, `mc_hub.md` |
-| 7 | Operations | `daily_sync_workflow.md`, `audit_scores_ps1.md`, `setup_cloudflare_ps1.md`, `cloudflared_exe.md` |
+| 7 | Operations | `daily_sync_workflow.md`, **`monday_rollover_workflow.md`** (Phase 11), `audit_scores_ps1.md`, `setup_cloudflare_ps1.md`, `cloudflared_exe.md`, **`render_yaml.md`** (Phase 11) |
 
 **Read these first:**
 

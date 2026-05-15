@@ -10,7 +10,16 @@
 ## What it does (business view)
 
 `server.py` is the **thin Flask launcher**. Its job is to start the
-web server with everything else already wired up, in the right order:
+web server with everything else already wired up, in the right order.
+
+> **Phase 11 (HOSTED mode):** when `HOSTED=true` is set in the
+> environment (Render dashboard, Codespaces devcontainer, Fly.io
+> fly.toml), the launcher branches into a cloud-aware variant that
+> skips local-only behaviours and trusts the git-committed data. See
+> the "HOSTED mode" section near the bottom of this file for the
+> branching detail. Local mode (`HOSTED` unset / false) is unchanged.
+
+The local startup sequence:
 
 1. **Cold-start hydrate** — if the database has no matches but
    `data/matches/*.json` files exist (e.g. after a `git pull` on a
@@ -134,6 +143,33 @@ behaviour on shutdown.
 Hardcoded `WIDE = 64`. Every line is padded to that width — purely
 cosmetic, but worth knowing because long Cloudflare URLs wrap across
 multiple banner lines via the `range(0, len(url), WIDE-4)` chunker.
+
+## HOSTED mode (Phase 11)
+
+`IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")`
+is evaluated once at module scope (line ~80). When true, four
+behaviours change versus the local startup above:
+
+| Step | Local | HOSTED |
+|------|-------|--------|
+| Boot-time data sync | n/a | `cloud_sync.pull_latest()` before `init_db.run_all_sync()` so a fresh Render container starts on the latest committed `fantasy.db` rather than the build snapshot |
+| `_rebuild_scores_and_points()` | runs | **skipped** — ephemeral tables came from git, wiping them would leave Match Centre blank until next `git pull` |
+| `tasks.start_daily_discovery_scheduler()` | runs | **skipped** — Cricbuzz blocks Azure egress; the schedule would just fire failures at 23:55 IST each day |
+| `--tunnel <provider>` | starts cloudflared / ngrok / etc | **refused** — the host platform already provides a public URL |
+
+The banner is also re-titled to `MODE: HOSTED (cloud) — Cricbuzz scrape disabled`
+so the operator can tell at a glance which side they're looking at.
+
+**Why these four and not others:** `_audit_player_id_coverage`,
+`_audit_monday_match_schedule`, `init_db.run_all_sync`, and the
+sleep-prevention hook (which is a no-op on Linux) all stay live — they
+read state, validate it, or are no-ops in the cloud. Only the four
+above either need Cricbuzz egress or actively destroy data the cloud
+just pulled.
+
+**Dependency:** the HOSTED branch imports `cloud_sync` lazily inside
+the `__main__` block so a local dev clone without git installed still
+boots cleanly.
 
 ## Called by / Calls into
 

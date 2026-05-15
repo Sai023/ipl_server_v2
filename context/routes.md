@@ -151,6 +151,109 @@ both audit results to `data/snapshot_<ts>.json`. The intended use:
 take a snapshot **before** a risky change, then take another after,
 and diff them. Not for full DB backup — see Open Questions.
 
+## HOSTED mode (Phase 11) — behaviour deltas
+
+`_IS_HOSTED` is read once at module scope (line ~47) from the
+`HOSTED` env var. When true, five write paths and one read path
+behave differently. **No URL changes**; only the body of the handler
+forks. Local mode (`HOSTED` unset) keeps every behaviour from above.
+
+### A. `_push_if_hosted(reason)` wraps every write
+
+After a successful DB write, the handler calls
+`_push_if_hosted("<event>:<args>")` which delegates to
+`cloud_sync.commit_and_push(paths=["data/fantasy.db"], message=...)`.
+This is **synchronous** — the user's `POST` doesn't return until the
+push finishes (or fails). Trade-off: ~2–5s extra latency per write,
+in exchange for durability against Render container restarts (which
+wipe the filesystem).
+
+Wrapped endpoints (in route order):
+
+| Route | reason string |
+|---|---|
+| `POST /api/save-next-week/<n>` | `save-next-week:<user>:w<N>` |
+| `PUT /api/member/<n>` | `member:<user>` |
+| `POST /api/recalculate-points` | `recalc:rows=<n>` |
+| `POST /api/rollover` | `rollover:w<N>` |
+| `POST /api/update-match-url` | `admin-url:<match_id>=<cb_id>` |
+
+Failures are logged at WARN level and the response still returns 200
+— the local DB has the change and the next successful write catches
+it up.
+
+### B. `/api/sync-now` forks completely
+
+Local mode keeps the existing behaviour: spawns
+`tasks.start_bg_sync()` which discovers + scrapes Cricbuzz.
+
+HOSTED mode replaces that with two cloud operations:
+
+1. `cloud_sync.pull_latest()` → `git pull --ff-only`. On any new
+   commits, `db.reload_from_disk()` invalidates every thread-local
+   SQLite handle so the next read sees the fresh `fantasy.db`.
+2. `cloud_sync.dispatch_workflow("daily_sync.yml", ref="main",
+   inputs={"force_full_rescrape": "true"})` — asks GitHub Actions to
+   run the scrape on our behalf (Render can't reach Cricbuzz). The
+   `force_full_rescrape` input wipes the match-JSON cache so the
+   scraper's per-match short-circuit at
+   [scraper.py:615](../scraper.py:615) doesn't make the workflow a
+   no-op.
+
+Response includes `mode`, `pulled`, `pull_msg`, `dispatched`,
+`dispatch_msg`, plus a user-facing `message`. The Refresh button
+returns immediately; the user re-Refreshes ~60–90s later once the
+workflow finishes and pushes new data.
+
+### C. `/api/rollover` accepts an optional bearer token
+
+If `ROLLOVER_TOKEN` is set in the host env, requests carrying an
+`Authorization: Bearer <token>` header MUST match it. The
+`monday_rollover.yml` GitHub Actions workflow sends that header so
+it can trigger rollover from the cloud.
+
+Requests **without** any Authorization header still pass — that's
+the in-browser auto-rollover (`setTimeout` in
+[Static/ipl_glue.js](../Static/ipl_glue.js)) and the Dev Tools
+"Simulate Monday 2:00 PM Rollover" button. Tightening would break
+both. Wrong tokens are rejected hard (401).
+
+### D. `/api/update-match-url` adds a per-match cache wipe
+
+Before the `_push_if_hosted` call, the handler deletes
+`data/matches/match_NN.json` for the affected match. This is the
+*targeted* counterpart of `/api/sync-now`'s global `force_full_rescrape`:
+the workflow checks out a tree where only that one match's cached
+JSON is missing, so when scraper.py runs, only that one match
+re-scrapes from Cricbuzz. Avoids the ~90s cost of a full rescrape
+when the operator only changed one match's URL.
+
+Also: in HOSTED mode the handler does NOT call
+`tasks.start_bg_scrape` (no Cricbuzz egress). The work goes to the
+workflow via `cloud_sync.dispatch_workflow("daily_sync.yml")`. The
+response message says so.
+
+### E. Read endpoints are unchanged
+
+`/api/state`, `/api/leaderboard`, `/api/match-centre`,
+`/api/match-details`, etc. are read-only — they hit the local
+`fantasy.db` and return data. They never push back to git, and they
+benefit transparently from any `git pull` that happened on the most
+recent `/api/sync-now`.
+
+### Auth / config surface for HOSTED mode
+
+Two env vars must be set on the host (Render dashboard):
+
+| Var | Purpose | Used by |
+|---|---|---|
+| `GITHUB_TOKEN` | Fine-grained PAT, `contents:write` + `actions:write` on this one repo | `cloud_sync.commit_and_push` (push), `cloud_sync.dispatch_workflow` (REST API call to `/repos/:owner/:repo/actions/workflows/:file/dispatches`) |
+| `ROLLOVER_TOKEN` | Random string; **same value also added as a GitHub Actions repo secret** so `monday_rollover.yml` can present it on the bearer header | `api_rollover` auth check |
+
+Without `GITHUB_TOKEN`, writes return 200 but silently fail to push
+(local DB has the change; remote doesn't). Without `ROLLOVER_TOKEN`,
+the rollover handler is wide-open — fine for local, not for cloud.
+
 ## Called by / Calls into
 
 - **Called by:**

@@ -13,6 +13,10 @@
 SQLite database**. Every other module that needs to read or write league
 data calls into the `DatabaseManager` class here.
 
+> **Phase 11 addition:** `reload_from_disk()` exists so HOSTED mode's
+> `/api/sync-now` can swap `fantasy.db` underneath a running process.
+> See the "Connection lifecycle and HOSTED reloads" section below.
+
 By design, this file is a **pure clerk**, not a brain:
 
 - It knows how to **read**, **write**, **update**, and **aggregate** the
@@ -115,6 +119,41 @@ no-op.
 - Writes go through `_write()`, which holds a single `threading.Lock`
   (`self._wlock`) and uses `BEGIN IMMEDIATE` — only one writer at a time
   across the whole process.
+
+### 6a. Connection lifecycle and HOSTED reloads (Phase 11)
+
+In HOSTED mode the file backing the DB can change underneath the
+process — `/api/sync-now` does `git pull` which fast-forwards
+`data/fantasy.db` to whatever the workflow or another host pushed.
+Open SQLite connections still point at the inode of the
+*pre-pull* file (Linux semantics: the file is unlinked but the FD
+remains valid against the orphaned bytes), so subsequent reads would
+keep seeing the stale data.
+
+`reload_from_disk()` solves this with a **generation counter**:
+
+```
+self._generation       += 1   # in reload_from_disk()
+self._local.con_gen    = -1   # default per-thread
+# inside _connect():
+if con and con_gen != self._generation:
+    con.close(); con = None
+```
+
+Each thread compares its own `con_gen` to the manager's
+`_generation` on every `_connect()`. If they diverge, the cached
+handle is closed and a fresh one opens against the file currently on
+disk. No iteration over `threading.local`; the reopen is lazy at the
+next acquire on each thread.
+
+**Concurrency safety:** if thread A is mid-read when thread B calls
+`reload_from_disk()`, thread A finishes against the orphaned file
+(consistent snapshot) and only reopens on its *next* `_connect()`.
+SQLite's WAL mode handles the read/write isolation for that window.
+
+**Called by:** `routes.api_sync_now` after a successful
+`cloud_sync.pull_latest()` returns `changed=True`. Never called in
+local mode.
 
 ### 6. Player ID auto-correction on save
 Doesn't live here directly — but `save_next_week()` and `upsert_member()`
