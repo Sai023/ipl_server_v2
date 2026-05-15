@@ -439,6 +439,24 @@ if __name__ == "__main__":
     if IS_HOSTED:
         try:
             import cloud_sync
+            # Loud, visible boot-time config check. The single biggest source
+            # of "buttons return 200 but nothing happens" pain is GITHUB_TOKEN
+            # being unset / misnamed / empty on the host platform — there's
+            # no other way to detect that until something tries to push and
+            # silently fails. Print booleans, never the values.
+            gh_set = bool((os.environ.get("GITHUB_TOKEN")
+                           or os.environ.get("GH_TOKEN") or "").strip())
+            rt_set = bool(os.environ.get("ROLLOVER_TOKEN", "").strip())
+            slug   = cloud_sync._repo_slug() or "<unresolved>"
+            _log(f"HOSTED config: GITHUB_TOKEN={'set' if gh_set else 'MISSING'} "
+                 f"ROLLOVER_TOKEN={'set' if rt_set else 'MISSING'} "
+                 f"repo={slug}")
+            if not gh_set:
+                _log("HOSTED config: WITHOUT GITHUB_TOKEN, /api/sync-now will "
+                     "fail to dispatch the scrape workflow and write endpoints "
+                     "will fail to push back. Add it in Render Environment.",
+                     "warn")
+
             changed, msg = cloud_sync.pull_latest(log=_log)
             _log(f"Boot-time git pull: {msg}")
         except Exception as e:
