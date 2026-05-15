@@ -24,9 +24,12 @@ Design rules:
     a git repo. The same code path must boot cleanly in dev/test setups.
 """
 
+import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Imported lazily to avoid a circular dep with base.py
@@ -187,6 +190,93 @@ def _ensure_identity() -> None:
             )
     except Exception:
         pass
+
+
+def _repo_slug() -> str | None:
+    """
+    Resolve `owner/repo` for the GitHub API. Tries (in order):
+      1. GITHUB_REPOSITORY env var (set automatically in GitHub Actions; can
+         also be set manually in Render env if origin-parsing ever drifts)
+      2. Parse from `git remote get-url origin`
+    Returns None if neither path works.
+    """
+    slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if slug and "/" in slug:
+        return slug
+    try:
+        r = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return None
+        url = r.stdout.strip()
+        # https://github.com/Sai023/ipl_server_v2.git → Sai023/ipl_server_v2
+        # git@github.com:Sai023/ipl_server_v2.git    → Sai023/ipl_server_v2
+        for sep in ("github.com/", "github.com:"):
+            if sep in url:
+                tail = url.split(sep, 1)[1]
+                return tail.removesuffix(".git").strip("/")
+    except Exception:
+        pass
+    return None
+
+
+def dispatch_workflow(workflow_filename: str, ref: str = "main",
+                      log=print) -> tuple[bool, str]:
+    """
+    POST to GitHub's workflow_dispatch endpoint to trigger a workflow run.
+
+    Used by /api/sync-now and /api/update-match-url in HOSTED mode so the
+    user-facing buttons actually cause fresh scrape data to be produced.
+    Render can't reach Cricbuzz directly, but the GitHub Actions runner
+    can fetch scorecards for known cricbuzz_ids — so we ask Actions to do
+    it on our behalf.
+
+    Requires GITHUB_TOKEN with **actions: write** scope (in addition to
+    contents: write for the push path). If the token lacks the scope,
+    GitHub returns 403 and we surface that to the caller.
+
+    Returns (ok, message). Never raises.
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        return False, "GITHUB_TOKEN not set"
+    slug = _repo_slug()
+    if not slug:
+        return False, "could not resolve repo slug (set GITHUB_REPOSITORY env)"
+
+    url = f"https://api.github.com/repos/{slug}/actions/workflows/{workflow_filename}/dispatches"
+    body = json.dumps({"ref": ref}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept":        "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type":  "application/json",
+            "User-Agent":    "ipl-fantasy-host/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            # 204 No Content = success
+            if 200 <= resp.status < 300:
+                return True, f"dispatched {workflow_filename}"
+            return False, f"unexpected status {resp.status}"
+    except urllib.error.HTTPError as e:
+        # 403 = PAT missing actions:write. 404 = workflow filename wrong
+        # or token can't see the repo. 422 = workflow doesn't have
+        # workflow_dispatch trigger.
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            body = ""
+        return False, f"HTTP {e.code}: {body}"
+    except urllib.error.URLError as e:
+        return False, f"network error: {e.reason}"
+    except Exception as e:
+        return False, f"dispatch error: {e}"
 
 
 class _temporary_remote_with_token:

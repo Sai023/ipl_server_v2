@@ -979,13 +979,21 @@ def api_update_match_url():
         con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
         con.commit(); con.close()
         if _IS_HOSTED:
-            # No Cricbuzz egress in cloud \u2014 push the URL change so the local
-            # box / daily_sync.yml workflow picks it up on next run and does
-            # the actual scrape there.
+            # No Cricbuzz egress in cloud \u2014 push the URL change so the GitHub
+            # Actions runner sees the new URL on checkout, then dispatch the
+            # daily_sync workflow so it scrapes immediately rather than
+            # waiting for the next scheduled run at 18:30 / 21:30 UTC.
             _push_if_hosted(f"admin-url:{match_id}={cb_id}")
-            msg = ("URL saved & pushed to git. The scrape will run on the next "
-                   "local discovery (23:55 IST) or cloud safety-net cycle. "
-                   "Refresh later to see scores.")
+            dispatched, dmsg = cloud_sync.dispatch_workflow(
+                "daily_sync.yml", ref="main", log=_log,
+            )
+            if dispatched:
+                msg = ("URL saved, pushed to git, cloud scrape triggered. "
+                       "Click Refresh in 60-90s to see new scores.")
+            else:
+                msg = (f"URL saved & pushed. Scrape NOT triggered: {dmsg}. "
+                       f"Check PAT has actions:write scope. Falls back to "
+                       f"the next scheduled run at 18:30 / 21:30 UTC.")
         else:
             tasks.start_bg_scrape(match_id,BASE_DIR)
             msg = "URL saved. Scraping started in background \u2014 refresh in ~30 seconds."
@@ -1029,10 +1037,15 @@ def api_sync_now():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
 
-    # ── HOSTED mode (Phase 2): git pull instead of Cricbuzz scrape ──────────
-    # The cloud host cannot reach Cricbuzz. Refresh = pull whatever the
-    # operator's local box and the daily_sync.yml workflow have pushed since
-    # the last call. Cheap and synchronous (~1-3s); no background thread.
+    # ── HOSTED mode (Phase 2 + post-deploy fix): pull, then trigger scrape ──
+    # The cloud host cannot reach Cricbuzz. Refresh does TWO things:
+    #   1. git pull --ff-only — picks up anything the daily Action / local
+    #      box / rollover workflow pushed since the last call.
+    #   2. workflow_dispatch on daily_sync.yml — asks the GitHub Actions
+    #      runner to scrape NOW (it CAN reach Cricbuzz for scorecards by
+    #      cricbuzz_id, even though discovery from Actions is blocked).
+    # The user clicks Refresh, sees "Triggered scrape — check back in
+    # 60-90s", clicks Refresh again later to pull the new commit.
     if _IS_HOSTED:
         try:
             changed, msg = cloud_sync.pull_latest(log=_log)
@@ -1047,11 +1060,25 @@ def api_sync_now():
                 except Exception as e:
                     _log(f"DB reload after pull failed (will retry next request): {e}",
                          "warn")
+
+            # Best-effort dispatch. If the PAT lacks actions:write the
+            # request fails 403; we surface that in the response so the
+            # operator can fix the PAT, but the pull half still counts.
+            dispatched, dmsg = cloud_sync.dispatch_workflow(
+                "daily_sync.yml", ref="main", log=_log,
+            )
             return jsonify({
-                "ok":      True,
-                "mode":    "git_pull",
-                "changed": changed,
-                "message": msg,
+                "ok":         True,
+                "mode":       "pull_and_dispatch",
+                "pulled":     changed,
+                "pull_msg":   msg,
+                "dispatched": dispatched,
+                "dispatch_msg": dmsg,
+                "message":    ("Pulled latest + triggered cloud scrape. "
+                               "Click Refresh again in 60-90s to see new scores.")
+                              if dispatched
+                              else (f"Pulled latest. Scrape NOT triggered: {dmsg}. "
+                                    f"Check PAT has actions:write scope."),
             })
         except Exception as e:
             _log(f"POST /api/sync-now (HOSTED): {e}", "error")
