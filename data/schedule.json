@@ -3,7 +3,7 @@
   "ipl_year": 2026,
   "series_id": "9241",
   "series_slug": "indian-premier-league-2026",
-  "last_updated": "2026-05-15T17:50:09+05:30",
+  "last_updated": "2026-05-15T23:55:08+05:30",
   "discovery_source": "bootstrap_from_seed_matches_v3.3+series_id_corrected_9237_to_9241",
   "notes": "Writable source of truth for IPL 2026 schedule. Updated daily by logic/cricbuzz_discovery.py. cricbuzz_id=null means ID not yet discovered. teams[] is derived from title and used for title-keyed merge during discovery (more robust than positional matching). series_id corrected from 9237 to 9241 on 2026-05-14 after resolver discovered the actual IPL 2026 ID from cricbuzz.com homepage.",
   "matches": [
@@ -581,7 +581,7 @@
     },
     {
       "match_no": 53,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152152",
       "title": "CSK vs LSG, 53rd Match",
       "teams": [
         "CSK",
@@ -658,7 +658,7 @@
     },
     {
       "match_no": 60,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152163",
       "title": "KKR vs GT, 60th Match",
       "teams": [
         "KKR",
