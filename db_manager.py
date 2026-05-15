@@ -264,6 +264,11 @@ def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
     date   = m.get("date", m.get("date_label", ""))
     wk     = int(m.get("wk", m.get("week_no", 1)))
     title  = m.get("title", "")
+    # Enrich generic Cricbuzz titles ("1st Match") with team names when possible
+    # so the DB always stores "SRH vs RCB, 1st Match" style — consistent with schedule.json
+    if teams and len(teams) >= 2 and title:
+        if teams[0] not in title and teams[1] not in title:
+            title = f"{teams[0]} vs {teams[1]}, {title}"
     status = m.get("status", "upcoming")
     con.execute("""
         INSERT INTO matches (id,week_no,title,teams_json,date_label,status,raw_json)
@@ -432,38 +437,6 @@ class DatabaseManager:
             "_last_rollover": self.get_meta("_last_rollover", ""),
         }
 
-    def save_state(self, payload: dict) -> str:
-        members = payload.get("members", {})
-        matches = payload.get("matches", [])
-        now_iso = datetime.now(timezone.utc).isoformat()
-        with self._write() as con:
-            row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
-            current_week = row["wn"] if row else 1
-            for name, data in members.items():
-                if not isinstance(data,dict) or not name or len(name)>30: continue
-                tw = data.get("this_week") or {}
-                nw = data.get("next_week") or {}
-                if "this_week" not in data and "team" in data:
-                    tw = {"team": data.get("team",[]), "cap": data.get("cap"), "vc": data.get("vc")}
-                    nw = dict(tw)
-                con.execute("""
-                    INSERT INTO user_selections (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                    VALUES (?,?,?,?,?,?,?,?)
-                    ON CONFLICT(display_name,week_no) DO UPDATE SET
-                        tw_team_json=excluded.tw_team_json, tw_cap_id=excluded.tw_cap_id, tw_vc_id=excluded.tw_vc_id,
-                        nw_team_json=excluded.nw_team_json, nw_cap_id=excluded.nw_cap_id, nw_vc_id=excluded.nw_vc_id
-                """, (name, current_week,
-                      json.dumps(tw.get("team",[]) or []), tw.get("cap"), tw.get("vc"),
-                      json.dumps(nw.get("team",[]) or []), nw.get("cap"), nw.get("vc")))
-            for m in matches:
-                if "id" in m: _upsert_match(con, m)
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
-        for mid in [m["id"] for m in matches if "id" in m and m.get("scores")]:
-            self.recalculate_points(match_id=mid)
-        return now_iso
-
-    # ── Members / Matches ─────────────────────────────────────────────────────
-
     def upsert_member(self, name: str, data: dict) -> None:
         with self._write() as con:
             row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
@@ -542,30 +515,6 @@ class DatabaseManager:
             row = con.execute("SELECT COUNT(*) FROM players WHERE season_pts > 0").fetchone()
             return row[0] if row else 0
 
-    def update_player_points(self) -> int:
-        """Set players.points = SUM of cap/vc-awarded pts across all user weeks."""
-        with self._read() as con:
-            awarded = con.execute("""
-                SELECT je.value AS player_id,
-                       SUM(
-                           CASE
-                               WHEN je.value = us.tw_cap_id THEN ROUND(pmp.base_pts * 2.0)
-                               WHEN je.value = us.tw_vc_id  THEN ROUND(pmp.base_pts * 1.5)
-                               ELSE pmp.base_pts
-                           END
-                       ) AS total_awarded
-                FROM user_selections us, JSON_EACH(us.tw_team_json) AS je
-                INNER JOIN player_match_points pmp
-                    ON pmp.player_id = je.value AND pmp.week_no = us.week_no
-                GROUP BY je.value
-            """).fetchall()
-        pts_map = {r["player_id"]: r["total_awarded"] for r in awarded}
-        with self._write() as con:
-            con.execute("UPDATE players SET points = 0")
-            for pid, pts in pts_map.items():
-                con.execute("UPDATE players SET points = ? WHERE id = ?", (int(pts or 0), pid))
-        return sum(1 for v in pts_map.values() if v and v > 0)
-
     def update_week_points(self) -> int:
         """Recompute week_pts + points_per_match + user_match_points for all rows."""
         with self._read() as con:
@@ -619,7 +568,6 @@ class DatabaseManager:
                     (pts, ppm_json, name, wk)
                 )
                 updated += 1
-        self.update_player_points()
         return updated
 
     # ── Rollover DAO ──────────────────────────────────────────────────────────
@@ -663,21 +611,6 @@ class DatabaseManager:
             )
 
     # ── Queries ───────────────────────────────────────────────────────────────
-
-    def get_user_match_points(self, display_name: str) -> list:
-        with self._read() as con:
-            rows = con.execute("""
-                SELECT ump.display_name, ump.week_no, ump.match_id, ump.pts,
-                       m.title, m.status, m.teams_json
-                FROM user_match_points ump
-                JOIN matches m ON m.id = ump.match_id
-                WHERE ump.display_name = ?
-                ORDER BY ump.week_no, ump.match_id
-            """, (display_name,)).fetchall()
-        return [{"week_no": r["week_no"], "match_id": r["match_id"],
-                 "title": r["title"], "status": r["status"],
-                 "teams": _jloads(r["teams_json"], []), "pts": r["pts"]}
-                for r in rows]
 
     def rebuild_scores_and_points(self, json_dir=None) -> dict:
         if json_dir is None:
@@ -845,11 +778,3 @@ class DatabaseManager:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
         return {"week_no": current_week}
 
-    def reset(self) -> None:
-        with self._write() as con:
-            for t in ("match_scores","player_match_points","user_match_points",
-                      "user_selections","matches","meta"):
-                con.execute(f"DELETE FROM {t}")
-
-
-GoldenDB = DatabaseManager

@@ -1,23 +1,17 @@
 """
 IPL Fantasy 2026 — Database Initialiser                     init_db v1.0.0
 ===========================================================================
-Phase 1 — System Architect.  Strict relocation; zero logic changes.
-Phase 2 — DB_PATH, DATA_DIR, INIT_DB_VER, VERSION_MAP imported from config.
+Startup seeder for players, matches, and history. The schema itself is
+owned by db_manager.py — DatabaseManager._init_schema() is the
+authoritative definition. This file only does the "is the DB empty?
+then run the seed scripts" check on boot.
 
 What lives here
 ---------------
-_SCHEMA         — relocated from db_manager.py (authoritative copy).
-                  db_manager.py retains its own copy for DatabaseManager._init_schema();
-                  full schema consolidation is deferred to a later migration phase.
 _SEED_VERSION   — version guard for history seeding.
-_HISTORY_SEED   — weekly team/cap/vc tuples, relocated from server.py.
-_auto_seed_*    — the three startup seed functions, relocated verbatim from server.py.
+_HISTORY_SEED   — weekly team/cap/vc tuples for W1-W4 (Sai + Moe).
+_auto_seed_*    — the three startup seed functions.
 run_all_sync()  — single public entry point called by server.py on startup.
-
-Dependency graph (Phase 2)
---------------------------
-  server.py  ──import──>  init_db.py  ──import──>  config.py
-                                        └──import──>  DatabaseManager (db_manager.py)
 """
 
 import json as _json
@@ -27,116 +21,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from db_manager import DatabaseManager  # noqa: F401 — used by run_all_sync caller
-from config import DATA_DIR, DB_PATH, INIT_DB_VER, VERSION_MAP  # noqa: F401
+from config import DATA_DIR, DB_PATH
 
 DATA_DIR.mkdir(exist_ok=True)
 
 # ── BASE_DIR is kept local: seed subprocess calls use cwd=str(BASE_DIR) ──────────
 BASE_DIR = Path(__file__).resolve().parent
 
-# ── Schema — relocated from db_manager.py (authoritative copy) ────────────────
-# Note: db_manager.py retains its own copy for DatabaseManager._init_schema().
-# Full schema consolidation (removing the db_manager.py copy) is a later phase.
-
-_SCHEMA = """
-PRAGMA journal_mode  = WAL;
-PRAGMA foreign_keys  = ON;
-
-CREATE TABLE IF NOT EXISTS players (
-    id         TEXT    PRIMARY KEY,
-    name       TEXT    NOT NULL,
-    team       TEXT    NOT NULL,
-    price      REAL    NOT NULL DEFAULT 0 CHECK (price >= 0),
-    role       TEXT    NOT NULL DEFAULT 'BAT' CHECK (role IN ('BAT','BOWL','AR','WK')),
-    season_pts INTEGER NOT NULL DEFAULT 0,
-    points     INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS matches (
-    id            TEXT PRIMARY KEY,
-    week_no       INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
-    title         TEXT NOT NULL DEFAULT '',
-    teams_json    TEXT NOT NULL DEFAULT '[]',
-    date_label    TEXT NOT NULL DEFAULT '',
-    status        TEXT NOT NULL DEFAULT 'upcoming'
-                  CHECK (status IN ('upcoming','live','completed')),
-    scorecard_url TEXT,
-    raw_json      TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS user_selections (
-    display_name    TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
-    week_no         INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
-    tw_team_json    TEXT    NOT NULL DEFAULT '[]',
-    tw_cap_id       TEXT,
-    tw_vc_id        TEXT,
-    nw_team_json    TEXT    NOT NULL DEFAULT '[]',
-    nw_cap_id       TEXT,
-    nw_vc_id        TEXT,
-    week_pts        INTEGER NOT NULL DEFAULT 0,
-    points_per_match TEXT   NOT NULL DEFAULT '{}',
-    PRIMARY KEY (display_name, week_no)
-);
-
-CREATE TABLE IF NOT EXISTS match_scores (
-    match_id       TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-    player_id      TEXT    NOT NULL,
-    runs           INTEGER NOT NULL DEFAULT 0 CHECK (runs >= 0),
-    balls          INTEGER NOT NULL DEFAULT 0 CHECK (balls >= 0),
-    fours          INTEGER NOT NULL DEFAULT 0 CHECK (fours >= 0),
-    sixes          INTEGER NOT NULL DEFAULT 0 CHECK (sixes >= 0),
-    got_out        INTEGER NOT NULL DEFAULT 0 CHECK (got_out  IN (0,1)),
-    duck           INTEGER NOT NULL DEFAULT 0 CHECK (duck     IN (0,1)),
-    overs          REAL    NOT NULL DEFAULT 0 CHECK (overs >= 0),
-    runs_conceded  INTEGER NOT NULL DEFAULT 0 CHECK (runs_conceded >= 0),
-    wickets        INTEGER NOT NULL DEFAULT 0 CHECK (wickets  BETWEEN 0 AND 10),
-    maidens        INTEGER NOT NULL DEFAULT 0 CHECK (maidens  >= 0),
-    lbw_bowled     INTEGER NOT NULL DEFAULT 0 CHECK (lbw_bowled >= 0),
-    catches        INTEGER NOT NULL DEFAULT 0 CHECK (catches  BETWEEN 0 AND 10),
-    stumpings      INTEGER NOT NULL DEFAULT 0 CHECK (stumpings >= 0),
-    run_out_direct INTEGER NOT NULL DEFAULT 0 CHECK (run_out_direct >= 0),
-    run_out_assist INTEGER NOT NULL DEFAULT 0 CHECK (run_out_assist >= 0),
-    played         INTEGER NOT NULL DEFAULT 0 CHECK (played   IN (0,1)),
-    raw_score_json TEXT    NOT NULL DEFAULT '{}',
-    PRIMARY KEY (match_id, player_id)
-);
-
-CREATE TABLE IF NOT EXISTS player_match_points (
-    match_id      TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-    player_id     TEXT    NOT NULL,
-    week_no       INTEGER NOT NULL,
-    base_pts      INTEGER NOT NULL DEFAULT 0,
-    multiplier    REAL    NOT NULL DEFAULT 1.0 CHECK (multiplier IN (1.0, 1.5, 2.0)),
-    final_pts     REAL    NOT NULL DEFAULT 0,
-    calculated_at TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (match_id, player_id)
-);
-
-CREATE TABLE IF NOT EXISTS user_match_points (
-    display_name TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
-    week_no      INTEGER NOT NULL,
-    match_id     TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
-    pts          INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (display_name, match_id)
-);
-
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_us_name     ON user_selections (display_name);
-CREATE INDEX IF NOT EXISTS idx_us_week     ON user_selections (week_no);
-CREATE INDEX IF NOT EXISTS idx_ms_match    ON match_scores (match_id);
-CREATE INDEX IF NOT EXISTS idx_pmp_player  ON player_match_points (player_id);
-CREATE INDEX IF NOT EXISTS idx_pmp_week    ON player_match_points (week_no);
-CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, player_id);
-CREATE INDEX IF NOT EXISTS idx_ump_name    ON user_match_points (display_name);
-CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
-"""
-
-# ── History seed data — relocated verbatim from server.py ─────────────────────
+# ── History seed data ─────────────────────────────────────────────────────────
 # RULE: Every week MUST have its own explicit variable — never alias W3=W2.
 # To add W5: define _SAI_W5_TEAM/_MOE_W5_TEAM, add to _HISTORY_SEED, bump _SEED_VERSION.
 
@@ -318,15 +210,11 @@ def _auto_seed_history_if_needed():
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def run_all_sync(db=None):
+def run_all_sync():
     """
-    Single startup call for server.py (Phase 1/2).
-    Replaces the three individual _auto_seed_* calls that previously
-    lived inline in server.py's __main__ block.
-
-    Execution order is preserved: players → matches → history.
-    `db` (a DatabaseManager instance) is accepted for forward-compat but is
-    not used in Phase 1/2 — the seed functions each open their own connections.
+    Single startup call for server.py. Runs the three auto-seed checks
+    in order: players → matches → history. Each function opens its own
+    connection and is idempotent.
     """
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()

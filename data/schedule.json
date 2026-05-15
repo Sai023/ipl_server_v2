@@ -1,0 +1,813 @@
+{
+  "schema_version": "1.0",
+  "ipl_year": 2026,
+  "series_id": "9241",
+  "series_slug": "indian-premier-league-2026",
+  "last_updated": "2026-05-15T17:50:09+05:30",
+  "discovery_source": "bootstrap_from_seed_matches_v3.3+series_id_corrected_9237_to_9241",
+  "notes": "Writable source of truth for IPL 2026 schedule. Updated daily by logic/cricbuzz_discovery.py. cricbuzz_id=null means ID not yet discovered. teams[] is derived from title and used for title-keyed merge during discovery (more robust than positional matching). series_id corrected from 9237 to 9241 on 2026-05-14 after resolver discovered the actual IPL 2026 ID from cricbuzz.com homepage.",
+  "matches": [
+    {
+      "match_no": 1,
+      "cricbuzz_id": "149618",
+      "title": "SRH vs RCB, 1st Match",
+      "teams": [
+        "SRH",
+        "RCB"
+      ],
+      "date": "2026-03-28",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 2,
+      "cricbuzz_id": "149629",
+      "title": "KKR vs MI, 2nd Match",
+      "teams": [
+        "KKR",
+        "MI"
+      ],
+      "date": "2026-03-29",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 3,
+      "cricbuzz_id": "149640",
+      "title": "CSK vs RR, 3rd Match",
+      "teams": [
+        "CSK",
+        "RR"
+      ],
+      "date": "2026-03-30",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 4,
+      "cricbuzz_id": "149651",
+      "title": "GT vs PBKS, 4th Match",
+      "teams": [
+        "GT",
+        "PBKS"
+      ],
+      "date": "2026-03-31",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 5,
+      "cricbuzz_id": "149662",
+      "title": "LSG vs DC, 5th Match",
+      "teams": [
+        "LSG",
+        "DC"
+      ],
+      "date": "2026-04-01",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 6,
+      "cricbuzz_id": "149673",
+      "title": "SRH vs KKR, 6th Match",
+      "teams": [
+        "SRH",
+        "KKR"
+      ],
+      "date": "2026-04-02",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 7,
+      "cricbuzz_id": "149684",
+      "title": "CSK vs PBKS, 7th Match",
+      "teams": [
+        "CSK",
+        "PBKS"
+      ],
+      "date": "2026-04-03",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 8,
+      "cricbuzz_id": "149695",
+      "title": "MI vs DC, 8th Match",
+      "teams": [
+        "MI",
+        "DC"
+      ],
+      "date": "2026-04-04",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 9,
+      "cricbuzz_id": "149699",
+      "title": "RR vs GT, 9th Match",
+      "teams": [
+        "RR",
+        "GT"
+      ],
+      "date": "2026-04-04",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 10,
+      "cricbuzz_id": "149710",
+      "title": "SRH vs LSG, 10th Match",
+      "teams": [
+        "SRH",
+        "LSG"
+      ],
+      "date": "2026-04-05",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 11,
+      "cricbuzz_id": "149721",
+      "title": "RCB vs CSK, 11th Match",
+      "teams": [
+        "RCB",
+        "CSK"
+      ],
+      "date": "2026-04-05",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 12,
+      "cricbuzz_id": "149732",
+      "title": "KKR vs PBKS, 12th Match",
+      "teams": [
+        "KKR",
+        "PBKS"
+      ],
+      "date": "2026-04-06",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 13,
+      "cricbuzz_id": "149743",
+      "title": "RR vs MI, 13th Match",
+      "teams": [
+        "RR",
+        "MI"
+      ],
+      "date": "2026-04-07",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 14,
+      "cricbuzz_id": "149746",
+      "title": "GT vs DC, 14th Match",
+      "teams": [
+        "GT",
+        "DC"
+      ],
+      "date": "2026-04-08",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 15,
+      "cricbuzz_id": "149757",
+      "title": "KKR vs LSG, 15th Match",
+      "teams": [
+        "KKR",
+        "LSG"
+      ],
+      "date": "2026-04-09",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 16,
+      "cricbuzz_id": "149768",
+      "title": "RCB vs RR, 16th Match",
+      "teams": [
+        "RCB",
+        "RR"
+      ],
+      "date": "2026-04-10",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 17,
+      "cricbuzz_id": "149779",
+      "title": "PBKS vs SRH, 17th Match",
+      "teams": [
+        "PBKS",
+        "SRH"
+      ],
+      "date": "2026-04-11",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 18,
+      "cricbuzz_id": "149790",
+      "title": "CSK vs DC, 18th Match",
+      "teams": [
+        "CSK",
+        "DC"
+      ],
+      "date": "2026-04-11",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 19,
+      "cricbuzz_id": "149801",
+      "title": "LSG vs GT, 19th Match",
+      "teams": [
+        "LSG",
+        "GT"
+      ],
+      "date": "2026-04-12",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 20,
+      "cricbuzz_id": "149812",
+      "title": "MI vs RCB, 20th Match",
+      "teams": [
+        "MI",
+        "RCB"
+      ],
+      "date": "2026-04-12",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 21,
+      "cricbuzz_id": "151752",
+      "title": "SRH vs RR, 21st Match",
+      "teams": [
+        "SRH",
+        "RR"
+      ],
+      "date": "2026-04-13",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 22,
+      "cricbuzz_id": "151763",
+      "title": "CSK vs KKR, 22nd Match",
+      "teams": [
+        "CSK",
+        "KKR"
+      ],
+      "date": "2026-04-14",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 23,
+      "cricbuzz_id": "151774",
+      "title": "RCB vs LSG, 23rd Match",
+      "teams": [
+        "RCB",
+        "LSG"
+      ],
+      "date": "2026-04-15",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 24,
+      "cricbuzz_id": "151785",
+      "title": "MI vs PBKS, 24th Match",
+      "teams": [
+        "MI",
+        "PBKS"
+      ],
+      "date": "2026-04-16",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 25,
+      "cricbuzz_id": "151796",
+      "title": "GT vs KKR, 25th Match",
+      "teams": [
+        "GT",
+        "KKR"
+      ],
+      "date": "2026-04-17",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 26,
+      "cricbuzz_id": "151807",
+      "title": "DC vs RCB, 26th Match",
+      "teams": [
+        "DC",
+        "RCB"
+      ],
+      "date": "2026-04-18",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 27,
+      "cricbuzz_id": "151818",
+      "title": "CSK vs SRH, 27th Match",
+      "teams": [
+        "CSK",
+        "SRH"
+      ],
+      "date": "2026-04-18",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 28,
+      "cricbuzz_id": "151829",
+      "title": "RR vs KKR, 28th Match",
+      "teams": [
+        "RR",
+        "KKR"
+      ],
+      "date": "2026-04-19",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 29,
+      "cricbuzz_id": "151840",
+      "title": "LSG vs PBKS, 29th Match",
+      "teams": [
+        "LSG",
+        "PBKS"
+      ],
+      "date": "2026-04-19",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 30,
+      "cricbuzz_id": "151845",
+      "title": "MI vs GT, 30th Match",
+      "teams": [
+        "MI",
+        "GT"
+      ],
+      "date": "2026-04-20",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 31,
+      "cricbuzz_id": "151856",
+      "title": "SRH vs DC, 31st Match",
+      "teams": [
+        "SRH",
+        "DC"
+      ],
+      "date": "2026-04-21",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 32,
+      "cricbuzz_id": "151867",
+      "title": "RR vs LSG, 32nd Match",
+      "teams": [
+        "RR",
+        "LSG"
+      ],
+      "date": "2026-04-22",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 33,
+      "cricbuzz_id": "151878",
+      "title": "MI vs CSK, 33rd Match",
+      "teams": [
+        "MI",
+        "CSK"
+      ],
+      "date": "2026-04-23",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 34,
+      "cricbuzz_id": "151889",
+      "title": "GT vs RCB, 34th Match",
+      "teams": [
+        "GT",
+        "RCB"
+      ],
+      "date": "2026-04-24",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 35,
+      "cricbuzz_id": "151891",
+      "title": "PBKS vs DC, 35th Match",
+      "teams": [
+        "PBKS",
+        "DC"
+      ],
+      "date": "2026-04-25",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 36,
+      "cricbuzz_id": "151902",
+      "title": "RR vs SRH, 36th Match",
+      "teams": [
+        "RR",
+        "SRH"
+      ],
+      "date": "2026-04-25",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 37,
+      "cricbuzz_id": "151913",
+      "title": "GT vs CSK, 37th Match",
+      "teams": [
+        "GT",
+        "CSK"
+      ],
+      "date": "2026-04-26",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 38,
+      "cricbuzz_id": "151924",
+      "title": "LSG vs KKR, 38th Match",
+      "teams": [
+        "LSG",
+        "KKR"
+      ],
+      "date": "2026-04-26",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 39,
+      "cricbuzz_id": "151935",
+      "title": "DC vs RCB, 39th Match",
+      "teams": [
+        "DC",
+        "RCB"
+      ],
+      "date": "2026-04-27",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 40,
+      "cricbuzz_id": "151943",
+      "title": "PBKS vs RR, 40th Match",
+      "teams": [
+        "PBKS",
+        "RR"
+      ],
+      "date": "2026-04-28",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 41,
+      "cricbuzz_id": "151954",
+      "title": "MI vs SRH, 41st Match",
+      "teams": [
+        "MI",
+        "SRH"
+      ],
+      "date": "2026-04-29",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 42,
+      "cricbuzz_id": "151965",
+      "title": "GT vs RCB, 42nd Match",
+      "teams": [
+        "GT",
+        "RCB"
+      ],
+      "date": "2026-04-30",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 43,
+      "cricbuzz_id": "151976",
+      "title": "RR vs DC, 43rd Match",
+      "teams": [
+        "RR",
+        "DC"
+      ],
+      "date": "2026-05-01",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 44,
+      "cricbuzz_id": "151987",
+      "title": "CSK vs MI, 44th Match",
+      "teams": [
+        "CSK",
+        "MI"
+      ],
+      "date": "2026-05-02",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 45,
+      "cricbuzz_id": "151998",
+      "title": "SRH vs KKR, 45th Match",
+      "teams": [
+        "SRH",
+        "KKR"
+      ],
+      "date": "2026-05-03",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 46,
+      "cricbuzz_id": "152009",
+      "title": "GT vs PBKS, 46th Match",
+      "teams": [
+        "GT",
+        "PBKS"
+      ],
+      "date": "2026-05-03",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 47,
+      "cricbuzz_id": "152020",
+      "title": "MI vs LSG, 47th Match",
+      "teams": [
+        "MI",
+        "LSG"
+      ],
+      "date": "2026-05-04",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 48,
+      "cricbuzz_id": "152031",
+      "title": "DC vs CSK, 48th Match",
+      "teams": [
+        "DC",
+        "CSK"
+      ],
+      "date": "2026-05-05",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 49,
+      "cricbuzz_id": "152042",
+      "title": "SRH vs PBKS, 49th Match",
+      "teams": [
+        "SRH",
+        "PBKS"
+      ],
+      "date": "2026-05-06",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 50,
+      "cricbuzz_id": null,
+      "title": "LSG vs RCB, 50th Match",
+      "teams": [
+        "LSG",
+        "RCB"
+      ],
+      "date": "2026-05-07",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 51,
+      "cricbuzz_id": null,
+      "title": "DC vs KKR, 51st Match",
+      "teams": [
+        "DC",
+        "KKR"
+      ],
+      "date": "2026-05-08",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 52,
+      "cricbuzz_id": null,
+      "title": "RR vs GT, 52nd Match",
+      "teams": [
+        "RR",
+        "GT"
+      ],
+      "date": "2026-05-09",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 53,
+      "cricbuzz_id": null,
+      "title": "CSK vs LSG, 53rd Match",
+      "teams": [
+        "CSK",
+        "LSG"
+      ],
+      "date": "2026-05-10",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 54,
+      "cricbuzz_id": null,
+      "title": "RCB vs MI, 54th Match",
+      "teams": [
+        "RCB",
+        "MI"
+      ],
+      "date": "2026-05-10",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 55,
+      "cricbuzz_id": null,
+      "title": "PBKS vs DC, 55th Match",
+      "teams": [
+        "PBKS",
+        "DC"
+      ],
+      "date": "2026-05-11",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 56,
+      "cricbuzz_id": null,
+      "title": "GT vs SRH, 56th Match",
+      "teams": [
+        "GT",
+        "SRH"
+      ],
+      "date": "2026-05-12",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 57,
+      "cricbuzz_id": "152130",
+      "title": "RCB vs KKR, 57th Match",
+      "teams": [
+        "RCB",
+        "KKR"
+      ],
+      "date": "2026-05-13",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 58,
+      "cricbuzz_id": "152141",
+      "title": "PBKS vs MI, 58th Match",
+      "teams": [
+        "PBKS",
+        "MI"
+      ],
+      "date": "2026-05-14",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 59,
+      "cricbuzz_id": null,
+      "title": "LSG vs CSK, 59th Match",
+      "teams": [
+        "LSG",
+        "CSK"
+      ],
+      "date": "2026-05-15",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 60,
+      "cricbuzz_id": null,
+      "title": "KKR vs GT, 60th Match",
+      "teams": [
+        "KKR",
+        "GT"
+      ],
+      "date": "2026-05-16",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 61,
+      "cricbuzz_id": null,
+      "title": "PBKS vs RCB, 61st Match",
+      "teams": [
+        "PBKS",
+        "RCB"
+      ],
+      "date": "2026-05-17",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 62,
+      "cricbuzz_id": null,
+      "title": "DC vs RR, 62nd Match",
+      "teams": [
+        "DC",
+        "RR"
+      ],
+      "date": "2026-05-17",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 63,
+      "cricbuzz_id": null,
+      "title": "CSK vs SRH, 63rd Match",
+      "teams": [
+        "CSK",
+        "SRH"
+      ],
+      "date": "2026-05-18",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 64,
+      "cricbuzz_id": null,
+      "title": "RR vs LSG, 64th Match",
+      "teams": [
+        "RR",
+        "LSG"
+      ],
+      "date": "2026-05-19",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 65,
+      "cricbuzz_id": null,
+      "title": "KKR vs MI, 65th Match",
+      "teams": [
+        "KKR",
+        "MI"
+      ],
+      "date": "2026-05-20",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 66,
+      "cricbuzz_id": null,
+      "title": "CSK vs GT, 66th Match",
+      "teams": [
+        "CSK",
+        "GT"
+      ],
+      "date": "2026-05-21",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 67,
+      "cricbuzz_id": null,
+      "title": "SRH vs RCB, 67th Match",
+      "teams": [
+        "SRH",
+        "RCB"
+      ],
+      "date": "2026-05-22",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 68,
+      "cricbuzz_id": null,
+      "title": "LSG vs PBKS, 68th Match",
+      "teams": [
+        "LSG",
+        "PBKS"
+      ],
+      "date": "2026-05-23",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 69,
+      "cricbuzz_id": null,
+      "title": "MI vs RR, 69th Match",
+      "teams": [
+        "MI",
+        "RR"
+      ],
+      "date": "2026-05-24",
+      "time_ist": "15:30"
+    },
+    {
+      "match_no": 70,
+      "cricbuzz_id": null,
+      "title": "KKR vs DC, 70th Match",
+      "teams": [
+        "KKR",
+        "DC"
+      ],
+      "date": "2026-05-24",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 71,
+      "cricbuzz_id": null,
+      "title": "Qualifier 1",
+      "teams": [],
+      "date": "2026-05-27",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 72,
+      "cricbuzz_id": null,
+      "title": "Eliminator",
+      "teams": [],
+      "date": "2026-05-28",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 73,
+      "cricbuzz_id": null,
+      "title": "Qualifier 2",
+      "teams": [],
+      "date": "2026-05-30",
+      "time_ist": "19:30"
+    },
+    {
+      "match_no": 74,
+      "cricbuzz_id": null,
+      "title": "Final",
+      "teams": [],
+      "date": "2026-05-31",
+      "time_ist": "19:30"
+    }
+  ]
+}

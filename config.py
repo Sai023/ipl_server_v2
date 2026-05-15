@@ -1,5 +1,5 @@
 """
-IPL Fantasy 2026 — Global Configuration                     config v1.0.0
+IPL Fantasy 2026 — Global Configuration                     config v1.1.0
 ===========================================================================
 Phase 2 — Authoritative source for all system constants and version strings.
 Phase 3 — Added TASKS_VER; bumped SCRAPER_VER to 10.9.
@@ -9,6 +9,13 @@ Phase 6 — SCORING_ENGINE_VER to 1.1.0; debug_calc_pts; UTC comment fixed.
 Phase 7 — routes.py extracted from server.py; APP_VERSION 2.0.0-stable.
 Phase 8 — ROUTES_VER 1.1.0: season_pts scouting badges + mobile UX fix.
            APP_VERSION 2.1.0.
+Phase 9 — Daily auto-sync architecture (JSON-schedule refactor):
+           • SERVER_VER  → 13.3   (start_daily_discovery_scheduler hook)
+           • ROUTES_VER  → 1.4.0  (Match Centre v1.3.0 + /api/sync-now v1.4.0)
+           • SCRAPER_VER → 11.0   (FIX-020/021/022/023, schedule.json consumer)
+           • TASKS_VER   → 2.0.0  (APScheduler daily 23:55 IST job, sync pipeline)
+           • New pins: SEED_MATCHES_VER, CRICBUZZ_DISCOVERY_VER
+           • APP_VERSION 2.2.0.  See ROADMAP in VERSION_MAP below.
 
 All scripts import from here; no hardcoded paths or versions elsewhere.
 
@@ -34,20 +41,24 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.3.0"
 
 # Per-script version pins
-SERVER_VER  = "13.0"   # Phase 7: routes extracted to routes.py (Blueprint)
-ROUTES_VER  = "1.1.0"  # Phase 8: season_pts in /api/players; mobile UX fix
-DB_VER      = "5.9"    # Phase 5: pure DAO
-SCRAPER_VER = "10.11"  # Resilience: FIX-015/016/017/018
-INIT_DB_VER = "1.0.0"
-TASKS_VER   = "1.0.0"
+SERVER_VER       = "13.3"   # Phase 9: start_daily_discovery_scheduler on boot
+ROUTES_VER       = "1.5.0"  # Phase 10: /api/matches-status + teams_json, date_label, dup detection
+DB_VER           = "6.0"    # Phase 10: _upsert_match enriches title with teams
+SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
+                            #          single discovery code path, self-healing _reset_url
+INIT_DB_VER      = "1.0.0"  # (unchanged)
+TASKS_VER        = "2.0.0"  # Phase 9: APScheduler daily 23:55 IST + run_discovery_and_scrape
+SEED_MATCHES_VER = "4.1"    # Phase 10: populate teams_json from title; always refresh title in DB
 
 # logic/ engine versions
-SCORING_ENGINE_VER  = "1.1.0"  # Phase 6: debug_calc_pts() added
-ROLLOVER_ENGINE_VER = "1.0.0"
-FUZZY_MATCH_VER     = "1.1.0"  # Resilience: _generate_dynamic_player()
+SCORING_ENGINE_VER      = "1.1.0"  # Phase 6: debug_calc_pts() added       (unchanged)
+ROLLOVER_ENGINE_VER     = "1.0.0"  # (unchanged)
+FUZZY_MATCH_VER         = "1.1.0"  # Resilience: _generate_dynamic_player()  (unchanged)
+CRICBUZZ_DISCOVERY_VER  = "1.2.0"  # Phase 9: title-keyed merge, multi-URL scrape,
+                                   #          IPL 2026 series ID corrected to 9241
 
 VERSION_MAP = {
     "1.0.0":        "Phase 1 — Relocated _SCHEMA + _auto_seed_* from server.py / db_manager.py",
@@ -58,4 +69,12 @@ VERSION_MAP = {
     "6.0.0":        "Phase 6 — Full-Stack Verified: version handshake, Moe/Sai audit, UTC fix",
     "2.0.0-stable": "Phase 7 — Cleanup: routes.py Blueprint, SKILL.md consolidated",
     "2.1.0":        "Phase 8 — Scouting: season_pts badges in Next Week tab; mobile keyboard fix",
+    "2.2.0":        "Phase 9 — Daily auto-sync: data/schedule.json source-of-truth, "
+                    "logic/cricbuzz_discovery, APScheduler 23:55 IST in-server cron, "
+                    "/api/sync-now, GH Actions workflow simplified to cloud safety-net. "
+                    "Root-cause fix: IPL 2026 series_id 9237 → 9241.",
+    "2.3.0":        "Phase 10 — Admin Tab overhaul: consistent 'M{n} · TEAM vs TEAM' titles, "
+                    "teams_json populated by seed_to_db + _upsert_match, "
+                    "duplicate Cricbuzz ID detection with red highlight, "
+                    "clickable scorecard link in Admin Tab.",
 }

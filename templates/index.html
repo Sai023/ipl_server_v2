@@ -18,10 +18,10 @@ var BUDGET_TOTAL=100.0,XI_SIZE=11;
 
 // ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 var _state=null,_leaderboard=null,_players=null,_username=null;
-var _activeTab="team",_currentWeek=1,_historyData=null,_historyViewWk=null;
+var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
-var _pickerSearch="",_pickerRole="All",_pickerTeam="All Teams";
-var _ptsData=null,_ptsLoading=false;
+var _pickerSearch="",_pickerRole="All",_pickerTeam="All",_pickerSort="season";
+var _pickerNotice=null,_pickerNoticeTimer=null;
 var _adminMatches=null,_adminFilter="all";
 var members={},matches=[];
 var $app=document.getElementById("app"),$loading=document.getElementById("app-loading"),$errorBanner=document.getElementById("error-banner");
@@ -83,20 +83,20 @@ function login(name){
   if(!name)return false;
   var known=_state?Object.keys(_state.members||{}):[];
   if(known.length>0&&!_state.members[name])return false;
-  _username=name;_activeTab="team";_historyData=null;_historyViewWk=null;
-  _ptsData=null;_adminMatches=null;
+  _username=name;_activeTab="match-centre";_historyData=null;_historyViewWk=null;
+  _adminMatches=null;
+  window.dispatchEvent(new CustomEvent('ipl:state-updated'));
   saveUsername(name);_loadHistory();
   if(_state)render(_state);
   return true;
 }
 function logout(){
   _username=null;clearUsername();_historyData=null;_historyViewWk=null;
-  _nwDraft={team:[],cap:null,vc:null};_ptsData=null;_adminMatches=null;
+  _nwDraft={team:[],cap:null,vc:null};_adminMatches=null;
   if(_state)render(_state);
 }
 function switchTab(tab){
   _activeTab=tab;
-  if(tab==="points"&&!_ptsData&&_username)_loadPoints();
   if(tab==="admin")_loadAdminMatches();
   if(_state)render(_state);
 }
@@ -115,19 +115,6 @@ function _loadHistory(){
     }
     if(_state)render(_state);
   }).catch(function(e){console.error("[IPL] history:",e);});
-}
-
-// ─── POINTS ──────────────────────────────────────────────────────────────────
-function _loadPoints(){
-  if(!_username||_ptsLoading)return;
-  _ptsLoading=true;
-  fetch("/api/player-points/"+encodeURIComponent(_username))
-    .then(function(r){return r.ok?r.json():null;})
-    .then(function(d){
-      _ptsLoading=false;
-      if(d&&d.ok){_ptsData=d;}
-      if(_state&&_activeTab==="points")render(_state);
-    }).catch(function(){_ptsLoading=false;});
 }
 
 // ─── ADMIN MATCHES ────────────────────────────────────────────────────────────
@@ -213,49 +200,106 @@ function _nwSave(){
 }
 function _pickerSetRole(r){_pickerRole=r;if(_state)render(_state);}
 function _pickerSetTeam(t){_pickerTeam=t;if(_state)render(_state);}
+function _pickerShowNotice(msg,type){
+  _pickerNotice={msg:msg,type:type||"info"};
+  if(_pickerNoticeTimer)clearTimeout(_pickerNoticeTimer);
+  _pickerNoticeTimer=setTimeout(function(){_pickerNotice=null;if(_state&&_activeTab==="next")render(_state);},2800);
+  if(_state&&_activeTab==="next")render(_state);
+}
+function _pickerRowClick(id){
+  if(!id)return;
+  var p=resolvePlayer(id);
+  var nm=p.name||id;
+  if(_nwDraft.team.indexOf(id)!==-1){
+    _pickerShowNotice(nm+" is already in your XI","info");
+    return;
+  }
+  if(_nwDraft.team.length>=XI_SIZE){
+    _showSwapModal(id);
+    return;
+  }
+  var cost=_teamCost(_nwDraft.team)+(p.price||0);
+  if(cost>BUDGET_TOTAL+0.001){
+    _pickerShowNotice("Over budget — free up "+((cost-BUDGET_TOTAL).toFixed(1))+" CR first","warn");
+    return;
+  }
+  _nwToggle(id);
+}
 
-function _refreshData(){
-  var btn=document.getElementById("refresh-btn"),msg=document.getElementById("refresh-status");
-  if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">\u27F3</span> Refreshing\u2026';}
-  if(msg){msg.textContent="";msg.className="refresh-status";}
-  if(window.IplPolling)window.IplPolling.stop();
+function _doStateRefresh(onDone){
   var stP=fetch("/api/state",{headers:{"Accept":"application/json","Cache-Control":"no-cache"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var lbP=fetch("/api/leaderboard",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var hP=(_username&&window.IplApi)?window.IplApi.getHistory(_username).catch(function(){return null;}):Promise.resolve(null);
-  var pP=(_username)?fetch("/api/player-points/"+encodeURIComponent(_username)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
-  Promise.all([stP,lbP,hP,pP]).then(function(results){
-    var state=results[0],lb=results[1],history=results[2],pts=results[3];
-    var ts=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  Promise.all([stP,lbP,hP]).then(function(results){
+    var state=results[0],lb=results[1],history=results[2];
     if(state){
       if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;}
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
-      if(pts&&pts.ok)_ptsData=pts;
+      window.dispatchEvent(new CustomEvent('ipl:state-updated'));
       render(state);
-      var ba=document.getElementById("refresh-btn"),ma=document.getElementById("refresh-status");
-      if(ma){ma.textContent="\u2713 Updated "+ts;ma.className="refresh-status ok";}
-      if(ba){ba.disabled=false;ba.innerHTML="\u27F3 Refresh";}
-    } else {
-      var bb=document.getElementById("refresh-btn"),mb=document.getElementById("refresh-status");
-      if(bb){bb.disabled=false;bb.innerHTML="\u27F3 Refresh";}
-      if(mb){mb.textContent="\u2717 Could not reach server";mb.className="refresh-status err";}
     }
-    if(window.IplPolling)window.IplPolling.start();
+    if(onDone)onDone(!!state);
   });
+}
+function _refreshData(){
+  var btn=document.getElementById("refresh-btn"),msg=document.getElementById("refresh-status");
+  if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">\u27F3</span> Syncing\u2026';}
+  if(msg){msg.textContent="\u23F3 Discovering new matches & scraping data\u2026";msg.className="refresh-status";}
+  if(window.IplPolling)window.IplPolling.stop();
+
+  // Step 1: Trigger background discovery + scrape
+  fetch("/api/sync-now",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+    .then(function(r){return r.ok?r.json():null;})
+    .catch(function(){return null;})
+    .then(function(syncResp){
+      var syncOk=syncResp&&syncResp.ok;
+      if(msg){
+        msg.textContent=syncOk
+          ? "\u23F3 Scraping in background (~60s) \u2014 refreshing data now\u2026"
+          : "\u26A0 Sync unavailable \u2014 refreshing cached data\u2026";
+        msg.className="refresh-status";
+      }
+
+      // Step 2: Immediate state refresh (picks up existing data)
+      _doStateRefresh(function(ok){
+        var ts=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+        if(btn){btn.disabled=false;btn.innerHTML="\u27F3 Refresh";}
+        if(ok){
+          if(msg){msg.textContent=syncOk?"\u2713 "+ts+" \u2014 scraping continues in background":"\u2713 Updated "+ts;msg.className="refresh-status ok";}
+        } else {
+          if(msg){msg.textContent="\u2717 Could not reach server";msg.className="refresh-status err";}
+        }
+        if(window.IplPolling)window.IplPolling.start();
+
+        // Step 3: Auto-refresh state again after 75s to pick up scraped data
+        if(syncOk){
+          setTimeout(function(){
+            _doStateRefresh(function(ok2){
+              if(ok2){
+                var ts2=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+                var m2=document.getElementById("refresh-status");
+                if(m2){m2.textContent="\u2713 Sync complete "+ts2;m2.className="refresh-status ok";}
+              }
+            });
+          }, 75000);
+        }
+      });
+    });
 }
 function _simulateRollover(){
   var btn=document.getElementById("rollover-btn"),res=document.getElementById("rollover-result");
   if(btn){btn.disabled=true;btn.textContent="Running\u2026";}
   if(res)res.textContent="";
   window.IplApi.rollover(true).then(function(data){
-    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 2:00 PM Rollover";}
+    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
     if(res){
       if(data&&data.rolled){res.textContent="\u2713 Done! New week: W"+(data.new_week_no||"?");res.style.color="var(--teal)";}
       else{res.textContent="No-op: "+(data&&data.reason?data.reason:"already rolled");res.style.color="var(--muted)";}
     }
-    _historyData=null;_nwDraft={team:[],cap:null,vc:null};_ptsData=null;
+    _historyData=null;_nwDraft={team:[],cap:null,vc:null};
     window.dispatchEvent(new CustomEvent("ipl:saved"));_loadHistory();
   }).catch(function(e){
-    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 2:00 PM Rollover";}
+    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
     if(res){res.textContent="\u2717 Error: "+(e.serverMessage||e.message);res.style.color="#FF6B6B";}
   });
 }
@@ -275,74 +319,111 @@ function _buildXiGrid(teamArr,capId,vcId){
 }
 function _buildNwSquad(){
   var team=_nwDraft.team,cap=_nwDraft.cap,vc=_nwDraft.vc;
-  if(team.length===0)return'<p class="empty" style="margin-bottom:4px">No players selected. Pick from the list below.</p>';
-  var h='<div class="xi-grid">';
+  var h='<div class="nw-squad-label">YOUR DRAFT XI <span style="font-size:10px;color:var(--muted);font-weight:400">\u00B7 '+team.length+'/'+XI_SIZE+' selected</span></div>';
+  h+='<div class="nw-squad">';
   team.forEach(function(id){
     var p=resolvePlayer(id),nm=p.name||id,iC=(id===cap),iV=(id===vc);
-    var cls="xi-card editable"+(iC?" is-cap":iV?" is-vc":"");
-    var avC=_avClass(p.team),sub=[p.role,p.team].filter(Boolean).join(" \u00B7 ");
-    h+='<div class="'+cls+'">'+'<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>'+'<div class="xi-info"><div class="xi-name">'+esc(nm)+'</div>'+(sub?'<div class="xi-sub">'+esc(sub)+'</div>':'')+'</div>'+'<div class="xi-edit-row">'+'<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>'+'<button class="evc-btn'+(iV?' on':'')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">VC</button>'+'<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>'+'</div></div>';
+    var cls="nw-player-row"+(iC?" is-cap":iV?" is-vc":"");
+    var avC=_avClass(p.team);
+    var pts=p.season_pts!=null?p.season_pts:"";
+    h+='<div class="'+cls+'">';
+    h+='<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>';
+    h+='<div class="nw-player-info"><div class="nw-player-name">'+esc(nm)+'</div>';
+    h+='<div class="nw-player-sub">'+_roleBadge(p.role)+(p.team?' '+esc(p.team):'')+(p.price?' \u00B7 '+p.price.toFixed(1)+'CR':'')+'</div></div>';
+    h+='<div class="nw-player-pts">'+pts+'</div>';
+    h+='<div class="nw-player-actions">';
+    h+='<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>';
+    h+='<button class="evc-btn'+(iV?' on':'')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">V</button>';
+    h+='<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>';
+    h+='</div></div>';
   });
-  return h+'</div>';
+  for(var i=team.length;i<XI_SIZE;i++){
+    h+='<div class="nw-add-slot">+ pick a player</div>';
+  }
+  h+='</div>';
+  return h;
 }
 function _buildBudgetBar(){
-  var spent=_teamCost(_nwDraft.team),rem=Math.round((BUDGET_TOTAL-spent)*10)/10;
-  var pct=Math.min(100,(spent/BUDGET_TOTAL)*100),cls=rem<0?"over":rem<10?"warn":"ok";
+  var team=_nwDraft.team,spent=_teamCost(team),rem=Math.round((BUDGET_TOTAL-spent)*10)/10;
+  var pct=Math.min(100,(spent/BUDGET_TOTAL)*100);
   var fillBg=rem<0?"#FF6B6B":rem<10?"var(--gold)":"var(--teal)";
-  return'<div class="budget-bar"><div><div class="budget-label">Budget</div><div class="budget-amount '+cls+'">'+(rem<0?'\u2212':'')+Math.abs(rem).toFixed(1)+' CR left</div></div><div class="budget-track"><div class="budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div><div style="font-size:11px;color:var(--muted);min-width:80px;text-align:right">'+spent.toFixed(1)+' / '+BUDGET_TOTAL.toFixed(1)+' CR</div></div>';
+  var remCls=rem<0?"over":rem<10?"warn":"ok";
+  var roles={WK:0,BAT:0,AR:0,BOWL:0};
+  team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
+  var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001;
+  var saveTitle=!canSave?(count<XI_SIZE?"Select all "+XI_SIZE+" players first":"Over 100 CR budget"):"";
+  var h='<div class="nw-budget-bar">';
+  h+='<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>';
+  h+='<div class="nw-budget-track"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>';
+  h+='<div class="nw-role-pills">';
+  ['WK','BAT','AR','BOWL'].forEach(function(r){h+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
+  h+='</div>';
+  h+='<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>';
+  h+='<button id="nw-save-btn" class="btn btn-gold" onclick="_nwSave()"'+(!canSave?' disabled title="'+esc(saveTitle)+'"':'')+'>Save Draft</button>';
+  h+='</div>';
+  h+='<span id="nw-save-msg" class="save-status" style="font-size:11px;display:block;text-align:right;min-height:14px;margin-bottom:4px"></span>';
+  return h;
 }
 function _buildPicker(){
   var allP=_allPlayers(),teams=[],ts={};
   allP.forEach(function(p){if(p.team&&!ts[p.team]){ts[p.team]=true;teams.push(p.team);}});
   teams.sort();
-  var ptsMap={};
-  if(_ptsData&&_ptsData.players){
-    _ptsData.players.forEach(function(pp){
-      if(pp.id)ptsMap[pp.id]=pp.total_pts;
-      if(pp.name)ptsMap[pp.name.toLowerCase()]=pp.total_pts;
-    });
-  }
   var q=_pickerSearch.toLowerCase().trim();
   var filtered=allP.filter(function(p){
     if(_pickerRole!=="All"&&p.role!==_pickerRole)return false;
-    if(_pickerTeam!=="All Teams"&&p.team!==_pickerTeam)return false;
+    if(_pickerTeam!=="All"&&p.team!==_pickerTeam)return false;
     if(q&&(p.name+" "+(p.team||"")).toLowerCase().indexOf(q)===-1)return false;
     return true;
   });
+  var sv=_pickerSort||"season";
+  filtered.sort(function(a,b){
+    if(sv==="price")return(b.price||0)-(a.price||0);
+    if(sv==="name")return a.name<b.name?-1:1;
+    return(b.season_pts||0)-(a.season_pts||0);
+  });
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
   var xi_full=_nwDraft.team.length>=XI_SIZE,rem=_remaining();
-  var lockMsg="";
-  if(xi_full&&rem>=-0.001)lockMsg="\uD83D\uDD12 XI complete \u2014 tap any player below to swap";
-  else if(rem<=0)lockMsg="\uD83D\uDCB8 Budget limit reached \u2014 remove a player to free up funds";
-  var h='<div class="picker-shell"><div class="picker-toolbar"><div class="picker-search"><span style="color:var(--muted);font-size:13px">\uD83D\uDD0D</span><input id="picker-search-input" type="text" placeholder="Search by name or team\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"></div><div class="picker-filters">';
-  ["All","WK","BAT","AR","BOWL"].forEach(function(r){
-    var cls="pf-btn"+(_pickerRole===r?" active":""),lbl=r==="All"?"All":r==="WK"?"\uD83E\uDD4E WK":r==="BAT"?"\u26A1 BAT":r==="AR"?"\uD83C\uDF00 AR":"\uD83C\uDFCF BOWL";
-    h+='<button class="'+cls+'" onclick="_pickerRole=\''+r+'\';if(_state)render(_state)">'+lbl+'</button>';
-  });
-  h+='</div><div class="picker-filters">';
-  ["All Teams"].concat(teams).forEach(function(t){
-    var cls="pf-btn"+(_pickerTeam===t?" active":"");
-    h+='<button class="'+cls+'" onclick="_pickerTeam=\''+escAttr(t)+'\';if(_state)render(_state)">'+esc(t)+'</button>';
-  });
-  h+='</div></div><div class="picker-list">';
-  if(lockMsg)h+='<div class="picker-lockout-banner">'+esc(lockMsg)+'</div>';
-  if(filtered.length===0)h+='<div class="picker-empty">No players match.</div>';
-  else filtered.forEach(function(p){
-    var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
-    var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
-    var cls="picker-row"+(isSel?" selected":"")+(isFull?" full-xi":"")+((!xi_full&&over&&!isSel)?" over-budget":"");
-    var lockStyle=over?' style="opacity:0.60;pointer-events:none;"':'';
-    var oc;
-    if(isSel){oc=' onclick="_nwToggle(\''+escAttr(key)+'\')"';}
-    else if(xi_full){oc=' onclick="_showSwapModal(\''+escAttr(key)+'\')"';}
-    else if(!over){oc=' onclick="_nwToggle(\''+escAttr(key)+'\')"';}
-    else{oc='';}
-    var disp=p.name+(p.team?" - "+p.team:"");
-    var pts=ptsMap[key]!=null?ptsMap[key]:(ptsMap[(p.name||'').toLowerCase()]!=null?ptsMap[(p.name||'').toLowerCase()]:null);
-    var priceHtml=(p.price?p.price.toFixed(1)+' CR':'')+(pts!=null?'<br><span class="prow-pts">'+pts+' PTS</span>':'');
-    h+='<div class="'+cls+'"'+(oc||'')+lockStyle+'><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div><div class="prow-info"><div class="prow-name">'+esc(disp)+'</div>'+(p.role?'<div class="prow-sub">'+esc(p.role)+'</div>':'')+'</div><div class="prow-price">'+priceHtml+'</div><div class="prow-tick">\u2713</div></div>';
-  });
-  return h+'</div></div>';
+  var h='<div class="picker-shell"><div class="picker-toolbar">';
+  if(_pickerNotice){
+    var ncolor=_pickerNotice.type==="warn"?"#FF6B6B":"var(--teal)";
+    var nbg=_pickerNotice.type==="warn"?"rgba(255,107,107,.12)":"rgba(46,204,170,.12)";
+    h+='<div class="picker-notice" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
+  }
+  h+='<div class="picker-top-bar"><div class="picker-search" style="flex:1;margin-bottom:0"><span style="color:var(--muted);font-size:13px">\uD83D\uDD0D</span><input id="picker-search-input" type="text" placeholder="Search players\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"></div>';
+  h+='<span class="picker-count-badge">'+filtered.length+'</span>';
+  h+='<select class="picker-sort-sel" onchange="_pickerSort=this.value;if(_state)render(_state)">';
+  [{v:"season",l:"Season pts"},{v:"price",l:"Price"},{v:"name",l:"Name"}].forEach(function(o){h+='<option value="'+o.v+'"'+(sv===o.v?" selected":"")+'>Sort: '+o.l+'</option>';});
+  h+='</select></div>';
+  h+='<div class="picker-filters" style="margin-top:8px">';
+  ["All"].concat(teams).forEach(function(t){h+='<button class="pf-btn'+(_pickerTeam===t?" active":"")+'" onclick="_pickerTeam=\''+escAttr(t)+'\';if(_state)render(_state)">'+esc(t)+'</button>';});
+  h+='</div><div class="picker-filters" style="margin-top:4px">';
+  ["All","WK","BAT","AR","BOWL"].forEach(function(r){h+='<button class="pf-btn'+(_pickerRole===r?" active":"")+'" onclick="_pickerRole=\''+r+'\';if(_state)render(_state)">'+r+'</button>';});
+  h+='</div></div>';
+  h+='<div class="picker-table-wrap"><table class="picker-tbl"><thead><tr><th>Player</th><th>Role</th><th>Team</th><th class="num">Season</th><th class="num">Price</th><th></th></tr></thead><tbody>';
+  if(filtered.length===0){
+    h+='<tr><td colspan="6" class="picker-empty">No players match.</td></tr>';
+  } else {
+    filtered.forEach(function(p){
+      var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
+      var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
+      var btnCls="padd-btn"+(isSel?" p-sel":isFull?" p-full":over?" p-over":"");
+      var btnLbl=isSel?"\u2713 In":isFull?"\u21C4 Swap":"Add";
+      var spts=p.season_pts!=null?p.season_pts:"\u2014";
+      var rowStyle='cursor:pointer'+(over?';opacity:0.55':'');
+      var rowOc=' onclick="_pickerRowClick(\''+escAttr(key)+'\')"';
+      var btnOc=' onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')"';
+      h+='<tr class="'+(isSel?"p-sel":"")+'" style="'+rowStyle+'"'+rowOc+'>'+
+        '<td><div style="display:flex;align-items:center;gap:7px"><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+esc(p.name)+'</div></td>'+
+        '<td>'+_roleBadge(p.role)+'</td>'+
+        '<td style="color:var(--muted);font-size:11px">'+esc(p.team||"\u2014")+'</td>'+
+        '<td class="num p-pts">'+spts+'</td>'+
+        '<td class="num p-price">'+(p.price?p.price.toFixed(1):"\u2014")+'</td>'+
+        '<td><button class="'+btnCls+'"'+btnOc+'>'+btnLbl+'</button></td>'+
+        '</tr>';
+    });
+  }
+  h+='</tbody></table></div></div>';
+  return h;
 }
 
 // ─── PITCH VIEW ───────────────────────────────────────────────────────────────
@@ -391,31 +472,13 @@ function _buildThisWeekCard(){
   return h+'</div>';
 }
 function _buildNextWeekCard(){
-  var count=_nwDraft.team.length,rem=_remaining(),canSave=count===XI_SIZE&&rem>=-0.001;
-  var h='<div class="card card-teal"><div class="week-label" style="color:var(--teal)">Week '+(_currentWeek+1)+' Draft &nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span></div><h3 class="section-title" style="color:var(--teal)">\uD83D\uDD04 My Squad Draft <span style="font-size:11px;font-weight:400;color:var(--muted)">('+count+'/'+XI_SIZE+' selected)</span></h3>';
-  h+=_buildBudgetBar()+_buildNwSquad();
-  if(count>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap VC</span></div>';
-  var saveTitle=!canSave?(count<XI_SIZE?'Select all '+XI_SIZE+' players first':'Over 100 CR budget'):'';
-  h+='<div class="save-row"><button id="nw-save-btn" class="btn btn-teal" onclick="_nwSave()" '+(!canSave?'disabled title="'+esc(saveTitle)+'"':'')+'>Save Draft</button>'+(!canSave&&count>0?'<span style="font-size:11px;color:var(--muted)">'+esc(saveTitle)+'</span>':'')+'<span id="nw-save-msg" class="save-status"></span></div></div>';
-  return h+_buildPicker();
-}
-function _buildHistoryTab(){
-  if(!_historyData||!_historyData.weeks||_historyData.weeks.length===0){
-    return (_username&&!_historyData)?'<div class="card"><p class="empty">History loading\u2026</p></div>':'<div class="card"><div class="history-empty"><strong>No history yet</strong>Your weekly XIs will appear here once you\'ve set and locked a team.</div></div>';
-  }
-  var weeks=_historyData.weeks,viewWk=(_historyViewWk===null)?_currentWeek:_historyViewWk;
-  var h='<div class="history-bar"><label>\uD83D\uDCD6 Browse:</label><select onchange="_selectHistoryWeek(parseInt(this.value))">';
-  weeks.forEach(function(w){var lbl="Week "+w.week_no+(w.week_no===0?" (Pre-season)":w.is_current?" (Current)":" (Archive)");h+='<option value="'+w.week_no+'"'+(w.week_no===viewWk?' selected':'')+'>'+esc(lbl)+'</option>';});
-  h+='</select>';
-  var selRow=null;for(var i=0;i<weeks.length;i++){if(weeks[i].week_no===viewWk){selRow=weeks[i];break;}}
-  if(selRow&&!selRow.is_current)h+='<span class="ro-note">\uD83D\uDD12 Read-only archive</span>';
+  var h='<div class="card card-teal">';
+  h+='<div class="week-label" style="color:var(--teal)">Week '+(_currentWeek+1)+' Draft &nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span></div>';
+  h+=_buildBudgetBar();
+  h+=_buildNwSquad();
+  if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
   h+='</div>';
-  if(!selRow)return h+'<div class="card"><p class="empty">No data for selected week.</p></div>';
-  var tw=selRow.this_week;
-  h+='<div class="card'+(selRow.is_current?'':' card-locked')+'"><div class="week-label">Week '+selRow.week_no+(selRow.week_no===0?' \u2014 Pre-season':selRow.is_current?'':' &nbsp;<span class="badge-lock">Archive</span>')+'</div><h3 class="section-title">\u26A1 This Week\'s XI</h3>';
-  if(tw&&tw.team&&tw.team.length>0){h+=_buildXiGrid(tw.team,tw.cap,tw.vc);h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 pts</span><span><span class="badge badge-vc">VC</span> \xd71.5 pts</span></div>';}
-  else h+='<p class="empty">No XI recorded for this week.</p>';
-  return h+'</div>';
+  return h+_buildPicker();
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
@@ -453,66 +516,11 @@ function _buildLeaderboardCard(lb){
   h+='</tbody></table></div>';
   return h;
 }
-function _buildMatchesCard(matchList){
-  var h='<div class="card"><h3 class="section-title">\uD83D\uDCC5 Matches</h3>';
-  if(!matchList||matchList.length===0){h+='<p class="empty">No matches scheduled yet.</p></div>';return h;}
-  matchList.forEach(function(m){
-    var st=m.status||"upcoming";
-    h+='<div class="match-item"><div class="match-title">'+esc(m.title||m.id)+'<span class="status-pill status-'+st+'">'+st.charAt(0).toUpperCase()+st.slice(1)+'</span></div><div class="match-meta">Wk '+m.wk+' \u00B7 '+esc(m.date||"TBD")+'</div></div>';
-  });
-  return h+'</div>';
-}
 function _buildDevTools(){
-  var h='<div class="devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 2:00 PM rollover. Promotes Next Week draft into a new locked This Week row.</p>';
-  h+='<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">\u25B6 Simulate Monday 2:00 PM Rollover</button>';
+  var h='<div class="devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 14:00 UTC rollover. Promotes Next Week draft into a new locked This Week row.</p>';
+  h+='<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">\u25B6 Simulate Monday 14:00 UTC Rollover</button>';
   h+='<div id="rollover-result"></div></div>';
   return h;
-}
-
-// ─── POINTS TAB ───────────────────────────────────────────────────────────────
-function _buildPointsTab(){
-  var h='<div class="card">';
-  h+='<div class="user-header-bar" style="margin-bottom:14px">';
-  h+='<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
-  h+='<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
-  h+='</div>';
-  if(_ptsLoading){return h+'<div class="pts-loading">\u23F3 Loading points data\u2026</div></div>';}
-  if(!_ptsData||!_ptsData.players||_ptsData.players.length===0){return h+'<div class="pts-loading">No points data yet. Run the scraper after matches complete, then click Reload.</div></div>';}
-  var d=_ptsData;
-  var matchCount=0;
-  if(d.players.length>0&&d.players[0].matches)matchCount=d.players[0].matches.length;
-  h+='<div class="pts-summary">';
-  h+='<div class="pts-stat"><div class="val">'+d.total_pts+'</div><div class="lbl">Total Pts</div></div>';
-  h+='<div class="pts-stat"><div class="val">'+d.players.length+'</div><div class="lbl">Players</div></div>';
-  h+='<div class="pts-stat"><div class="val">'+matchCount+'</div><div class="lbl">Matches</div></div>';
-  if(matchCount>0)h+='<div class="pts-stat"><div class="val">'+Math.round(d.total_pts/matchCount)+'</div><div class="lbl">Avg/Match</div></div>';
-  h+='</div>';
-  h+='<table class="pts-table"><thead><tr><th>Player</th><th>Team</th><th>Role</th><th style="text-align:right">Pts</th><th></th></tr></thead><tbody>';
-  d.players.forEach(function(p,idx){
-    var rowId="pts-row-"+idx;
-    var badge=p.is_cap?'<span class="badge badge-c" style="margin-left:4px">C</span>':p.is_vc?'<span class="badge badge-vc" style="margin-left:4px">VC</span>':'';
-    var mult=p.is_cap?" (\xd72)":p.is_vc?" (\xd71.5)":"";
-    var avC=_avClass(p.team);
-    h+='<tr>';
-    h+='<td><div style="display:flex;align-items:center;gap:8px"><div class="prow-avatar '+avC+'">'+esc(_initials(p.name||p.id))+'</div><div><div style="font-size:13px;font-weight:600">'+esc(p.name||p.id)+badge+'</div><div style="font-size:10px;color:var(--muted)">'+esc(p.id)+'</div></div></div></td>';
-    h+='<td style="font-size:11px;color:var(--muted)">'+esc(p.team||"\u2014")+'</td>';
-    h+='<td>'+_roleBadge(p.role)+'</td>';
-    h+='<td class="pts-cell">'+p.total_pts+esc(mult)+'</td>';
-    h+='<td>';
-    if(p.matches&&p.matches.length>0){h+='<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\''+rowId+'\');el.classList.toggle(\'open\');})()">Details</button>';}
-    h+='</td></tr>';
-    if(p.matches&&p.matches.length>0){
-      h+='<tr><td colspan="5" style="padding:0 8px 8px"><div class="pts-matches" id="'+rowId+'">';
-      p.matches.forEach(function(m){
-        var multStr=m.multiplier>1?(m.multiplier===2?'<span class="m-mult">\xd72</span>':'<span class="m-mult">\xd71.5</span>'):'';
-        h+='<div class="pts-match-row"><div class="m-title">'+esc(m.title||m.match_id)+'</div>';
-        h+='<div style="display:flex;align-items:center"><span style="font-size:10px;color:var(--muted);margin-right:6px">W'+m.week_no+'</span>'+multStr+'<span class="m-pts">'+m.final_pts+'</span></div></div>';
-      });
-      h+='</div></td></tr>';
-    }
-  });
-  h+='</tbody></table>';
-  return h+'</div>';
 }
 
 // ─── ADMIN TAB ───────────────────────────────────────────────────────────────
@@ -536,18 +544,55 @@ function _buildAdminTab(){
     return true;
   });
   if(list.length===0){return h+'<p style="color:var(--muted);font-size:13px">No matches match the filter.</p></div>';}
+  // Build Cricbuzz-ID \u2192 [match_ids] map to detect duplicates across the FULL list (not filtered)
+  var _cbIdMap={};
+  _adminMatches.forEach(function(mx){
+    var u=mx.scorecard_url||'';var cb=u.replace(/.*\//,'');
+    if(cb&&cb!=='00000'&&/^[1-9]\d{4,}$/.test(cb)){
+      if(!_cbIdMap[cb])_cbIdMap[cb]=[];
+      _cbIdMap[cb].push(mx.id);
+    }
+  });
   list.forEach(function(m){
     var hasId=m.scorecard_url&&/[1-9]\d{4,}/.test(m.scorecard_url||"00000");
+    // Determine the Cricbuzz numeric ID from the URL for duplicate check
+    var cbId=(m.scorecard_url||'').replace(/.*\//,'');
+    var isDup=cbId&&cbId!=='00000'&&_cbIdMap[cbId]&&_cbIdMap[cbId].length>1;
+    var dupWith=isDup?_cbIdMap[cbId].filter(function(x){return x!==m.id;}):[];
+    // Build a user-friendly display title always including teams
+    var teams=[];try{teams=JSON.parse(m.teams_json||'[]');}catch(e){}
+    // Fallback: extract teams from title "SRH vs RCB, 1st Match" if teams_json empty
+    if(teams.length<2&&m.title){var _tm=m.title.match(/^([A-Z]+)\s+vs\s+([A-Z]+)/);if(_tm)teams=[_tm[1],_tm[2]];}
+    // Extract the trailing match number (e.g. "ipl26_m51" -> 51).
+    // The earlier `replace(/\D/g,'')` approach glued the year prefix to the
+    // number — "ipl26_m51" became "2651". Anchored regex captures only the m.. part.
+    var _mn=(m.id||'').match(/_m(\d+)$/);
+    var matchNo=_mn?parseInt(_mn[1],10):0;
+    var teamsStr=teams.length>=2?(teams[0]+' vs '+teams[1]):'';
+    var displayTitle='M'+matchNo+(teamsStr?' \u00B7 '+teamsStr:'');
+    // Sub-label: date + week
+    var subLabel='Week '+m.week_no+(m.date_label?' \u00B7 '+m.date_label:'');
     var inputId="url-"+m.id,statusId="st-"+m.id;
-    h+='<div class="admin-match-row">';
-    h+='<div class="admin-match-title">'+esc(m.title||m.id)+'<span class="status-pill status-'+m.status+'">'+m.status+'</span>'+(hasId?'<span style="color:var(--teal);font-size:10px;margin-left:6px">\u2705 Has ID</span>':'<span style="color:#FF6B6B;font-size:10px;margin-left:6px">\u26A0 No ID</span>')+'</div>';
-    h+='<div class="admin-match-meta">Match ID: '+esc(m.id)+' | Week '+m.week_no+'</div>';
+    h+='<div class="admin-match-row'+(isDup?' admin-match-dup':'')+'">';
+    // Title row
+    h+='<div class="admin-match-title">'+esc(displayTitle)
+      +'<span class="status-pill status-'+m.status+'">'+m.status+'</span>'
+      +(hasId?'<span style="color:var(--teal);font-size:10px;margin-left:6px">\u2705 Has ID</span>':'<span style="color:#FF6B6B;font-size:10px;margin-left:6px">\u26A0 No ID</span>')
+      +(isDup?'<span style="color:#FF6B6B;font-size:10px;margin-left:6px">\u26A0 Duplicate URL \u2014 also on '+esc(dupWith.join(', '))+'</span>':'')
+      +'</div>';
+    // Meta row: internal ID + week + date
+    h+='<div class="admin-match-meta">'+esc(m.id)+' \u00B7 '+esc(subLabel)+'</div>';
     h+='<div class="admin-url-row">';
     h+='<input class="admin-url-input" id="'+inputId+'" type="url" placeholder="https://www.cricbuzz.com/live-cricket-scorecard/XXXXXX/..." value="'+esc(m.scorecard_url||'')+'">';
     h+='<button class="admin-save-btn" id="btn-'+m.id+'" onclick="_adminSaveUrl(\''+escAttr(m.id)+"','"+inputId+"','"+statusId+'\')" >Save &amp; Scrape</button>';
     h+='<span class="admin-save-status" id="'+statusId+'"></span>';
     h+='</div>';
-    if(m.scorecard_url)h+='<div class="admin-url-current">Current: '+esc(m.scorecard_url)+'</div>';
+    if(m.scorecard_url&&hasId){
+      var cbNum=cbId;
+      h+='<div class="admin-url-current">Cricbuzz ID: <strong>'+esc(cbNum)+'</strong> \u00B7 <a href="'+esc(m.scorecard_url)+'" target="_blank" style="color:var(--teal)">View scorecard</a></div>';
+    } else if(m.scorecard_url){
+      h+='<div class="admin-url-current" style="color:#FF6B6B">No valid ID in URL</div>';
+    }
     h+='</div>';
   });
   return h+'</div>';
@@ -593,6 +638,14 @@ function _doSwap(removeId,addId){
 function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
   hideLoading();hideErrorBanner();
+  var _preserveSearchFocus=false,_preserveSearchPos=0;
+  if(_activeTab==="next"){
+    var _prevInp=document.getElementById("picker-search-input");
+    if(_prevInp&&document.activeElement===_prevInp){
+      _preserveSearchFocus=true;
+      _preserveSearchPos=_prevInp.selectionStart||_prevInp.value.length;
+    }
+  }
   var memberNames=Object.keys(members).sort();
   var html='<div class="wrap">';
   html+='<h2 class="page-title">\uD83C\uDFCF IPL Fantasy 2026</h2>';
@@ -606,13 +659,10 @@ function render(state){
     html+='<div class="card"><div class="user-header-bar"><div class="user-header-left"><div class="user-avatar-large">'+esc(ini)+'</div><div><p class="label">Logged in as</p><p class="name">'+esc(_username)+'</p></div></div><div class="user-header-btns"><button class="btn-refresh" id="refresh-btn" onclick="_refreshData()" title="Refresh">\u27F3 Refresh</button><button class="btn btn-ghost btn-sm" onclick="logout()">Switch user</button></div></div><div id="refresh-status" class="refresh-status" style="margin-top:4px;text-align:right"></div></div>';
     html+='<div class="tabs">';
     [
+      {id:"match-centre",label:"Match Centre \uD83C\uDFAF"},
       {id:"team",label:"This Week \uD83D\uDD12"},
       {id:"next",label:"Next Week \u270F\uFE0F"},
-      {id:"history",label:"History \uD83D\uDCD6"},
-      {id:"points",label:"Points \uD83D\uDCCA"},
       {id:"leaderboard",label:"Leaderboard"},
-      {id:"match-centre",label:"Match Centre \uD83C\uDFAF"},
-      {id:"matches",label:"Matches"},
       {id:"members",label:"Members"},
       {id:"admin",label:"Admin \u2699\uFE0F"},
     ].forEach(function(t){
@@ -621,17 +671,17 @@ function render(state){
     html+='</div>';
     if     (_activeTab==="team")         {html+=_buildThisWeekCard();html+=_buildDevTools();}
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
-    else if(_activeTab==="history")      html+=_buildHistoryTab();
-    else if(_activeTab==="points")       html+=_buildPointsTab();
     else if(_activeTab==="leaderboard")  html+=_buildLeaderboardCard(_leaderboard);
     else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
-    else if(_activeTab==="matches")      html+=_buildMatchesCard(matches);
     else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
     else if(_activeTab==="admin")        html+=_buildAdminTab();
   }
   html+='</div>';
   $app.innerHTML=html;
-  if(_activeTab==="next"){var inp=document.getElementById("picker-search-input");if(inp){inp.focus();inp.selectionStart=inp.selectionEnd=inp.value.length;}}
+  if(_activeTab==="next"&&_preserveSearchFocus){
+    var inp=document.getElementById("picker-search-input");
+    if(inp){inp.focus();try{inp.selectionStart=inp.selectionEnd=_preserveSearchPos;}catch(e){}}
+  }
 }
 
 function renderLeaderboard(lb){_leaderboard=lb;if(_state&&(_activeTab==="leaderboard"||!_username))render(_state);}
@@ -663,7 +713,6 @@ function _bootstrap(){
       }
     }
     render(state);
-    if(_activeTab==="points"&&_username&&!_ptsData)_loadPoints();
   }).catch(function(){});
   plP.then(function(pl){if(pl&&pl.ok!==false){setPlayers(pl);window.dispatchEvent(new CustomEvent("ipl:players-updated",{detail:pl}));}});
   lbP.then(function(lb){if(lb){var norm=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;renderLeaderboard(norm);}});

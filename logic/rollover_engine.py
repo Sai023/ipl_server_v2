@@ -48,7 +48,7 @@ def last_monday_deadline(
     Parameters
     ----------
     now           : datetime — current UTC datetime (timezone-aware).
-    deadline_hour : int      — hour of the Monday lock (14 for 14:00 SAST).
+    deadline_hour : int      — hour of the Monday lock in UTC (14 = 14:00 UTC).
     deadline_min  : int      — minute of the Monday lock (0).
 
     Returns

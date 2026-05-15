@@ -3,7 +3,12 @@
 A self-hosted fantasy cricket league for IPL 2026.  
 Pick your XI each week, earn points from real matches, compete on a live leaderboard.
 
-> **Current version:** `2.1.0-stable` — decoupled Blueprint architecture, non-destructive startup, team-aware fuzzy matching, season_pts scouting badges.
+> **Current version:** see `APP_VERSION` in [config.py](config.py) (live source of truth — surfaced by `GET /api/version`).
+>
+> The app is a decoupled Blueprint architecture with non-destructive startup,
+> team-aware fuzzy matching, season_pts scouting badges, daily auto-sync
+> (local APScheduler + cloud safety-net workflow), and a fan-out-proof
+> leaderboard SQL.
 
 ---
 
@@ -71,7 +76,7 @@ ipl_glue.js        ← Frontend: polling, rollover, badges, picker
 
 - **60-second ETag polling** — only fetches state when it changes.
 - **Auto-rollover** — fires Monday 14:00 UTC in the browser without manual intervention.
-- **`_patchXiGrid()`** — wraps the inline `_buildXiGrid()` function to inject `season_pts` badges on Next Week player cards at template render time. Cards and the `team[]` array are co-indexed (1:1), so each card receives the correct player's badge without any DOM search. Source: `_state.player_pts` embedded in `/api/state` — zero extra HTTP fetch.
+- **Inline `season_pts` badges** — Next Week player cards display each player's season points inline in `_buildNwSquad()` ([templates/index.html:343](templates/index.html:343)). Source: `_state.player_pts` embedded in `/api/state` — zero extra HTTP fetch. (A pre-v7.8 `_patchXiGrid()` MutationObserver patch did the same job; it has since been replaced by direct inline rendering.)
 - **Mobile keyboard dismiss** — `document.activeElement.blur()` fires inside `requestAnimationFrame` after pick/swap actions, ensuring the DOM update completes before the keyboard drops.
 
 ---
@@ -197,28 +202,52 @@ All constants are defined in `config.py` — single source of truth.
 
 ---
 
-## GitHub Actions (Daily Sync)
+## Daily Sync — two-tier architecture
 
-`.github/workflows/daily_sync.yml` runs at **18:30 UTC and 21:30 UTC**:
-1. Seeds players (if empty)
-2. Updates match statuses
-3. Runs `scraper.py` for newly completed matches
-4. Commits updated data
+The league stays current overnight via a **split** pipeline. Each half
+runs in a different place because Cricbuzz blocks GitHub Actions egress IPs.
+
+| Half | Where | When | Job |
+|------|-------|------|-----|
+| **Discovery** (find new Cricbuzz match IDs, write to `data/schedule.json`) | Operator's box only — APScheduler inside `server.py` ([tasks.start_daily_discovery_scheduler](tasks.py)) | **23:55 IST** daily | `logic.cricbuzz_discovery.run_discovery()` |
+| **Scrape + commit** (fetch scorecards for known IDs, recalc points, push data) | GitHub Actions runner | **18:30 UTC** and **21:30 UTC** daily | `.github/workflows/daily_sync.yml` |
+
+The cloud half can only scrape matches whose `cricbuzz_id` is already in
+the committed `schedule.json`. If the operator's box has been offline since
+before the latest match's discovery window, the cloud workflow simply
+logs `SKIP: M…` for the missing IDs — the discovery half catches them
+once the local box is online again.
+
+**Manual trigger:** click the **🔄 Refresh** button on any tab (header
+bar) — it `POST`s `/api/sync-now`, which runs the same
+`run_discovery_and_scrape()` pipeline as the daily cron, in a daemon
+thread so the UI returns immediately.
+
+---
+
+## Cloudflare Tunnel (public URL)
+
+The project ships a vendored `cloudflared.exe` (Windows amd64) so a fresh
+clone can run `python server.py --tunnel cloudflare` immediately. If
+you're on a different OS or want the latest binary, run
+`setup_cloudflare.ps1` — it downloads the right architecture from
+Cloudflare's official releases page.
+
+The tunnel URL changes on every restart. For a stable URL, register a
+named tunnel via `cloudflared tunnel login` (not shipped by default).
 
 ---
 
 ## Troubleshooting
 
-| Problem | Cause | Fix |
-|---------|-------|-----|
-| "0 players loaded" | Empty players table | Run `python Seed_Players.py` |
-| "0 completed matches" | Stale status | Run `python Seed_Matches.py --force` |
-| Leaderboard total ≠ sum of weekly columns | **Fan-out bug** — old SQL joined `user_match_points` inside `user_totals`, multiplying `week_pts` by match count. Fixed in v2.1.0 via two independent CTEs. | `git pull` + restart |
-| W3 / any historical week shows 0 after restart | **Startup wipe bug** — old `server.py` ran `UPDATE user_selections SET week_pts=0` on every boot. Fixed in v13.2. | `git pull` + restart (no re-scrape needed) |
-| season_pts badges not showing in Next Week tab | **Missing data-pid** — old approach used MutationObserver on `[data-pid]` but `_buildXiGrid()` never stamped those attrs. Fixed in v7.7 via `_patchXiGrid()` template injection. | `git pull` + hard-refresh (`Ctrl+Shift+R`) |
-| Leaderboard shows 0 for all | Check player IDs match between selections and match_scores; startup logs any ghosts | Check startup log for `⚠ TRUE GHOST` lines |
-| Points not updating after scraper | `player_match_points` cleared on restart — need a fresh scrape | Run `python scraper.py` |
-| Server won't start — SyntaxError | Stale file with escaped quotes (`row[\"wn\"]`) | `git pull` (fixed in v5.9 patch) |
-| Server won't start — ImportError | Circular import | Ensure `base.py` is present — `git pull` |
-| Tunnel not starting | cloudflared not in PATH | Install: https://github.com/cloudflare/cloudflared/releases |
-| Scraper returns no scorecard data | Bad Cricbuzz ID | Test: `python Seed_Matches.py --verify {id}` |
+| Problem | Fix |
+|---------|-----|
+| "0 players loaded" | Run `python Seed_Players.py` |
+| "0 completed matches" or rows missing teams/dates | Run `python Seed_Matches.py --no-live` (re-sync from `schedule.json` without hitting Cricbuzz) |
+| Admin tab shows a match with the wrong teams/date | Same as above — `Seed_Matches.py --no-live` rewrites title, teams, date_label from `schedule.json`. The scraper also auto-re-syncs on every run via `_presync_schedule` (which now delegates to `seed_to_db`). |
+| Match has `⚠ No ID` even after Save & Scrape | The Cricbuzz scorecard for that URL was in `Preview` state or returned non-IPL teams. The scraper auto-resets the URL with a clear log line — paste a fresh Cricbuzz scorecard URL and try again. |
+| Leaderboard shows 0 for everyone | Check `/api/audit-player-ids` for ghost player IDs in selections; run `Audit_Scores.ps1` |
+| Points not updating after scraper | `player_match_points` is wiped on each restart and rebuilt by `scraper.py` — run `python scraper.py` |
+| Tunnel not starting | Install cloudflared: see "Cloudflare Tunnel" section above |
+| Scraper says "Cricbuzz returned no data" | Verify the ID: `python Seed_Matches.py --verify <id>` |
+| Boot prints crash on Windows console with `UnicodeEncodeError` | Should not happen anymore — `server.py` reconfigures stdout/stderr to UTF-8 at startup. If you still see this, you're running an older revision; `git pull`. |

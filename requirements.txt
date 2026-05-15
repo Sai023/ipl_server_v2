@@ -1,5 +1,13 @@
 Flask>=3.0,<4.0
 requests>=2.31,<3.0
+APScheduler>=3.10,<4.0
+
+# APScheduler powers tasks.start_daily_discovery_scheduler() — the in-process
+# daily cron that fires logic.cricbuzz_discovery + scraper.run_full_scrape
+# once a day at 23:55 IST.  If APScheduler is missing the server still boots
+# (the daily job is just disabled, with a clear warning logged) and
+# /api/sync-now remains available as the manual fallback. Pinned <4.0 because
+# APScheduler 4.x is a backwards-incompatible rewrite.
 
 # ── Optional tunnel providers (install binary, not pip) ────────────────────
 # Public tunnel for sharing with friends:

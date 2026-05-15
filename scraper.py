@@ -1,34 +1,33 @@
 #!/usr/bin/env python3
 """
-IPL Fantasy 2026 — Cricbuzz JSON Scraper  v10.11
+IPL Fantasy 2026 — Cricbuzz JSON Scraper  v11.0
 =================================================
-v10.11 (Resilience Upgrade):
-  FIX-015: Generalised auto-add via _generate_dynamic_player().
-    _auto_add_player() now uses logic.fuzzy_match._generate_dynamic_player()
-    to build the player dict, passing the Cricbuzz player ID (batId/bowlId)
-    so the generated ID is ext_{cricbuzz_id} — globally unique, never
-    collides with Seed_Players.py short-form IDs.
-  FIX-016: Defensive extraction — all batsman/bowler field accesses use
-    .get() with safe defaults. KeyError on missing scorecard fields can no
-    longer crash a match scrape.
-  FIX-017: Non-blocking player errors — if a single player entry cannot
-    be processed after auto-add, it is logged as NON_BLOCKING_ERROR and
-    skipped; the rest of the innings continues.
-  FIX-018: Match-level recovery — the entire match processing block is
-    wrapped in try/except. A data anomaly on one match logs MATCH_FAILED
-    and advances to the next match automatically.
-v10.10 (Phase 4): fuzzy functions imported from logic.fuzzy_match.
-v10.9 (Phase 3): run_full_scrape() programmatic entry point.
-v10.8: FIX-014 per-match atomic point update.
+v11.0 (JSON-Schedule Refactor):
+  FIX-020: Single discovery code path. Removed _fetch_ordered_ids() and the
+    inline per-match discovery fallback. Discovery now lives ONLY in
+    logic.cricbuzz_discovery — scraper is a pure consumer of schedule.json.
+  FIX-021: _presync_schedule() reads data/schedule.json directly (not via
+    `from Seed_Matches import IPL_2026_SCHEDULE`). Decouples scraper from
+    the seeder module entirely.
+  FIX-022: _reset_url() also clears the wrong cricbuzz_id in schedule.json
+    when a non-IPL or mismatched scorecard is detected, so the next
+    discovery run can refill that slot with a correct ID.
+  FIX-023: Matches with /00000 URLs now skip cleanly with an actionable
+    log message — no more positional-indexing fallback that mis-mapped IDs.
+
+v10.11 (Resilience): FIX-015/016/017/018 — auto-add, defensive extraction,
+                     non-blocking errors, match-level recovery.
+v10.10 (Phase 4):    fuzzy functions imported from logic.fuzzy_match.
+v10.9  (Phase 3):    run_full_scrape() programmatic entry point.
+v10.8:               FIX-014 per-match atomic point update.
 """
 
 import json
-import math
 import re
 import sqlite3
 import sys
 import time
-import unicodedata
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 try:
@@ -43,13 +42,15 @@ from logic.fuzzy_match import (
     _norm, _build_player_index, _fuzzy_match, _fuzzy_fielder,
     _generate_dynamic_player,
 )
+from logic.scoring_engine import _normalise_overs  # single source — was duplicated here
+from logic.cricbuzz_discovery import load_schedule, save_schedule
 
 # ── Paths
-BASE_DIR    = Path(__file__).resolve().parent
-MATCHES_DIR = BASE_DIR / "data" / "matches"
-SERIES_ID   = "9237"
-MAX_RETRIES = 3
-RETRY_DELAY = 3
+BASE_DIR      = Path(__file__).resolve().parent
+MATCHES_DIR   = BASE_DIR / "data" / "matches"
+SCHEDULE_JSON = BASE_DIR / "data" / "schedule.json"   # FIX-021: source of truth
+MAX_RETRIES   = 3
+RETRY_DELAY   = 3
 
 _ID_RE       = re.compile(r'^[a-z]{1,3}\d{1,2}$')
 _MATCH_NO_RE = re.compile(r'_m(\d+)', re.IGNORECASE)
@@ -63,58 +64,19 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-_TEAM_PREFIX = {
-    "CSK": "c",  "DC": "d",   "GT": "g",  "KKR": "k",
-    "LSG": "l",  "MI": "m",   "PBKS": "p", "RCB": "r",
-    "RR": "rr", "SRH": "s",
-}
-
-_IPL_TEAMS = frozenset(_TEAM_PREFIX.keys())
+_IPL_TEAMS = frozenset({
+    "CSK", "DC", "GT", "KKR", "LSG", "MI", "PBKS", "RCB", "RR", "SRH",
+})
 
 _NO_RESULT_STATES = frozenset({
     "no result", "match abandoned", "abandoned", "cancelled", "match cancelled"
 })
 
 
-# ════ OVERS NORMALISATION
-
-def _normalise_overs(raw: float) -> float:
-    if raw <= 0:
-        return 0.0
-    full  = math.floor(raw)
-    balls = min(5, max(0, round((raw - full) * 10)))
-    return round(full + balls / 6, 4)
-
-
-# ════ MATCH ID DISCOVERY: POSITION-BASED
-
-_ORDERED_CB_IDS: list = []
-
-
-def _fetch_ordered_ids() -> list:
-    global _ORDERED_CB_IDS
-    if _ORDERED_CB_IDS:
-        return _ORDERED_CB_IDS
-    url = (
-        f"https://www.cricbuzz.com/cricket-series/{SERIES_ID}/"
-        f"indian-premier-league-{IPL_YEAR}/matches"
-    )
-    print(f"  [discover] {url}")
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        if r.status_code != 200:
-            print(f"  [discover] HTTP {r.status_code} — discovery unavailable")
-            return []
-        seen = set()
-        for m in re.finditer(r'/live-cricket-scores/(\d{5,})/', r.text):
-            mid = m.group(1)
-            if mid not in seen:
-                seen.add(mid)
-                _ORDERED_CB_IDS.append(mid)
-        print(f"  [discover] {len(_ORDERED_CB_IDS)} match IDs (position-indexed)")
-    except Exception as e:
-        print(f"  [discover] Error: {e}")
-    return _ORDERED_CB_IDS
+# ════ MATCH ID UTILITIES
+# FIX-020: _fetch_ordered_ids() removed. Discovery lives ONLY in
+# logic.cricbuzz_discovery now. Scraper consumes schedule.json — it never
+# hits Cricbuzz's series page for IDs anymore.
 
 
 def _match_no_from_id(iid: str) -> int:
@@ -456,13 +418,32 @@ def _extract_meta(data: dict, iid: str, wk: int) -> tuple[dict, bool]:
     else:
         status = "upcoming"
 
+    ts_ms = h.get("matchStartTimestamp", 0)
+    try:
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        dt = datetime.fromtimestamp(int(ts_ms) / 1000, tz=_IST)
+        date_str = dt.strftime("%b") + " " + str(dt.day)
+    except Exception:
+        date_str = str(ts_ms) if ts_ms else ""
     meta = {"id": iid, "wk": wk, "title": title or f"Match (Week {wk})",
-            "teams": teams, "date": str(h.get("matchStartTimestamp", "")), "status": status}
+            "teams": teams, "date": date_str, "status": status}
     return meta, is_no_result
 
 
 def _reset_url(iid: str) -> None:
-    """Reset scorecard URL to /00000 so next run retries discovery."""
+    """
+    Wrong-scorecard recovery.
+
+    Resets the matches.scorecard_url to /00000 AND clears the
+    cricbuzz_id field in schedule.json for this match_no, so the next
+    discovery run can refill the slot with a correct ID via title-keyed
+    merge (FIX-022).
+
+    Called when scorecard validation detects:
+      - non-IPL teams in the scraped scorecard
+      - team-pair mismatch between scraped vs scheduled
+    Both indicate the stored cricbuzz_id points to the wrong match.
+    """
     try:
         conn = sqlite3.connect(str(DB_PATH), timeout=30)
         conn.execute("PRAGMA busy_timeout = 30000")
@@ -470,7 +451,27 @@ def _reset_url(iid: str) -> None:
                      ("https://www.cricbuzz.com/live-cricket-scorecard/00000", iid))
         conn.commit(); conn.close()
     except Exception as e:
-        print(f"    ⚠ Could not reset URL for {iid}: {e}")
+        print(f"    ⚠ Could not reset DB URL for {iid}: {e}")
+
+    # FIX-022: also invalidate in schedule.json
+    try:
+        mno_m = re.search(r'_m(\d+)', iid, re.IGNORECASE)
+        if not mno_m:
+            return
+        mno = int(mno_m.group(1))
+        data = load_schedule(SCHEDULE_JSON)
+        for m in data.get("matches", []):
+            if m.get("match_no") == mno and m.get("cricbuzz_id"):
+                old = m["cricbuzz_id"]
+                m["cricbuzz_id"] = None
+                save_schedule(SCHEDULE_JSON, data)
+                print(f"    [schedule] cleared wrong cricbuzz_id "
+                      f"M{mno:02d}={old} — discovery will retry")
+                return
+    except FileNotFoundError:
+        pass  # schedule.json absent; nothing to clean
+    except Exception as e:
+        print(f"    ⚠ Could not clear schedule.json for {iid}: {e}")
 
 
 def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
@@ -481,6 +482,62 @@ def _update_points_for_match(db: DatabaseManager, iid: str, wk: int) -> None:
         print(f"  ⚡ Points updated: {iid} (W{wk}) — {pmp_rows} player rows recalculated")
     except Exception as e:
         print(f"  ⚠ Point update failed for {iid}: {e}")
+
+
+# ════ SCHEDULE PRE-SYNC (FIX-019)
+
+def _presync_schedule() -> None:
+    """
+    FIX-021: Before every scrape, sync DB with data/schedule.json directly.
+
+    Replaces the v10.x flow of `from Seed_Matches import IPL_2026_SCHEDULE`.
+    schedule.json is the authoritative source — updated by:
+      • logic.cricbuzz_discovery (daily APScheduler in server.py)
+      • Seed_Matches.py CLI (manual / GitHub Actions)
+      • /api/sync-now (Admin tab trigger)
+
+    Two things are fixed automatically every run:
+      1. URLs reset to /00000 (by _reset_url or a bad prior scrape) are
+         restored from schedule.json IDs.
+      2. Match statuses are updated to 'completed' for any match whose
+         end time has already passed (start + 4h, IST).
+
+    Workflow: any update to schedule.json → next scraper run picks it up.
+    No --force flag, no module import gymnastics.
+    """
+    try:
+        data = load_schedule(SCHEDULE_JSON)
+    except FileNotFoundError:
+        print(f"  [presync] {SCHEDULE_JSON.name} missing — skipping presync")
+        return
+    except Exception as e:
+        print(f"  [presync] could not read schedule.json: {e} — skipping")
+        return
+
+    matches = data.get("matches") or []
+    if not matches:
+        print(f"  [presync] schedule.json has 0 matches — skipping")
+        return
+
+    # Delegate the actual sync to the canonical Seed_Matches.seed_to_db().
+    # That function refreshes title, teams_json, date_label, status, URL, and
+    # week_no from schedule.json (and never overwrites an admin-pasted URL with
+    # /00000). Calling it here is what prevents the kind of drift FIX-022 left
+    # behind: a wrong-scorecard scrape would reset the URL but leave the
+    # scraped title/teams in place — now seed_to_db restores them on next run.
+    from Seed_Matches import _auto_count_completed, seed_to_db
+    schedule_tuples = [
+        (m["match_no"], m.get("cricbuzz_id"),
+         m["title"], m["date"], m["time_ist"])
+        for m in matches
+    ]
+    completed_count = _auto_count_completed(schedule_tuples)
+    seed_to_db(schedule_tuples, completed_count)
+
+    src = data.get("discovery_source", "unknown")
+    upd = data.get("last_updated",     "unknown")
+    print(f"  [presync] schedule.json ({src}, updated {upd}) -> "
+          f"matches table refreshed via seed_to_db")
 
 
 # ════ PROGRAMMATIC ENTRY POINT
@@ -497,6 +554,7 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
     MATCHES_DIR.mkdir(parents=True, exist_ok=True)
     if db is None:
         db = DatabaseManager(DB_PATH)
+    _presync_schedule()
 
     with db._read() as con:
         con.row_factory = sqlite3.Row
@@ -515,14 +573,15 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
             "SELECT * FROM matches WHERE LOWER(status)='completed'").fetchall()]
     print(f"  Targets: {len(targets)} completed matches")
 
-    needs_discovery = any(
-        (m.get("scorecard_url") or "").endswith("/00000")
-        for m in targets
-    )
-    if needs_discovery:
-        n_miss = sum(1 for m in targets if (m.get("scorecard_url") or "").endswith("/00000"))
-        print(f"  {n_miss} matches need ID discovery — fetching series page...")
-        _fetch_ordered_ids()
+    # FIX-020/023: No inline discovery. Matches with /00000 URLs are skipped
+    # below with an actionable log message — the daily discovery scheduler
+    # (or a manual `python -m logic.cricbuzz_discovery` run) is responsible
+    # for filling them.
+    n_miss = sum(1 for m in targets
+                 if (m.get("scorecard_url") or "").endswith("/00000"))
+    if n_miss:
+        print(f"  ⚠ {n_miss} completed matches have no Cricbuzz ID — "
+              f"will skip until discovery fills schedule.json")
 
     processed = 0; failed = 0; skipped_non_ipl = 0; no_result_count = 0
 
@@ -542,23 +601,13 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
             cb_id    = cb_m.group(1) if cb_m else "0"
 
             if not cb_m or int(cb_id) == 0:
-                mno  = _match_no_from_id(iid)
-                ids  = _fetch_ordered_ids()
-                discovered = ids[mno - 1] if 0 < mno <= len(ids) else None
-                if discovered:
-                    cb_id   = discovered
-                    new_url = f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-                    print(f"  DISCOVERED: {iid} — CB#{cb_id} (match #{mno})")
-                    try:
-                        conn = sqlite3.connect(str(DB_PATH), timeout=30)
-                        conn.execute("PRAGMA busy_timeout = 30000")
-                        conn.execute("UPDATE matches SET scorecard_url=? WHERE id=?", (new_url, iid))
-                        conn.commit(); conn.close()
-                    except Exception as e:
-                        print(f"    ⚠ Could not persist URL: {e}")
-                else:
-                    print(f"  SKIP: {iid} — match #{mno} not in series page ({len(ids)} found)")
-                    continue
+                # FIX-023: no inline discovery. Skip cleanly; daily scheduler
+                # or operator runs `python -m logic.cricbuzz_discovery`
+                # to populate schedule.json.
+                mno = _match_no_from_id(iid)
+                print(f"  SKIP: {iid} (M{mno:02d}) — Cricbuzz ID not yet in "
+                      f"schedule.json")
+                continue
 
             mno = _match_no_from_id(iid)
             mns = str(mno).zfill(2) if mno else re.sub(r'[^\d]', '', iid).zfill(2)
@@ -576,23 +625,48 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
 
             if not is_no_result:
                 unknown = [t for t in meta["teams"] if t not in _IPL_TEAMS]
-                if unknown or len(meta["teams"]) < 2:
-                    reason = f"non-IPL teams {unknown}" if unknown else "missing team data"
-                    print(f"  ⚠ SKIP {iid}: {reason} in CB#{cb_id} — wrong scorecard, resetting URL")
+                if unknown:
+                    # Genuinely wrong scorecard (non-IPL teams) — reset DB
+                    # and clear schedule.json so next discovery retries.
+                    print(f"  ⚠ SKIP {iid}: non-IPL teams {unknown} in CB#{cb_id} "
+                          f"— wrong scorecard, resetting URL")
                     if jp.exists(): jp.unlink()
-                    _reset_url(iid)
-                    _ORDERED_CB_IDS.clear()
+                    _reset_url(iid)   # FIX-022: also clears cricbuzz_id in JSON
                     skipped_non_ipl += 1; failed += 1
+                    continue
+                if len(meta["teams"]) < 2:
+                    # Two cases here:
+                    #  (a) Match is genuinely mid-innings — scorecard not yet
+                    #      fully populated. Retry next run.
+                    #  (b) Cricbuzz returned a Preview-state scorecard for a
+                    #      future match — meaning the CB ID is for the WRONG
+                    #      match (chronological drift in discovery). The match
+                    #      will never populate; the URL must be reset so the
+                    #      operator (or next discovery) can refill it.
+                    raw_state = (data.get("matchHeader") or {}).get("state", "")
+                    state_lc = str(raw_state).strip().lower()
+                    if state_lc in ("preview", "upcoming"):
+                        print(f"  ⚠ SKIP {iid}: scorecard state='{raw_state}' for a "
+                              f"completed match — CB#{cb_id} is the wrong match, "
+                              f"resetting URL")
+                        if jp.exists(): jp.unlink()
+                        _reset_url(iid)
+                        skipped_non_ipl += 1; failed += 1
+                        continue
+                    print(f"  ⏳ SKIP {iid}: only {len(meta['teams'])} innings in scorecard — will retry (CB#{cb_id})")
+                    failed += 1
                     continue
 
                 expected = sched_teams.get(iid, set())
-                if expected:
+                # Only validate against stored teams_json if it contains valid IPL teams.
+                # Stale data from a previous wrong scrape may have non-IPL codes — ignore it.
+                if expected and expected.issubset(_IPL_TEAMS):
                     scraped_set = set(meta["teams"])
                     if not scraped_set.intersection(expected):
-                        print(f"  ⚠ SKIP {iid}: scraped {meta['teams']} vs scheduled {sorted(expected)} — mismatch")
+                        print(f"  ⚠ SKIP {iid}: scraped {meta['teams']} vs "
+                              f"scheduled {sorted(expected)} — mismatch")
                         if jp.exists(): jp.unlink()
-                        _reset_url(iid)
-                        _ORDERED_CB_IDS.clear()
+                        _reset_url(iid)   # FIX-022: also clears cricbuzz_id in JSON
                         skipped_non_ipl += 1; failed += 1
                         continue
 
@@ -631,7 +705,8 @@ def run_full_scrape(db: DatabaseManager = None) -> dict:
             continue
 
     if skipped_non_ipl:
-        print(f"\n  ⚠ Skipped {skipped_non_ipl} non-IPL scorecards — run scraper again to retry")
+        print(f"\n  ⚠ Skipped {skipped_non_ipl} wrong-scorecard matches. "
+              f"schedule.json entries cleared; next discovery run will refill.")
     if no_result_count:
         print(f"  ⚪ {no_result_count} no-result matches recorded (0 points each)")
 

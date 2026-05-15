@@ -15,15 +15,14 @@ _normalise_overs(raw)
 
 calc_pts(s)
     Compute base fantasy points from a raw score dict.
-    Returns int — multiplier NOT applied (see apply_multiplier).
-
-apply_multiplier(base_pts, player_id, cap_id, vc_id)
-    Apply the captain (2x) or vice-captain (1.5x) multiplier.
+    Returns int. The captain/VC multiplier is the caller's responsibility
+    (apply via `pts * CAP_MULT` or use debug_calc_pts which does it inline).
 
 debug_calc_pts(s, player_id, cap_id, vc_id)
-    Phase 6 audit utility — same maths as calc_pts() but returns a
-    step-by-step breakdown dict for validation and console inspection.
-    Calls calc_pts(s) internally so the totals always agree.
+    Audit utility — same maths as calc_pts() but returns a step-by-step
+    breakdown dict (base_pts, multiplier, final_pts, per-component steps)
+    for validation and console inspection. Calls calc_pts(s) internally so
+    the totals always agree. Used by /api/audit-scores.
 
 CAP_MULT = 2.0
 VC_MULT  = 1.5
@@ -122,28 +121,6 @@ def calc_pts(s: dict) -> int:
     if catches >= 3: pts += 4
     pts += stump * 12 + rod * 12 + roa * 6
     return round(pts)
-
-
-def apply_multiplier(
-    base_pts: int,
-    player_id: str,
-    cap_id: str | None,
-    vc_id:  str | None,
-) -> float:
-    """
-    Apply captain (2x) or vice-captain (1.5x) multiplier to base points.
-
-    Extracted from the inline expressions that appeared in multiple places
-    in db_manager.py, server.py, and scraper.py:
-        mult = 2.0 if pid == cap else (1.5 if pid == vc else 1.0)
-
-    Returns a float; callers should round() as appropriate.
-    """
-    if player_id == cap_id:
-        return base_pts * CAP_MULT
-    if player_id == vc_id:
-        return base_pts * VC_MULT
-    return float(base_pts)
 
 
 # ── Phase 6: Audit / Validation Utility ─────────────────────────────────────────────────────

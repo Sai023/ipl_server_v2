@@ -28,16 +28,14 @@ import sqlite3
 import threading
 import time
 import unicodedata
-from pathlib import Path
 
 from flask import Flask, request, jsonify, render_template
 from db_manager import DatabaseManager
-from config import DB_PATH
+from config import DB_PATH, BASE_DIR, DATA_DIR  # paths — single source of truth
+from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated here
 
 # ── Paths / Game constants ──────────────────────────────────────────────────────────
 
-BASE_DIR   = Path(__file__).resolve().parent
-DATA_DIR   = BASE_DIR / "data"
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -47,31 +45,9 @@ MAX_WEEKS    = 8
 
 _ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
 
-_SEMANTIC_MAP = {
-    "vk":"virat kohli","rohit":"rohit sharma","ms":"ms dhoni","msd":"ms dhoni",
-    "bumrah":"jasprit bumrah","bumpy":"jasprit bumrah","jadeja":"ravindra jadeja",
-    "sky":"suryakumar yadav","kl":"kl rahul","klr":"kl rahul",
-    "hp":"hardik pandya","h pandya":"hardik pandya","pandya":"hardik pandya",
-    "shami":"mohammed shami","siraj":"mohammed siraj","chahal":"yuzvendra chahal",
-    "sam":"sanju samson","ishan":"ishan kishan","ik":"ishan kishan",
-    "salt":"phil salt","klaasen":"heinrich klaasen","david":"tim david",
-    "shepherd":"romario shepherd","rutherford":"shimron rutherford",
-    "patidar":"rajat patidar","chakravarthy":"varun chakravarthy",
-    "chakra":"varun chakravarthy","chakar":"varun chakravarthy",
-    "vc":"varun chakravarthy","chahar":"deepak chahar","duffy":"jacob duffy",
-    "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
-    "ravindra":"rachin ravindra",
-    "sooryavanshi":"vaibhav sooryavanshi","suryavanshi":"vaibhav sooryavanshi",
-    "vaibhav":"vaibhav sooryavanshi",
-    "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
-    "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
-    "pant":"rishabh pant","noor":"noor ahmad","dube":"shivam dube",
-    "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
-    "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
-}
-
 
 # ── Player resolver ───────────────────────────────────────────────────────────────────
+# Uses _SEMANTIC_MAP imported from logic/fuzzy_match — single source of truth.
 
 def _normalise(s):
     s = str(s).lower().strip()

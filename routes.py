@@ -1,6 +1,15 @@
 """
-IPL Fantasy 2026 — API Route Handlers                       routes v1.3.0
+IPL Fantasy 2026 — API Route Handlers                       routes v1.4.0
 ===========================================================================
+v1.4.0 (Phase 9 — Daily auto-sync):
+  /api/sync-now (POST) — manual trigger for the discovery+scrape pipeline.
+    Spawns tasks.start_bg_sync() in a daemon thread; returns immediately
+    with the thread name. Same code path as the APScheduler 23:55 IST job.
+    Accepts {"debug": true} in body or ?debug=1 query string.
+  /api/version — modules dict extended with two new pins:
+    seed_matches      (SEED_MATCHES_VER       — JSON-aware shim version)
+    cricbuzz_discovery (CRICBUZZ_DISCOVERY_VER — shared discovery module)
+
 v1.3.0 (Phase 9.1 — Match Centre Backend):
   /api/match-centre          — Hub endpoint (requires ?user=<name>).
     Returns all matches grouped by week. Each match entry includes:
@@ -22,7 +31,6 @@ v1.0.0 (Phase 7): 24 @bp.route handlers in 8 groups.
 Dependency: base.py → routes.py  (routes never imports from server)
 """
 
-import collections
 import json as _json
 import re
 import sqlite3
@@ -41,12 +49,13 @@ from config import (
     DB_PATH, DEADLINE_HOUR, DEADLINE_MIN,
     APP_VERSION, VERSION_MAP,
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
+    SEED_MATCHES_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, FUZZY_MATCH_VER,
+    CRICBUZZ_DISCOVERY_VER,
 )
-import init_db
 import tasks
 from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team
-from logic.scoring_engine import calc_pts as _calc_pts, CAP_MULT, VC_MULT
+from logic.scoring_engine import debug_calc_pts as _debug_calc_pts
 
 bp = Blueprint("api", __name__)
 
@@ -60,15 +69,17 @@ def api_version():
     return jsonify({
         "ok": True, "app_version": APP_VERSION,
         "modules": {
-            "server":          SERVER_VER,
-            "routes":          ROUTES_VER,
-            "db_manager":      DB_VER,
-            "scraper":         SCRAPER_VER,
-            "init_db":         INIT_DB_VER,
-            "tasks":           TASKS_VER,
-            "scoring_engine":  SCORING_ENGINE_VER,
-            "rollover_engine": ROLLOVER_ENGINE_VER,
-            "fuzzy_match":     FUZZY_MATCH_VER,
+            "server":             SERVER_VER,
+            "routes":             ROUTES_VER,
+            "db_manager":         DB_VER,
+            "scraper":            SCRAPER_VER,
+            "init_db":            INIT_DB_VER,
+            "tasks":              TASKS_VER,
+            "seed_matches":       SEED_MATCHES_VER,         # Phase 9
+            "scoring_engine":     SCORING_ENGINE_VER,
+            "rollover_engine":    ROLLOVER_ENGINE_VER,
+            "fuzzy_match":        FUZZY_MATCH_VER,
+            "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },
         "version_map": VERSION_MAP,
     })
@@ -111,16 +122,6 @@ def api_get_state():
     except Exception as e:
         _log(f"GET /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500
 
-@bp.route("/api/state", methods=["POST"])
-def api_save_state():
-    re_ = _check_rate(_write_limiter)
-    if re_: return re_
-    try:
-        d = request.get_json(force=True, silent=True)
-        if not isinstance(d, dict): return jsonify({"error": "bad payload", "code": 400}), 400
-        db.save_state(d); return jsonify({"ok": True})
-    except Exception as e:
-        _log(f"POST /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -174,111 +175,6 @@ def api_history(n):
     except Exception as e:
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
-@bp.route("/api/player-points/<n>", methods=["GET"])
-def api_player_points(n):
-    name = n
-    try:
-        if not name or len(name)>30:
-            return jsonify({"error":"invalid name","code":400}),400
-        with db._read() as con:
-            con.row_factory=sqlite3.Row
-            sel_rows=con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts,points_per_match
-                FROM user_selections WHERE display_name=? ORDER BY week_no
-            """,(name,)).fetchall()
-            if not sel_rows:
-                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[],"weeks":[]})
-            import json as _j
-            latest=sel_rows[-1]
-            team_ids=_j.loads(latest["tw_team_json"] or "[]")
-            latest_cap=latest["tw_cap_id"]; latest_vc=latest["tw_vc_id"]
-            if not team_ids:
-                return jsonify({"ok":True,"name":name,"total_pts":0,"players":[],"weeks":[]})
-            ph=",".join("?"*len(team_ids))
-            player_rows={r["id"]:dict(r) for r in con.execute(
-                f"SELECT id,name,team,role,price,season_pts,points FROM players WHERE id IN ({ph})",
-                team_ids).fetchall()}
-            by_player=collections.defaultdict(list)
-            for sel in sel_rows:
-                wn=sel["week_no"]; ids=_j.loads(sel["tw_team_json"] or "[]")
-                cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]
-                if not ids: continue
-                iph=",".join("?"*len(ids))
-                pts=con.execute(f"""
-                    SELECT pmp.player_id,pmp.match_id,pmp.week_no,pmp.base_pts,m.title,m.date_label
-                    FROM player_match_points pmp JOIN matches m ON m.id=pmp.match_id
-                    WHERE pmp.player_id IN ({iph}) AND pmp.week_no=? ORDER BY m.week_no,m.id
-                """,ids+[wn]).fetchall()
-                for r in pts:
-                    mult=CAP_MULT if r["player_id"]==cap else (VC_MULT if r["player_id"]==vc else 1.0)
-                    by_player[r["player_id"]].append({
-                        "match_id":r["match_id"],"title":r["title"] or r["match_id"],
-                        "week_no":r["week_no"],"base_pts":r["base_pts"],
-                        "multiplier":mult,"final_pts":round(r["base_pts"]*mult)})
-            weeks_out=[]
-            for sel in sel_rows:
-                ppm=sel["points_per_match"] if "points_per_match" in sel.keys() else "{}"
-                weeks_out.append({"week_no":sel["week_no"],"week_pts":sel["week_pts"],
-                                   "points_per_match":_j.loads(ppm or "{}")})
-        grand_total=sum(w["week_pts"] for w in weeks_out)
-        players_out=[]
-        for pid in team_ids:
-            info=player_rows.get(pid,{"id":pid,"name":pid,"team":"","role":"","price":0,"season_pts":0,"points":0})
-            matches=by_player.get(pid,[]); p_total=sum(m["final_pts"] for m in matches)
-            players_out.append({"id":pid,"name":info.get("name",pid),"team":info.get("team",""),
-                                 "role":info.get("role",""),"price":info.get("price",0),
-                                 "is_cap":pid==latest_cap,"is_vc":pid==latest_vc,
-                                 "season_pts":info.get("season_pts",0),"points":info.get("points",0),
-                                 "total_pts":p_total,"matches":matches})
-        players_out.sort(key=lambda x:-x["total_pts"])
-        return jsonify({"ok":True,"name":name,"total_pts":grand_total,
-                        "players":players_out,"weeks":weeks_out})
-    except Exception as e:
-        _log(f"GET /api/player-points/{name}: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
-
-@bp.route("/api/user-match-points/<n>", methods=["GET"])
-def api_user_match_points(n):
-    try:
-        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        matches=db.get_user_match_points(n); total=sum(m["pts"] for m in matches)
-        return jsonify({"ok":True,"name":n,"total_pts":total,"matches":matches})
-    except Exception as e:
-        _log(f"GET /api/user-match-points/{n}: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
-
-@bp.route("/api/debug-points/<n>", methods=["GET"])
-def api_debug_points(n):
-    try:
-        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        with db._read() as con:
-            con.row_factory=sqlite3.Row
-            sels=con.execute(
-                "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts "
-                "FROM user_selections WHERE display_name=? ORDER BY week_no",(n,)).fetchall()
-            if not sels: return jsonify({"ok":True,"name":n,"message":"No selections found","selections":[]})
-            import json as _j
-            out=[]; total_pts=0
-            for sel in sels:
-                wn=sel["week_no"]; ids=_j.loads(sel["tw_team_json"] or "[]")
-                cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]
-                matches=con.execute("SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)).fetchall()
-                pmp_rows=[]
-                if ids:
-                    iph=",".join("?"*len(ids))
-                    pmp_rows=con.execute(
-                        f"SELECT player_id,match_id,base_pts FROM player_match_points "
-                        f"WHERE player_id IN ({iph}) AND week_no=?",ids+[wn]).fetchall()
-                scored_pids={r["player_id"] for r in pmp_rows}
-                missing=[pid for pid in ids if pid not in scored_pids]
-                wk_pts=sel["week_pts"]; total_pts+=wk_pts
-                out.append({"week_no":wn,"cap":cap,"vc":vc,"team":ids,"week_pts":wk_pts,
-                            "matches_in_week":[{"id":m["id"],"title":m["title"],"status":m["status"]} for m in matches],
-                            "scored_entries":len(pmp_rows),"players_with_no_points":missing})
-        return jsonify({"ok":True,"name":n,"total_pts":total_pts,"weeks":out})
-    except Exception as e:
-        _log(f"GET /api/debug-points/{n}: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -335,17 +231,6 @@ def api_member(n):
         _log(f"PUT /api/member/{n}: {e}","error")
         return jsonify({"error":str(e),"code":500}),500
 
-@bp.route("/api/match", methods=["POST"])
-def api_match():
-    re_=_check_rate(_write_limiter)
-    if re_: return re_
-    try:
-        m=request.get_json(force=True,silent=True)
-        if not isinstance(m,dict) or "id" not in m: return jsonify({"error":"missing id","code":400}),400
-        db.upsert_match(m); return jsonify({"ok":True})
-    except Exception as e:
-        _log(f"POST /api/match: {e}","error")
-        return jsonify({"error":str(e),"code":500}),500
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -366,6 +251,17 @@ def api_recalculate_points():
 
 @bp.route("/api/audit-scores/<n>", methods=["GET"])
 def api_audit_scores(n):
+    """
+    Step-by-step scoring trace for one user, all weeks.
+
+    Re-derives every player's per-match points from raw stats via
+    `logic.scoring_engine.debug_calc_pts`, which is the single source of
+    truth for the scoring rules. Each match entry includes:
+      - `raw`:   normalised input stats (runs/balls/fours/sixes/...)
+      - `steps`: per-component point contributions (participation +4,
+                 runs, milestones, SR bonus, wickets, economy, etc.)
+      - `base_pts`, `multiplier`, `final_pts`: the authoritative totals.
+    """
     try:
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
         with db._read() as con:
@@ -382,28 +278,28 @@ def api_audit_scores(n):
                 week_matches=con.execute("SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)).fetchall()
                 player_details=[]; computed_total=0
                 for pid in ids:
-                    mult=CAP_MULT if pid==cap else (VC_MULT if pid==vc else 1.0)
                     pr=con.execute("SELECT name,team,role FROM players WHERE id=?",(pid,)).fetchone()
                     p_name=pr["name"] if pr else pid; match_entries=[]
+                    mult_for_player=1.0
                     for wm in week_matches:
                         ms=con.execute(
-                            "SELECT runs,balls,fours,sixes,got_out,duck,overs,runs_conceded,"
-                            "wickets,maidens,lbw_bowled,catches,stumpings,run_out_direct,"
-                            "run_out_assist,played,raw_score_json "
-                            "FROM match_scores WHERE match_id=? AND player_id=?",(wm["id"],pid)).fetchone()
+                            "SELECT raw_score_json FROM match_scores "
+                            "WHERE match_id=? AND player_id=?",(wm["id"],pid)).fetchone()
                         if ms:
                             sc=_json.loads(ms["raw_score_json"] or "{}")
-                            bp_=_calc_pts(sc); fp=round(bp_*mult); computed_total+=fp
+                            trace=_debug_calc_pts(sc, player_id=pid, cap_id=cap, vc_id=vc)
+                            mult_for_player=trace["multiplier"]
+                            computed_total+=trace["final_pts"]
                             match_entries.append({
-                                "match_id":wm["id"],"match_title":wm["title"],"suspicious":bp_>200,
-                                "raw":{"runs":ms["runs"],"balls":ms["balls"],"fours":ms["fours"],
-                                       "sixes":ms["sixes"],"overs":ms["overs"],"wickets":ms["wickets"],
-                                       "runs_conceded":ms["runs_conceded"],"catches":ms["catches"],
-                                       "duck":ms["duck"],"maidens":ms["maidens"],
-                                       "lbw_bowled":ms["lbw_bowled"],"stumpings":ms["stumpings"]},
-                                "base_pts":bp_,"multiplier":mult,"final_pts":fp})
+                                "match_id":wm["id"],"match_title":wm["title"],
+                                "suspicious":trace["base_pts"]>200,
+                                "raw":trace["inputs"],
+                                "steps":trace["steps"],
+                                "base_pts":trace["base_pts"],
+                                "multiplier":trace["multiplier"],
+                                "final_pts":trace["final_pts"]})
                     player_details.append({"id":pid,"name":p_name,"is_cap":pid==cap,"is_vc":pid==vc,
-                                           "multiplier":mult,"matches":match_entries,
+                                           "multiplier":mult_for_player,"matches":match_entries,
                                            "player_total":sum(m["final_pts"] for m in match_entries)})
                 weeks_out.append({"week_no":wn,"cap":cap,"vc":vc,
                                   "stored_week_pts":stored,"computed_week_pts":computed_total,
@@ -616,6 +512,20 @@ def _match_ordinal(match_id: str) -> str:
     return ("M" + digits) if digits else match_id
 
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+def _fmt_date_label(raw: str) -> str:
+    """Convert Unix ms timestamp to 'Apr 22' IST; pass through anything else."""
+    if not raw:
+        return ""
+    try:
+        ms = int(raw)
+        dt = datetime.fromtimestamp(ms / 1000, tz=_IST)
+        return dt.strftime("%b") + " " + str(dt.day)
+    except (ValueError, TypeError):
+        return raw
+
+
 @bp.route("/api/match-centre", methods=["GET"])
 def api_match_centre():
     """
@@ -664,12 +574,23 @@ def api_match_centre():
                 "SELECT match_id, pts FROM user_match_points WHERE display_name=?", (n,)
             ).fetchall()
             wk_rows = con.execute(
-                "SELECT week_no, week_pts FROM user_selections "
+                "SELECT week_no, week_pts, points_per_match FROM user_selections "
                 "WHERE display_name=? ORDER BY week_no", (n,)
             ).fetchall()
 
         ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
         wk_totals = {r["week_no"]: r["week_pts"] for r in wk_rows}
+
+        # Fill gaps: for any match missing from user_match_points, use points_per_match blob.
+        # This handles mixed state where some weeks are scraped and others are history-seeded.
+        for r in wk_rows:
+            try:
+                blob = _jloads(r["points_per_match"], {})
+                for mid, pts in blob.items():
+                    if mid not in ump_map:
+                        ump_map[mid] = pts
+            except Exception:
+                pass
 
         weeks_map: dict = {}
         best_pts = 0
@@ -697,7 +618,7 @@ def api_match_centre():
                 "title":      mr["title"] or mr["id"],
                 "teams":      teams,
                 "venue":      venue,
-                "date_label": mr["date_label"],
+                "date_label": _fmt_date_label(mr["date_label"]),
                 "result":     result,
                 "status":     (mr["status"] or "upcoming").lower(),
                 "user_match_pts": user_pts,
@@ -800,7 +721,7 @@ def api_match_details(match_id):
                     "ok": True, "name": n,
                     "match_id": match_id, "match_no": _match_ordinal(match_id),
                     "title": mr["title"] or match_id, "week_no": wk,
-                    "venue": "", "date_label": mr["date_label"],
+                    "venue": "", "date_label": _fmt_date_label(mr["date_label"]),
                     "result": "", "status": (mr["status"] or "upcoming").lower(),
                     "user_pts": 0, "cap_id": None, "vc_id": None,
                     "top_scorer": None, "players": [],
@@ -834,6 +755,16 @@ def api_match_details(match_id):
                 "WHERE display_name=? AND match_id=?", (n, match_id)
             ).fetchone()
             user_total = ump_row["pts"] if ump_row else 0
+
+            # Fallback: read from points_per_match blob in user_selections
+            if not user_total:
+                ppm_sel = con.execute(
+                    "SELECT points_per_match FROM user_selections "
+                    "WHERE display_name=? AND week_no=?", (n, wk)
+                ).fetchone()
+                if ppm_sel:
+                    blob = _jloads(ppm_sel["points_per_match"], {})
+                    user_total = blob.get(match_id, 0)
 
         venue  = (raw.get("venue") or raw.get("location") or
                   raw.get("ground") or raw.get("stadium") or "")
@@ -881,7 +812,7 @@ def api_match_details(match_id):
             "week_no":    wk,
             "teams":      _jloads(mr["teams_json"], []),
             "venue":      venue,
-            "date_label": mr["date_label"],
+            "date_label": _fmt_date_label(mr["date_label"]),
             "result":     result,
             "status":     (mr["status"] or "upcoming").lower(),
             "user_pts":   user_total,
@@ -938,25 +869,36 @@ def api_rollover():
             db.insert_rollover_week(uname,cur_wk+1,nw_team,nw_cap,nw_vc)
         if not force: db.set_last_rollover(now_iso)
         db.set_meta("_saved",now_iso)
+        db.update_week_points()
         return jsonify({"ok":True,"rolled":True,"new_week_no":new_week_no,
                         "season_complete":new_week_no>=MAX_WEEKS})
     except Exception as e:
         _log(f"POST /api/rollover: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
-@bp.route("/api/seed-history", methods=["POST"])
-def api_seed_history():
-    re_=_check_rate(_write_limiter)
-    if re_: return re_
-    try: init_db._auto_seed_history_if_needed(); return jsonify({"ok":True})
-    except Exception as e: return jsonify({"error":str(e),"ok":False,"code":500}),500
-
 @bp.route("/api/matches-status", methods=["GET"])
 def api_matches_status():
     try:
         with db._read() as con:
-            rows=con.execute("SELECT id,week_no,title,status,scorecard_url FROM matches ORDER BY week_no,id").fetchall()
-        return jsonify({"ok":True,"matches":[dict(r) for r in rows]})
+            rows=con.execute(
+                "SELECT id,week_no,title,status,scorecard_url,teams_json,date_label "
+                "FROM matches ORDER BY id"
+            ).fetchall()
+        matches=[dict(r) for r in rows]
+        # Flag duplicate Cricbuzz IDs so Admin Tab can warn the user
+        url_to_ids: dict = {}
+        for m in matches:
+            url=m.get("scorecard_url") or ""
+            cb=url.rstrip("/").split("/")[-1]
+            if cb and cb!="00000" and cb.isdigit() and int(cb)>0:
+                url_to_ids.setdefault(cb,[]).append(m["id"])
+        for m in matches:
+            url=m.get("scorecard_url") or ""
+            cb=url.rstrip("/").split("/")[-1]
+            dup_ids=url_to_ids.get(cb,[]) if (cb and cb!="00000") else []
+            m["duplicate_url"]=len(dup_ids)>1
+            m["duplicate_with"]=[x for x in dup_ids if x!=m["id"]]
+        return jsonify({"ok":True,"matches":matches})
     except Exception as e:
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
@@ -982,6 +924,55 @@ def api_update_match_url():
     except Exception as e:
         _log(f"POST /api/update-match-url: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+
+@bp.route("/api/sync-now", methods=["POST"])
+def api_sync_now():
+    """
+    Manual trigger for the daily discovery+scrape pipeline.
+
+    Same code path as the APScheduler daily 23:55 IST job (tasks.py v2.0.0),
+    but run on demand from the Admin tab.  Returns immediately; the actual
+    work runs in a daemon thread.  Caller polls /api/matches-status or
+    /api/state to detect when fresh data lands (typically 30-90 seconds,
+    depending on how many newly-completed matches need scraping).
+
+    Request body (optional)
+    -----------------------
+    {"debug": true}   — verbose logging in the server console.
+    Or pass ?debug=1 in the query string.
+
+    Response
+    --------
+    {
+        "ok": true,
+        "thread_name": "ipl-daily-sync",
+        "debug": false,
+        "message": "Discovery+scrape started ..."
+    }
+
+    A transient Cricbuzz hiccup will not crash the request:
+    tasks.run_discovery_and_scrape() is fault-tolerant; it catches all
+    exceptions internally and logs the outcome.  This route only returns
+    500 if the daemon thread couldn't be spawned (i.e. OS-level failure).
+    """
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        d     = request.get_json(force=True, silent=True) or {}
+        debug = bool(d.get("debug")) or \
+                (request.args.get("debug", "").lower() in ("1", "true", "yes"))
+        t = tasks.start_bg_sync(debug=debug)
+        return jsonify({
+            "ok":          True,
+            "thread_name": t.name if t else None,
+            "debug":       debug,
+            "message":     "Discovery+scrape started in background. "
+                           "Refresh /api/matches-status in 30-90 seconds.",
+        })
+    except Exception as e:
+        _log(f"POST /api/sync-now: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════

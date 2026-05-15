@@ -25,6 +25,42 @@ import sqlite3
 import unicodedata
 
 
+# ── Nickname / shorthand map — single source of truth ────────────────────────
+# Originally lived in base.py. Moved here so the project has ONE curated
+# nickname dictionary instead of risking silent drift between two copies.
+#
+# Used by base.resolve_player_id (the UI-side resolver). NOT used by
+# _fuzzy_match (the scraper-side resolver) — Cricbuzz scorecards always
+# carry formal names like "V Kohli", and applying nicknames to scrape
+# data risks misattributing surname-only entries (e.g. "Patel" → Axar
+# Patel even when another Patel batted).
+#
+# When adding entries here, keys must be lowercase. The values are the
+# canonical player name as it appears in the players table.
+_SEMANTIC_MAP = {
+    "vk":"virat kohli","rohit":"rohit sharma","ms":"ms dhoni","msd":"ms dhoni",
+    "bumrah":"jasprit bumrah","bumpy":"jasprit bumrah","jadeja":"ravindra jadeja",
+    "sky":"suryakumar yadav","kl":"kl rahul","klr":"kl rahul",
+    "hp":"hardik pandya","h pandya":"hardik pandya","pandya":"hardik pandya",
+    "shami":"mohammed shami","siraj":"mohammed siraj","chahal":"yuzvendra chahal",
+    "sam":"sanju samson","ishan":"ishan kishan","ik":"ishan kishan",
+    "salt":"phil salt","klaasen":"heinrich klaasen","david":"tim david",
+    "shepherd":"romario shepherd","rutherford":"shimron rutherford",
+    "patidar":"rajat patidar","chakravarthy":"varun chakravarthy",
+    "chakra":"varun chakravarthy","chakar":"varun chakravarthy",
+    "vc":"varun chakravarthy","chahar":"deepak chahar","duffy":"jacob duffy",
+    "patel":"axar patel","varma":"tilak varma","rahane":"ajinkya rahane",
+    "ravindra":"rachin ravindra",
+    "sooryavanshi":"vaibhav sooryavanshi","suryavanshi":"vaibhav sooryavanshi",
+    "vaibhav":"vaibhav sooryavanshi",
+    "jansen":"marco jansen","brevis":"dewald brevis","rickelton":"ryan rickelton",
+    "ngidi":"lungi ngidi","hetmyer":"shimron hetmyer","rana":"harshit rana",
+    "pant":"rishabh pant","noor":"noor ahmad","dube":"shivam dube",
+    "samson":"sanju samson","tharva":"atharva taide","markram":"aiden markram",
+    "rashid":"rashid khan","prabhsimran":"prabhsimran singh",
+}
+
+
 def _norm(s: str) -> str:
     """
     Normalise a player name for fuzzy comparison.

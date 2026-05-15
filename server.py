@@ -1,6 +1,18 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v13.2
+IPL Fantasy 2026 — Flask Server                             Golden File v13.3
 ===========================================================================
+v13.3 (daily auto-sync):
+  • Calls tasks.start_daily_discovery_scheduler() on startup — APScheduler
+    BackgroundScheduler fires once a day at 23:55 IST to run the discovery
+    + scrape pipeline. See tasks.py v2.0.0 for the schedule + misfire policy.
+  • tasks.stop_scheduler() registered with atexit alongside the existing
+    _restore_windows_sleep hook so Ctrl+C unwinds cleanly.
+  • APScheduler is an OPTIONAL dependency. Server boots cleanly without it;
+    the daily job is disabled (warning logged) and /api/sync-now (routes.py)
+    remains the manual fallback for triggering the same pipeline.
+  • Wired BOTH for --tunnel and direct (`app.run`) paths — auto-sync is
+    independent of whether cloudflared is up.
+
 v13.2 (recovery fix):
   _rebuild_scores_and_points() no longer wipes week_pts or season_pts.
 
@@ -34,15 +46,26 @@ import sys
 import threading
 import time
 import argparse
-from pathlib import Path
 
-from flask import render_template
+# ── UTF-8 stdout/stderr — the server prints scrape progress with emojis
+# (⚠ ✅ ⏳ ⚪) and Cricbuzz names with accents. On Windows, the default cp1252
+# codec raises UnicodeEncodeError on those characters, which has historically
+# masked real failures (the work completed, the print crashed, the operator
+# saw a stack trace instead of the success message). Reconfigure at boot.
+# `errors='replace'` means a stray un-encodable byte becomes '?' instead of
+# crashing — best-effort logging is better than silent task death.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass  # Python < 3.7 — leave default streams alone
 
 # ── All shared state comes from base.py ──────────────────────────────────────
 import base as _base
 from base import app, db, _log, BASE_DIR, DATA_DIR, BUDGET_TOTAL, XI_SIZE, MAX_WEEKS
 from config import DB_PATH
 import init_db
+import tasks   # v13.3: daily auto-sync scheduler
 
 # ── Blueprint registration ────────────────────────────────────────────────────
 from routes import bp
@@ -141,6 +164,60 @@ def _audit_player_id_coverage():
         print("  [startup] =========================================")
     except Exception as e:
         print(f"  [startup] ID coverage audit failed: {e}")
+
+
+def _audit_monday_match_schedule():
+    """
+    Latent-bug guard for the IST/UTC week-number drift (register S9).
+
+    Background: rollover_engine runs at Monday 14:00 UTC (= 19:30 IST).
+    Seed_Matches uses Mar 30 14:00 IST as the W1->W2 anchor, so a match
+    starting Monday 14:00-19:29 IST gets tagged with the *next* week
+    number but the rollover hasn't fired yet. Scoring then attributes
+    the match to the post-rollover XI, which may differ from the XI
+    that was actually active at game-time.
+
+    Today, every IPL 2026 Monday match starts at 19:30 IST exactly, so
+    none fall in the danger window. This guard fires loudly if a future
+    schedule update changes that, turning a silent data-integrity bug
+    into a clear startup error.
+    """
+    import json as _j
+    from datetime import datetime, timezone, timedelta
+    try:
+        sch_path = DATA_DIR / "schedule.json"
+        if not sch_path.exists():
+            return
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        with open(sch_path, encoding="utf-8") as f:
+            data = _j.load(f)
+        hits = []
+        for m in data.get("matches", []):
+            try:
+                y, mo, d = map(int, m["date"].split("-"))
+                h, mn = map(int, m["time_ist"].split(":"))
+                dt_ist = datetime(y, mo, d, h, mn, tzinfo=_IST)
+                if dt_ist.weekday() != 0:
+                    continue  # not a Monday
+                start_min = h * 60 + mn
+                if 14 * 60 <= start_min < 19 * 60 + 30:
+                    hits.append(
+                        f"M{m['match_no']} on {m['date']} {m['time_ist']} IST"
+                    )
+            except (KeyError, ValueError, AttributeError):
+                continue
+        if hits:
+            print("  [startup] WARNING: schedule.json contains Monday matches "
+                  "in the IST/UTC drift window.")
+            print("  [startup]   Affected matches (start before 19:30 IST):")
+            for h in hits:
+                print(f"  [startup]     - {h}")
+            print("  [startup]   These will be tagged with the next week's "
+                  "number but score against the pre-rollover XI.")
+            print("  [startup]   Register entry S9 needs the full UTC "
+                  "migration before such a match plays.")
+    except Exception as e:
+        print(f"  [startup] Monday-match schedule audit failed: {e}")
 
 
 def _cold_start_hydrate():
@@ -332,9 +409,17 @@ if __name__ == "__main__":
     _log(f"Database: {DB_PATH}")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
-    init_db.run_all_sync(db)
+    init_db.run_all_sync()
     _rebuild_scores_and_points()
     _audit_player_id_coverage()
+    _audit_monday_match_schedule()
+
+    # v13.3: Daily discovery+scrape scheduler.
+    # Idempotent; no-op (with warning) if APScheduler isn't installed.
+    # stop_scheduler is safe to call multiple times and safe even if start
+    # was a no-op — so registering unconditionally is fine.
+    tasks.start_daily_discovery_scheduler()
+    atexit.register(tasks.stop_scheduler)
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")

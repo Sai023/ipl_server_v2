@@ -1,10 +1,34 @@
-name: IPL 2026 Daily Sync
+name: IPL 2026 Daily Scrape (cloud safety-net)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# What this workflow does (post-refactor, v2.0)
+# ──────────────────────────────────────────────────────────────────────────────
+# Architecture
+#   Discovery (resolving new Cricbuzz match IDs) runs LOCALLY on the user's
+#   Windows box via APScheduler inside server.py — see
+#   tasks.start_daily_discovery_scheduler() (v2.0.0). Cricbuzz blocks GitHub
+#   Actions egress IPs, so live discovery here would always fail.
+#
+# This workflow's job is the SCRAPE-and-COMMIT half of the daily cycle:
+#   1. Sync data/schedule.json → matches table (idempotent, no Cricbuzz hit)
+#   2. Run scraper.py — fetches scorecard JSONs for any newly-completed
+#      matches whose cricbuzz_id is already in schedule.json
+#   3. Commit data/schedule.json (in case scraper cleared a wrong ID via
+#      _reset_url FIX-022), data/matches/*.json, and data/fantasy.db
+#
+# If the user's local box is offline this workflow still produces points
+# for any matches whose IDs were last pushed.  It cannot discover IDs for
+# matches that played after the last local discovery push — that is
+# expected; the local server is the authoritative discovery source.
+# ──────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:
   schedule:
-    # Run at 18:30 UTC (midnight IST) and 21:30 UTC (3am IST)
-    # This ensures matches that finished in the evening are picked up
+    # Run at 18:30 UTC (midnight IST) and 21:30 UTC (3am IST).
+    # Both fire AFTER the local server's daily 23:55 IST discovery
+    # (18:25 UTC), so we pick up the latest schedule.json if the user
+    # has pushed.
     - cron: '30 18 * * *'
     - cron: '30 21 * * *'
 
@@ -31,23 +55,31 @@ jobs:
           cache: 'pip'
 
       - name: 3. Install dependencies
+        # APScheduler is in requirements.txt; harmless on Actions (this
+        # workflow never starts the scheduler — no server boot here).
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 4. Seed players (if DB is empty)
+      - name: 4. Seed players (idempotent — no-op if DB already populated)
         run: python Seed_Players.py || echo "Players already seeded or error ignored"
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      - name: 5. Seed / update match schedule (auto-detects completed from IST times)
-        # --no-live: skips Cricbuzz fetch (GitHub Actions IPs are often blocked)
-        # --force: always update match statuses (completed/upcoming) based on schedule
-        run: python Seed_Matches.py --no-live --force
+      - name: 5. Sync data/schedule.json → matches table
+        # --no-live: skip Cricbuzz discovery (Actions IPs blocked).
+        # Discovery happens locally via the in-server APScheduler job.
+        # schedule.json must already exist in the repo (bootstrapped in file 1).
+        # --force is dropped: Seed_Matches.py v4.0's seed_to_db() is idempotent.
+        run: python Seed_Matches.py --no-live
         env:
           PYTHONPATH: ${{ github.workspace }}
 
       - name: 6. Run Cricbuzz scorecard scraper
+        # scraper v11.0 is a pure consumer — reads matches.scorecard_url,
+        # fetches scorecards, recalculates points. No discovery attempted.
+        # Matches with /00000 URLs (cricbuzz_id still null in schedule.json)
+        # are skipped cleanly with a log line; next local discovery fills them.
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
@@ -55,15 +87,20 @@ jobs:
           python scraper.py
 
       - name: 7. Commit & push updated data
+        # Commit schedule.json too — scraper's FIX-022 can clear wrong
+        # cricbuzz_ids when it detects a non-IPL or mismatched scorecard,
+        # and that cleanup needs to propagate back so local discovery
+        # refills the slot tomorrow.
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
+          git add -f data/schedule.json  2>/dev/null || true
           git add -f data/matches/*.json 2>/dev/null || true
           git add -f data/fantasy.db     2>/dev/null || true
 
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "data: sync $(date -u +%Y-%m-%dT%H:%M)Z"
+            git commit -m "data: scrape $(date -u +%Y-%m-%dT%H:%M)Z"
             git push origin main
           else
             echo "No data changes — nothing to commit."

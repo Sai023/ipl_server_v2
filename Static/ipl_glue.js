@@ -208,8 +208,6 @@
     getPlayers:         function () { return _fetchJson("/api/players"); },
     getCurrentWeek:     function () { return _fetchJson("/api/current-week"); },
     getHistory:         function (name) { return _fetchJson("/api/history/" + encodeURIComponent(name)); },
-    getPlayerPoints:    function (name) { return _fetchJson("/api/player-points/" + encodeURIComponent(name)); },
-    getUserMatchPoints: function (name) { return _fetchJson("/api/user-match-points/" + encodeURIComponent(name)); },
 
     // ── Phase 9: Match Centre endpoints ─────────────────────────────────
     getMatchCentre:  function (name) {
@@ -245,9 +243,7 @@
       });
     },
 
-    saveState:  function (p) { return _fetchJson("/api/state",  { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p) }); },
     saveMember: function (n,d){ return _fetchJson("/api/member/"+encodeURIComponent(n), { method:"PUT",  headers:{"Content-Type":"application/json"}, body:JSON.stringify(d) }); },
-    saveMatch:  function (m) { return _fetchJson("/api/match",  { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(m) }); },
 
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
@@ -271,7 +267,6 @@
       });
     },
 
-    seedHistory: function () { return _fetchJson("/api/seed-history", { method: "POST" }); },
   };
 
   // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────
@@ -354,61 +349,6 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 
-// ── v7.4: Shared player stats cache ──────────────────────────────────────
-var _playerMap = {};
-
-function _loadPlayerMap(cb) {
-  IplApi.getPlayers().then(function(d) {
-    if (d && d.players) {
-      _playerMap = {};
-      d.players.forEach(function(p) { _playerMap[p.id] = p; });
-      if (typeof cb === 'function') cb();
-    }
-  }).catch(function() {});
-}
-
-// ── v7.1: History tab — weekly pts chip ──────────────────────────────────
-_buildHistoryTab = function () {
-  if (!_historyData || !_historyData.weeks || _historyData.weeks.length === 0) {
-    return (_username && !_historyData)
-      ? '<div class="card"><p class="empty">History loading\u2026</p></div>'
-      : '<div class="card"><div class="history-empty"><strong>No history yet</strong>Your weekly XIs will appear here once you\'ve set and locked a team.</div></div>';
-  }
-  var weeks  = _historyData.weeks;
-  var viewWk = (_historyViewWk === null) ? _currentWeek : _historyViewWk;
-  var h = '<div class="history-bar"><label>\uD83D\uDCD6 Browse:</label>'
-        + '<select onchange="_selectHistoryWeek(parseInt(this.value))">';
-  weeks.forEach(function (w) {
-    var lbl = "Week " + w.week_no + (w.week_no === 0 ? " (Pre-season)" : w.is_current ? " (Current)" : " (Archive)");
-    h += '<option value="' + w.week_no + '"' + (w.week_no === viewWk ? " selected" : "") + ">" + esc(lbl) + "</option>";
-  });
-  h += "</select>";
-  var selRow = null;
-  for (var i = 0; i < weeks.length; i++) { if (weeks[i].week_no === viewWk) { selRow = weeks[i]; break; } }
-  if (selRow && !selRow.is_current) h += '<span class="ro-note">\uD83D\uDD12 Read-only archive</span>';
-  h += "</div>";
-  if (!selRow) return h + '<div class="card"><p class="empty">No data for selected week.</p></div>';
-  var tw = selRow.this_week;
-  h += '<div class="card' + (selRow.is_current ? "" : " card-locked") + '">'
-     + '<div class="week-label">Week ' + selRow.week_no
-     + (selRow.week_no === 0 ? " \u2014 Pre-season" : selRow.is_current ? "" : ' &nbsp;<span class="badge-lock">Archive</span>')
-     + '</div><h3 class="section-title">\u26A1 This Week\'s XI</h3>';
-  h += '<div style="display:inline-flex;align-items:center;gap:10px;background:rgba(0,212,170,.1);'
-     + 'border:1px solid rgba(0,212,170,.25);border-radius:8px;padding:6px 14px;margin-bottom:12px;">'
-     + '<span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">'
-     + 'Week ' + selRow.week_no + ' Points</span>'
-     + '<span style="font-size:20px;font-weight:900;color:var(--teal)">' + (selRow.week_pts || 0) + '</span>'
-     + '</div>';
-  if (tw && tw.team && tw.team.length > 0) {
-    h += _buildXiGrid(tw.team, tw.cap, tw.vc);
-    h += '<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 pts</span>'
-       + '<span><span class="badge badge-vc">VC</span> \xd71.5 pts</span></div>';
-  } else {
-    h += '<p class="empty">No XI recorded for this week.</p>';
-  }
-  return h + "</div>";
-};
-
 // ── v7.4: Leaderboard — per-week columns + cap/vc note ───────────────────
 _buildLeaderboardCard = function (lb) {
   var h = '<div class="card">';
@@ -458,224 +398,6 @@ _buildLeaderboardCard = function (lb) {
   return h;
 };
 
-// ── v7.4: Points tab — breakdown + match-by-match team totals ────────────
-_buildPointsTab = function () {
-  var h = '<div class="card">';
-  h += '<div class="user-header-bar" style="margin-bottom:14px">';
-  h += '<h3 class="section-title" style="margin:0">\uD83D\uDCCA My Points Breakdown</h3>';
-  h += '<button class="btn btn-ghost btn-sm" onclick="_ptsData=null;_loadPoints();if(_state)render(_state)" title="Reload points">\u27F3 Reload</button>';
-  h += '</div>';
-
-  if (_ptsLoading) return h + '<div class="pts-loading">\u23F3 Loading\u2026</div></div>';
-  if (!_ptsData || !_ptsData.players || _ptsData.players.length === 0)
-    return h + '<div class="pts-loading">No points data yet. Run scraper then Reload.</div></div>';
-
-  var d = _ptsData;
-  var _ms = {};
-  d.players.forEach(function(p) { (p.matches||[]).forEach(function(m) { _ms[m.match_id] = true; }); });
-  var matchCount = Object.keys(_ms).length;
-
-  h += '<div class="pts-summary">';
-  h += '<div class="pts-stat"><div class="val">' + d.total_pts + '</div><div class="lbl">Total Pts</div></div>';
-  h += '<div class="pts-stat"><div class="val">' + d.players.length + '</div><div class="lbl">Players</div></div>';
-  h += '<div class="pts-stat"><div class="val">' + matchCount + '</div><div class="lbl">Matches</div></div>';
-  if (matchCount > 0) h += '<div class="pts-stat"><div class="val">' + Math.round(d.total_pts/matchCount) + '</div><div class="lbl">Avg/Match</div></div>';
-  h += '</div>';
-
-  h += '<table class="pts-table"><thead><tr>'
-     + '<th>Player</th><th>Team</th><th>Role</th>'
-     + '<th style="text-align:right">Pts\u00A0(cap/vc)</th>'
-     + '<th style="text-align:right;font-size:11px;color:var(--muted)">Base</th>'
-     + '<th></th></tr></thead><tbody>';
-
-  d.players.forEach(function(p, idx) {
-    var rowId  = "pts-row-" + idx;
-    var badge  = p.is_cap ? '<span class="badge badge-c" style="margin-left:4px">C</span>'
-               : p.is_vc  ? '<span class="badge badge-vc" style="margin-left:4px">VC</span>' : '';
-    var mult   = p.is_cap ? " (\xd72)" : p.is_vc ? " (\xd71.5)" : "";
-    var avC    = _avClass(p.team);
-    var pInfo  = _playerMap[p.id] || {};
-    var basePts = pInfo.season_pts != null ? pInfo.season_pts : '\u2014';
-
-    h += '<tr>';
-    h += '<td><div style="display:flex;align-items:center;gap:8px">'
-       + '<div class="prow-avatar ' + avC + '">' + esc(_initials(p.name||p.id)) + '</div>'
-       + '<div><div style="font-size:13px;font-weight:600">' + esc(p.name||p.id) + badge + '</div>'
-       + '<div style="font-size:10px;color:var(--muted)">' + esc(p.id) + '</div></div></div></td>';
-    h += '<td style="font-size:11px;color:var(--muted)">' + esc(p.team||'\u2014') + '</td>';
-    h += '<td>' + _roleBadge(p.role) + '</td>';
-    h += '<td class="pts-cell">' + p.total_pts + esc(mult) + '</td>';
-    h += '<td style="text-align:right;font-size:11px;color:var(--muted)">' + basePts + '</td>';
-    h += '<td>';
-    if (p.matches && p.matches.length > 0)
-      h += '<button class="pts-expand-btn" onclick="(function(){var el=document.getElementById(\'' + rowId + '\');el.classList.toggle(\'open\');})()" >Details</button>';
-    h += '</td></tr>';
-    if (p.matches && p.matches.length > 0) {
-      h += '<tr><td colspan="6" style="padding:0 8px 8px"><div class="pts-matches" id="' + rowId + '">';
-      p.matches.forEach(function(m) {
-        var multStr = m.multiplier > 1 ? (m.multiplier === 2
-          ? '<span class="m-mult">\xd72</span>' : '<span class="m-mult">\xd71.5</span>') : '';
-        h += '<div class="pts-match-row">'
-           + '<div class="m-title">' + esc(m.title||m.match_id) + '</div>'
-           + '<div style="display:flex;align-items:center">'
-           + '<span style="font-size:10px;color:var(--muted);margin-right:6px">W' + m.week_no + '</span>'
-           + multStr + '<span class="m-pts">' + m.final_pts + '</span></div></div>';
-      });
-      h += '</div></td></tr>';
-    }
-  });
-  h += '</tbody></table>';
-
-  var matchTitleMap = {};
-  if (_state && _state.matches) _state.matches.forEach(function(m) { matchTitleMap[m.id] = m.title || m.id; });
-
-  if (_historyData && _historyData.weeks && _historyData.weeks.length > 0) {
-    var rows = [];
-    _historyData.weeks.forEach(function(wk) {
-      var ppm = wk.points_per_match || {};
-      Object.keys(ppm).forEach(function(mid) { rows.push({ week_no: wk.week_no, match_id: mid, pts: ppm[mid] }); });
-    });
-    rows.sort(function(a, b) { return a.week_no !== b.week_no ? a.week_no - b.week_no : a.match_id.localeCompare(b.match_id); });
-    if (rows.length > 0) {
-      h += '<h3 class="section-title" style="margin-top:20px">\uD83D\uDCC8 Match-by-Match Team Totals</h3>';
-      h += '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">Your XI\u2019s combined score per game including Cap(\xd72) and VC(\xd71.5).</p>';
-      h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-      h += '<thead><tr>'
-         + '<th style="text-align:left;padding:5px 8px;color:var(--muted)">Match</th>'
-         + '<th style="text-align:center;padding:5px 4px;color:var(--muted)">Wk</th>'
-         + '<th style="text-align:right;padding:5px 8px;color:var(--teal)">XI Total</th></tr></thead><tbody>';
-      var runningTotal = 0;
-      rows.forEach(function(r) {
-        runningTotal += r.pts;
-        var title = matchTitleMap[r.match_id] || r.match_id;
-        var color = r.pts > 0 ? 'var(--teal)' : 'var(--dim)';
-        h += '<tr style="border-top:1px solid rgba(255,255,255,.04)">'
-           + '<td style="padding:6px 8px;color:var(--text)">' + esc(title) + '</td>'
-           + '<td style="text-align:center;padding:6px 4px;color:var(--muted)">W' + r.week_no + '</td>'
-           + '<td style="text-align:right;padding:6px 8px;font-weight:700;color:' + color + '">' + r.pts + '</td></tr>';
-      });
-      h += '<tr style="border-top:2px solid rgba(255,255,255,.12)">'
-         + '<td colspan="2" style="padding:7px 8px;font-weight:700;color:var(--text)">Season Total</td>'
-         + '<td style="text-align:right;padding:7px 8px;font-weight:900;color:var(--gold)">' + runningTotal + '</td></tr>';
-      h += '</tbody></table>';
-    }
-  }
-
-  return h + '</div>';
-};
-
-
-// ── v7.3: Matches tab ─────────────────────────────────────────────────────
-var _umpData = null;
-
-function _loadUserMatchPoints() {
-  if (!window._username) return;
-  IplApi.getUserMatchPoints(window._username)
-    .then(function(d) {
-      if (d && d.ok) {
-        _umpData = {};
-        (d.matches || []).forEach(function(m) { _umpData[m.match_id] = m.pts; });
-      }
-    }).catch(function() {});
-}
-
-_buildMatchesTab = function () {
-  if (_umpData === null) _loadUserMatchPoints();
-
-  if (!_state || !_state.matches || _state.matches.length === 0)
-    return '<div class="card"><p class="empty">No match data yet.</p></div>';
-
-  var h = '<div class="card"><h3 class="section-title">\uD83D\uDCCB Matches</h3>';
-  h += '<table style="width:100%;border-collapse:collapse;font-size:13px">';
-  h += '<thead><tr>'
-     + '<th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Match</th>'
-     + '<th style="text-align:center;padding:6px 4px;color:var(--muted);font-weight:600">Wk</th>'
-     + '<th style="text-align:center;padding:6px 4px;color:var(--muted);font-weight:600">Status</th>'
-     + '<th style="text-align:right;padding:6px 8px;color:var(--teal);font-weight:600">My Pts</th>'
-     + '</tr></thead><tbody>';
-
-  _state.matches.forEach(function(m) {
-    var title  = m.title || m.id;
-    var status = (m.status || "").toLowerCase();
-    var badgeColor = status === 'completed' ? '#00D4AA' : status === 'live' ? '#F5C518' : '#5F7A9B';
-    var badgeLabel = status === 'completed' ? 'Completed' : status === 'live' ? 'Live' : 'Upcoming';
-    var myPts  = (_umpData && _umpData[m.id] != null) ? _umpData[m.id] : null;
-    var ptsStr = (myPts != null)
-      ? '<span style="color:var(--teal);font-weight:700">' + myPts + '</span>'
-      : '<span style="color:var(--dim)">\u2014</span>';
-    h += '<tr style="border-top:1px solid rgba(255,255,255,.05)">';
-    h += '<td style="padding:8px 8px;font-weight:500">' + esc(title) + '</td>';
-    h += '<td style="text-align:center;padding:8px 4px;color:var(--muted);font-size:11px">W' + (m.wk||m.week_no||'?') + '</td>';
-    h += '<td style="text-align:center;padding:8px 4px"><span style="display:inline-block;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;'
-       + 'background:' + badgeColor + '22;color:' + badgeColor + '">' + badgeLabel + '</span></td>';
-    h += '<td style="text-align:right;padding:8px 8px">' + ptsStr + '</td></tr>';
-  });
-
-  h += '</tbody></table></div>';
-  return h;
-};
-
-
-// ── v7.4: Player picker stats injection ──────────────────────────────────
-function _injectStatsToPicker() {
-  var rows = document.querySelectorAll('[data-pid], .prow, .player-row, .pick-row');
-  rows.forEach(function(row) {
-    if (row.querySelector('.ipl-pts-badge')) return;
-    var pid = row.getAttribute('data-pid') || (row.dataset && row.dataset.pid);
-    if (!pid) {
-      var idEl = row.querySelector('.prow-id, [class*="prow-id"], .player-id');
-      if (idEl) pid = idEl.textContent.trim();
-    }
-    if (!pid) return;
-    var pInfo = _playerMap[pid];
-    if (!pInfo) return;
-    var points    = pInfo.points    || 0;
-    var seasonPts = pInfo.season_pts || 0;
-    var badge = document.createElement('span');
-    badge.className = 'ipl-pts-badge';
-    badge.title = 'Fantasy pts (Cap\xd72 / VC\xd71.5 weighted)';
-    badge.style.cssText = 'display:inline-block;margin-left:6px;padding:1px 7px;'
-      + 'border-radius:99px;background:rgba(245,197,24,.18);color:#F5C518;'
-      + 'font-size:10px;font-weight:800;vertical-align:middle';
-    badge.textContent = '\u2605 ' + points;
-    var sub = document.createElement('span');
-    sub.className = 'ipl-base-pts';
-    sub.title = 'Base pts (no cap/vc multiplier)';
-    sub.style.cssText = 'display:inline-block;margin-left:4px;padding:1px 5px;'
-      + 'border-radius:99px;background:rgba(95,122,155,.2);color:var(--muted,#5F7A9B);'
-      + 'font-size:9px;font-weight:600;vertical-align:middle';
-    sub.textContent = seasonPts + 'b';
-    var priceEl = row.querySelector('[class*="price"], .prow-price, .player-price');
-    if (priceEl) {
-      priceEl.parentNode.insertBefore(badge, priceEl.nextSibling);
-      priceEl.parentNode.insertBefore(sub, badge.nextSibling);
-    } else {
-      row.appendChild(badge); row.appendChild(sub);
-    }
-  });
-}
-
-var _pickerObserver = null;
-
-function _setupPickerObserver() {
-  if (_pickerObserver) return;
-  var target = document.querySelector('.tab-content, #app, main, body');
-  if (!target) { setTimeout(_setupPickerObserver, 500); return; }
-  _loadPlayerMap(function() { _injectStatsToPicker(); });
-  _pickerObserver = new MutationObserver(function() { _injectStatsToPicker(); });
-  _pickerObserver.observe(target, { childList: true, subtree: true });
-}
-
-window.addEventListener('ipl:state-updated', function() {
-  _umpData = null;
-  _mcData  = null; // invalidate Match Centre cache on state change
-  _loadPlayerMap(function() { _injectStatsToPicker(); });
-});
-
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _setupPickerObserver);
-else setTimeout(_setupPickerObserver, 800);
-
-
 // ════════════════════════════════════════════════════════════════════════════
 // v7.6  MATCH CENTRE — CSS Injection + Scaffold   (Phase 9.2)
 // ════════════════════════════════════════════════════════════════════════════
@@ -711,6 +433,10 @@ function _injectMCStyles() {
     '.mc-spill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:9px;font-weight:700;',
     'text-transform:uppercase;letter-spacing:.04em;background:rgba(0,212,170,.14);color:#00D4AA;}',
     '.mc-spill.upcoming{background:rgba(95,122,155,.14);color:#5F7A9B;}',
+    '.mc-teams-row{display:flex;align-items:center;gap:6px;margin:3px 0 2px;}',
+    '.mc-team-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;}',
+    '.mc-vs{font-size:9px;font-weight:600;color:var(--muted,#5F7A9B);text-transform:uppercase;}',
+    '.mc-result{color:var(--dim,#3D5572)!important;font-style:italic;}',
     '.match-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(7,17,31,.88);',
     'display:flex;align-items:flex-end;justify-content:center;animation:mcFade .2s ease;}',
     '@keyframes mcFade{from{opacity:0}to{opacity:1}}',
@@ -759,13 +485,7 @@ else
   _injectMCStyles();
 
 
-var _mcData   = null;
-var _mcLoading = false;
-
-if (typeof window._buildMatchCentreTab === 'undefined') {
-  window._buildMatchCentreTab = function () {
-    return '<div id="match-centre-tab" class="card" style="min-height:120px">'
-         + '<div class="mm-loading">\u23F3 Match Centre loading\u2026</div>'
-         + '</div>';
-  };
-}
+// Note: _mcData / _mcLoading globals and the _buildMatchCentreTab stub
+// that used to live here were leftover v7.6 scaffolds. mc_hub.js holds
+// its own _mcData / _mcLoading inside its IIFE and always overrides
+// window._buildMatchCentreTab on load, so the stub was unreachable.

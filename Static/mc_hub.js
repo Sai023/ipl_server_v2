@@ -3,7 +3,7 @@
  * ==========================================================================
  * v1.2 (Phase 9.5 — Final Lock):
  *   • _injectTabStyles() — makes the .tabs nav fully responsive on mobile.
- *     The 9-tab row now scrolls horizontally with no wrapping, hidden
+ *     The 6-tab row now scrolls horizontally with no wrapping, hidden
  *     scrollbar, and smooth momentum scrolling on iOS. The Match Centre tab
  *     is highlighted with a teal border so it’s easy to find when scrolled.
  *     Injected once on DOMContentLoaded, idempotent (#ipl-tab-styles guard).
@@ -34,7 +34,7 @@
   // ── Responsive tab nav (Phase 9.5) ───────────────────────────────────────
   /**
    * _injectTabStyles()
-   * Makes the .tabs row scroll horizontally on narrow screens so all 9 tabs
+   * Makes the .tabs row scroll horizontally on narrow screens so all 6 tabs
    * remain accessible without wrapping or clipping.
    *
    * Responsive rules:
@@ -162,10 +162,6 @@
         var mid      = m.match_id;
         var pts      = m.user_match_pts;
 
-        var meta1 = [];
-        if (m.venue)      meta1.push(_esc(m.venue));
-        if (m.date_label) meta1.push(_esc(m.date_label));
-
         h += '<div class="match-card' + (upcoming ? ' mc-upcoming' : '') + '"'
            + (upcoming ? ''
                : ' onclick="_openMatchModal(\'' + _escAttr(mid) + '\')" tabindex="0"')
@@ -173,10 +169,22 @@
         h += '<div class="mc-mno">' + _esc(m.match_no || '') + '</div>';
         h += '<div class="mc-mbody">';
         h += '<div class="mc-mtitle">' + _esc(m.title || mid) + '</div>';
-        if (meta1.length)
-          h += '<div class="mc-mmeta">' + meta1.join(' \u00B7 ') + '</div>';
+        // Team matchup pills: SRH vs RCB
+        var teams = m.teams || [];
+        if (teams.length >= 2) {
+          h += '<div class="mc-teams-row">'
+             + '<span class="mc-team-tag ' + _avCls(teams[0]) + '">' + _esc(teams[0]) + '</span>'
+             + '<span class="mc-vs">vs</span>'
+             + '<span class="mc-team-tag ' + _avCls(teams[1]) + '">' + _esc(teams[1]) + '</span>'
+             + '</div>';
+        }
+        var meta2 = [];
+        if (m.date_label) meta2.push(_esc(m.date_label));
+        if (m.venue)      meta2.push(_esc(m.venue));
+        if (meta2.length)
+          h += '<div class="mc-mmeta">' + meta2.join(' \u00B7 ') + '</div>';
         if (m.result)
-          h += '<div class="mc-mmeta" style="color:var(--dim,#3D5572)">'
+          h += '<div class="mc-mmeta mc-result">'
              + _esc(m.result) + '</div>';
         h += '</div>';
         h += '<div class="mc-mright">';
@@ -207,6 +215,9 @@
     var serverTotal  = d.user_pts || 0;
     var totalsMatch  = (computedTotal === serverTotal);
 
+    // Detect "no player breakdown yet" — scraper hasn't run for this match
+    var noBreakdown = (computedTotal === 0 && serverTotal > 0 && players.length > 0);
+
     var h = '';
     h += '<button class="mm-close" onclick="_closeMatchModal()">' + '\u00D7' + '</button>';
 
@@ -234,6 +245,10 @@
       h += '<div class="mm-loading">No player data yet for this match.</div>';
     } else {
       h += '<div class="mm-xi-lbl">Your XI \u00B7 Points This Match</div>';
+      if (noBreakdown) {
+        h += '<div style="font-size:11px;color:var(--muted,#5F7A9B);margin-bottom:8px;font-style:italic">'
+           + 'Per-player breakdown available after the scraper runs for this match.</div>';
+      }
       players.forEach(function (p, idx) {
         var isCap  = !!p.is_cap;
         var isVc   = !!p.is_vc;
@@ -249,8 +264,9 @@
         else if (p.multiplier_str)         multAnnot = p.multiplier_str;
 
         // Colour rules
-        var ptsColour   = zero ? 'var(--dim,#3D5572)'
-                        : isCap ? '#F5C518'
+        var ptsColour   = noBreakdown ? 'var(--muted,#5F7A9B)'
+                        : zero        ? 'var(--dim,#3D5572)'
+                        : isCap       ? '#F5C518'
                         : 'var(--ipl-teal,#00d2ff)';
         var annotColour = isCap ? '#F5C518' : 'var(--ipl-teal,#00d2ff)';
         var rowBorder   = isTop ? 'border-left:2px solid #F5C518;padding-left:6px;margin-left:-6px;' : '';
@@ -275,24 +291,31 @@
         h += '</div>';
         // Points + multiplier annotation
         h += '<div class="mm-ppts" style="color:' + ptsColour + '">';
-        h += zero ? '0' : final_;
-        if (multAnnot) {
-          h += '<span class="mm-pmult" style="color:' + annotColour + '">' + _esc(multAnnot) + '</span>';
+        if (noBreakdown) {
+          h += isCap ? '<span style="font-size:10px">×2</span>—'
+             : isVc  ? '<span style="font-size:10px">×1.5</span>—'
+             : '—';
+        } else {
+          h += zero ? '0' : final_;
+          if (multAnnot) {
+            h += '<span class="mm-pmult" style="color:' + annotColour + '">' + _esc(multAnnot) + '</span>';
+          }
         }
         h += '</div>';
         h += '</div>';
       });
     }
 
-    // Footer — client-side computed total
+    // Footer — use server total when per-player breakdown unavailable
+    var displayTotal = noBreakdown ? serverTotal : computedTotal;
     var mismatchHtml = '';
-    if (!totalsMatch && players.length > 0) {
+    if (!noBreakdown && !totalsMatch && players.length > 0) {
       mismatchHtml = ' <span title="Server total: ' + serverTotal + '" '
-        + 'style="font-size:10px;color:#FB923C;font-weight:600">\u26A0</span>';
+        + 'style="font-size:10px;color:#FB923C;font-weight:600">⚠</span>';
     }
     h += '<div class="mm-total">'
        + '<span class="mm-tlbl">Match Total</span>'
-       + '<span class="mm-tval">' + computedTotal + mismatchHtml + '</span>'
+       + '<span class="mm-tval">' + displayTotal + mismatchHtml + '</span>'
        + '</div>';
 
     return h;
