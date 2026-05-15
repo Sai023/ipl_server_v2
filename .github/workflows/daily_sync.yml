@@ -100,17 +100,7 @@ jobs:
         # The host's per-match Save & Scrape commits a deletion of the single
         # match_NN.json before dispatching, so that one match re-scrapes
         # without needing this global wipe.
-        #
-        # IMPORTANT — string comparison, not boolean. `type: boolean`
-        # workflow_dispatch inputs are serialised as the string "true" /
-        # "false" when triggered via the REST API (which the host's
-        # cloud_sync.dispatch_workflow uses), and inconsistently via the
-        # UI checkbox. `inputs.force_full_rescrape == true` (literal bool)
-        # returns false against the string "true" → step silently skipped
-        # → scraper.py sees the JSON cache and short-circuits every match
-        # → workflow finishes green with zero data changes. Quoted is the
-        # only form that works in both UI and API paths.
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full_rescrape == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full_rescrape == true }}
         run: |
           echo "force_full_rescrape=true: clearing data/matches/*.json"
           rm -f data/matches/*.json
