@@ -36,7 +36,7 @@ from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated 
 
 # ── Paths / Game constants ──────────────────────────────────────────────────────────
 
-STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR = BASE_DIR / "Static"   # capital S — actual on-disk folder; Linux is case-sensitive
 DATA_DIR.mkdir(exist_ok=True)
 
 BUDGET_TOTAL = 100.0
@@ -197,7 +197,11 @@ db  = DatabaseManager(DB_PATH)
 app = Flask(
     __name__,
     template_folder=str(BASE_DIR/"templates"),
-    static_folder=str(BASE_DIR/"static"),
+    # Capital "Static" — the on-disk folder name. Windows is case-insensitive
+    # so "static" worked locally, but Render / any Linux host treats this as
+    # case-sensitive and 404s every /static/* asset (including ipl_glue.js,
+    # which then leaves the UI stuck on "Loading your league...").
+    static_folder=str(BASE_DIR/"Static"),
     static_url_path="/static",
 )
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
