@@ -23,7 +23,6 @@ services:
     name: ipl-fantasy-2026
     runtime: python
     plan: free
-    pythonVersion: "3.11"
     region: oregon            # or singapore — match where most players live
     branch: main
     autoDeploy: true          # any push to main redeploys
@@ -38,6 +37,11 @@ services:
     healthCheckPath: /api/ping
 
     envVars:
+      # Python version pin — Render reads PYTHON_VERSION as the runtime hint
+      # for `runtime: python` services. Use a full patch version, not just
+      # major.minor — Render rejects "3.11" alone.
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: HOSTED
         value: "true"
       - key: PYTHONIOENCODING
