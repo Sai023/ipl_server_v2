@@ -32,11 +32,48 @@ Dependency: base.py → routes.py  (routes never imports from server)
 """
 
 import json as _json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, jsonify, render_template, send_from_directory
+
+import cloud_sync   # Phase 2: git pull / push helpers (HOSTED mode)
+
+# HOSTED mode flag — same source of truth as server.py.
+# Routes only branch when behaviour MUST differ in the cloud (Cricbuzz scrape
+# replaced with git pull). Everything else stays single-codepath.
+_IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")
+
+
+def _push_if_hosted(reason: str) -> None:
+    """
+    Phase 4: After a successful write in HOSTED mode, commit fantasy.db and
+    push so other clients (and the local box / Actions) see the change on
+    their next git pull.
+
+    Sync, not async — durability matters more than the 2-5s latency. If the
+    container dies between the local DB write and the git push, the change
+    is lost forever (Render redeploys wipe the container's filesystem).
+    Sync push means the write is durable as soon as the user sees "OK".
+
+    Failures are logged but do not surface to the caller as a 500. The
+    local DB has the change; the next successful push will catch it up.
+    """
+    if not _IS_HOSTED:
+        return
+    try:
+        ok, msg = cloud_sync.commit_and_push(
+            paths=["data/fantasy.db"],
+            message=f"ui: {reason}",
+        )
+        if not ok:
+            _log(f"git push after '{reason}' failed: {msg}. "
+                 f"Local DB has the change; will catch up on next write.",
+                 "warn")
+    except Exception as e:
+        _log(f"_push_if_hosted({reason}) crashed: {e}", "error")
 
 import base as _base
 from base import (
@@ -211,6 +248,7 @@ def api_save_next_week(n):
                 return jsonify({"error":f"Budget exceeded: {total_cost:.1f} CR",
                                 "total_cost":total_cost,"budget":BUDGET_TOTAL,"code":422}),422
         result=db.save_next_week(n,team,cap,vc)
+        _push_if_hosted(f"save-next-week:{n}:w{result['week_no']}")
         return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})
     except sqlite3.IntegrityError as e:
         return jsonify({"error":str(e),"code":400}),400
@@ -226,7 +264,9 @@ def api_member(n):
         if not n or len(n)>30: return jsonify({"error":"name 1-30 chars","code":400}),400
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"Invalid JSON","code":400}),400
-        db.upsert_member(n,d); return jsonify({"ok":True})
+        db.upsert_member(n,d)
+        _push_if_hosted(f"member:{n}")
+        return jsonify({"ok":True})
     except Exception as e:
         _log(f"PUT /api/member/{n}: {e}","error")
         return jsonify({"error":str(e),"code":500}),500
@@ -243,6 +283,7 @@ def api_recalculate_points():
     if re_: return re_
     try:
         n=db.recalculate_points(); wp=db.update_week_points(); pp=db.update_player_season_pts()
+        _push_if_hosted(f"recalc:rows={n}")
         return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,"player_pts_updated":pp,
                         "message":f"Recalculated {n} player-match rows, {wp} week_pts rows, {pp} player season_pts."})
     except Exception as e:
@@ -836,6 +877,24 @@ def api_match_details(match_id):
 
 @bp.route("/api/rollover", methods=["POST"])
 def api_rollover():
+    # Phase 3: optional bearer-token auth. If ROLLOVER_TOKEN is set in env
+    # (we set it on the host so the GitHub Actions monday_rollover workflow
+    # can trigger), require it. Local dev (no env var) stays open so the
+    # "Simulate Monday 2:00 PM Rollover" button in This Week → Dev Tools
+    # keeps working without setup. The in-browser auto-rollover from
+    # Static/ipl_glue.js also stays unauthenticated; the host's HOSTED+
+    # ROLLOVER_TOKEN combo means cloud only — see workflow design.
+    expected = os.environ.get("ROLLOVER_TOKEN", "").strip()
+    if expected:
+        auth = request.headers.get("Authorization", "")
+        sent = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        # Fall through if the request comes from the same-origin browser
+        # (no Authorization header) — that's the dev-tools button. The
+        # workflow always sends the header, so cron triggers must match.
+        # If a header is sent but wrong, reject hard.
+        if auth and sent != expected:
+            return jsonify({"error": "invalid rollover token",
+                            "ok": False, "code": 401}), 401
     force=request.args.get("force","").strip() in ("1","true","yes")
     try:
         now=datetime.now(timezone.utc)
@@ -870,6 +929,7 @@ def api_rollover():
         if not force: db.set_last_rollover(now_iso)
         db.set_meta("_saved",now_iso)
         db.update_week_points()
+        _push_if_hosted(f"rollover:w{new_week_no}")
         return jsonify({"ok":True,"rolled":True,"new_week_no":new_week_no,
                         "season_complete":new_week_no>=MAX_WEEKS})
     except Exception as e:
@@ -918,9 +978,19 @@ def api_update_match_url():
         if not row: con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
         con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
         con.commit(); con.close()
-        tasks.start_bg_scrape(match_id,BASE_DIR)
+        if _IS_HOSTED:
+            # No Cricbuzz egress in cloud \u2014 push the URL change so the local
+            # box / daily_sync.yml workflow picks it up on next run and does
+            # the actual scrape there.
+            _push_if_hosted(f"admin-url:{match_id}={cb_id}")
+            msg = ("URL saved & pushed to git. The scrape will run on the next "
+                   "local discovery (23:55 IST) or cloud safety-net cycle. "
+                   "Refresh later to see scores.")
+        else:
+            tasks.start_bg_scrape(match_id,BASE_DIR)
+            msg = "URL saved. Scraping started in background \u2014 refresh in ~30 seconds."
         return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
-                        "message":"URL saved. Scraping started in background \u2014 refresh in ~30 seconds."})
+                        "message":msg})
     except Exception as e:
         _log(f"POST /api/update-match-url: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -958,6 +1028,36 @@ def api_sync_now():
     """
     re_ = _check_rate(_write_limiter)
     if re_: return re_
+
+    # ── HOSTED mode (Phase 2): git pull instead of Cricbuzz scrape ──────────
+    # The cloud host cannot reach Cricbuzz. Refresh = pull whatever the
+    # operator's local box and the daily_sync.yml workflow have pushed since
+    # the last call. Cheap and synchronous (~1-3s); no background thread.
+    if _IS_HOSTED:
+        try:
+            changed, msg = cloud_sync.pull_latest(log=_log)
+            if changed:
+                # Reconnect any cached DB handle so the next request reads
+                # the freshly-pulled fantasy.db, not the file the connection
+                # was opened against. Best-effort — SQLite reopens per
+                # request anyway, but explicit is safer.
+                try:
+                    if hasattr(db, "reload_from_disk"):
+                        db.reload_from_disk()
+                except Exception as e:
+                    _log(f"DB reload after pull failed (will retry next request): {e}",
+                         "warn")
+            return jsonify({
+                "ok":      True,
+                "mode":    "git_pull",
+                "changed": changed,
+                "message": msg,
+            })
+        except Exception as e:
+            _log(f"POST /api/sync-now (HOSTED): {e}", "error")
+            return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+    # ── LOCAL mode: existing Cricbuzz discovery + scrape behaviour ──────────
     try:
         d     = request.get_json(force=True, silent=True) or {}
         debug = bool(d.get("debug")) or \

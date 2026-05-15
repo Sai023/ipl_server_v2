@@ -225,6 +225,43 @@ thread so the UI returns immediately.
 
 ---
 
+## HOSTED mode (Render / cloud deploy)
+
+The app can run on **Render** (or any Linux host that sets `HOSTED=true`) instead of, or alongside, the operator's local box. Render's free tier is enough for a friends-only league.
+
+**What HOSTED=true changes:**
+- APScheduler discovery is skipped (Cricbuzz blocks Azure egress)
+- The `cloudflared` tunnel is refused — the host platform already provides a public URL
+- `_rebuild_scores_and_points()` is skipped on boot; ephemeral tables come from the committed `fantasy.db` via `git pull`
+- `/api/sync-now` does `git pull --ff-only` instead of a Cricbuzz scrape
+- Write endpoints (`save-next-week`, `member`, `rollover`, `recalculate-points`, `update-match-url`) commit + push the updated `fantasy.db` back to git via `cloud_sync.commit_and_push()`
+
+**Data flow:**
+```
+Local box (Windows, APScheduler 23:55 IST):  discovery → push schedule.json
+GitHub Actions monday_rollover.yml (Mon 14:00 UTC):  POSTs /api/rollover to host
+GitHub Actions daily_sync.yml (18:30 + 21:30 UTC):  scrape known IDs → push fantasy.db (pull-rebase + retry)
+Render host (HOSTED=true):  serves UI; git-pulls on /api/sync-now; git-pushes on user writes
+```
+
+**Deploy steps:**
+1. Push the repo to GitHub (already done if you're reading this).
+2. Connect the repo as a **Render Blueprint** — Render reads `render.yaml` and creates the service.
+3. In the Render dashboard, set two secrets:
+   - `GITHUB_TOKEN` — fine-grained PAT scoped to `Sai023/ipl_server_v2` with `contents: write`
+   - `ROLLOVER_TOKEN` — any random string (e.g. `openssl rand -hex 24`)
+4. In the GitHub repo Settings → Secrets and variables → Actions, add the same `ROLLOVER_TOKEN` plus `HOSTED_URL` (your Render URL, no trailing slash).
+5. Render auto-deploys on `git push`. Cold start ~30s; subsequent reads are fast.
+
+**Sleep behaviour:** Render free web services sleep after 15 min idle and auto-wake on incoming HTTP (~20-30s cold start). The `monday_rollover.yml` workflow retries 5x with 30s gaps to give the host time to wake.
+
+**Failure modes & recovery:**
+- Host asleep at 14:00 UTC Monday: workflow retries 5x; if all fail, the in-browser `setTimeout` in `Static/ipl_glue.js` fires when the next user logs in. `roll_week()` is idempotent.
+- Git push conflict during user save: `cloud_sync.commit_and_push()` does pull-rebase and retries once. Failure leaves the change in the local container DB; next successful write catches it up.
+- `daily_sync.yml` push race: workflow does pull-rebase + 3 retries with `concurrency: ipl-sync` serializing against `monday_rollover.yml`.
+
+---
+
 ## Cloudflare Tunnel (public URL)
 
 The project ships a vendored `cloudflared.exe` (Windows amd64) so a fresh

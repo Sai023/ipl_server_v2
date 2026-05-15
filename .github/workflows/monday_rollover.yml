@@ -1,0 +1,91 @@
+name: IPL 2026 Monday Rollover
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Phase 3 — Weekly rollover trigger
+# ──────────────────────────────────────────────────────────────────────────────
+# Fires every Monday at 14:00 UTC (= 16:00 SAST, 19:30 IST) — the league's
+# rollover deadline. Posts to the hosted server's /api/rollover endpoint.
+#
+# Why a cron-curl, not a Python script:
+#   - Single writer to fantasy.db. The hosted server is the only process
+#     that writes — workflows ask it to write, they don't write themselves.
+#     This eliminates git merge conflicts on the SQLite blob.
+#   - The hosted server's roll_week logic is already battle-tested via the
+#     in-browser Dev Tools "Simulate Monday 2:00 PM Rollover" button.
+#
+# Failure handling:
+#   - Render free tier sleeps after 15 min idle. Cold start ~30s.
+#     We retry 5x with 30s gaps, so the host is given ~3 minutes to wake.
+#   - If all retries fail (host genuinely down), the in-browser setTimeout
+#     in Static/ipl_glue.js still fires whenever the next user logs in.
+#     /api/rollover is idempotent (already_rolled guard) — firing the
+#     workflow's curl AND a browser fallback is safe; only the first one
+#     does work.
+#
+# Required secrets (Repo → Settings → Secrets and variables → Actions):
+#   HOSTED_URL       — e.g. https://ipl-fantasy.onrender.com  (NO trailing slash)
+#   ROLLOVER_TOKEN   — match the value set on the host's env var of the same name
+#
+# Concurrency: shares the `ipl-sync` group with daily_sync.yml so a scrape
+# and rollover never run together — git pushes from the host would otherwise
+# race and the second would have to rebase. Cleaner to serialize.
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 14 * * 1'   # Monday 14:00 UTC
+
+concurrency:
+  group: ipl-sync
+  cancel-in-progress: false
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 1. Sanity check secrets
+        env:
+          HOSTED_URL: ${{ secrets.HOSTED_URL }}
+          ROLLOVER_TOKEN: ${{ secrets.ROLLOVER_TOKEN }}
+        run: |
+          if [ -z "$HOSTED_URL" ] || [ -z "$ROLLOVER_TOKEN" ]; then
+            echo "::error::Missing HOSTED_URL or ROLLOVER_TOKEN secret"
+            exit 1
+          fi
+          # Strip any accidental trailing slash so URL concat below is clean
+          echo "HOSTED_URL_CLEAN=${HOSTED_URL%/}" >> $GITHUB_ENV
+
+      - name: 2. POST /api/rollover (5 retries, 30s gap for cold-start)
+        env:
+          ROLLOVER_TOKEN: ${{ secrets.ROLLOVER_TOKEN }}
+        run: |
+          set -e
+          URL="${HOSTED_URL_CLEAN}/api/rollover"
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt: POST $URL"
+            HTTP_CODE=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+                       --max-time 60 \
+                       -X POST \
+                       -H "Authorization: Bearer ${ROLLOVER_TOKEN}" \
+                       -H "Content-Type: application/json" \
+                       "$URL" || echo "000")
+            echo "HTTP $HTTP_CODE"
+            cat /tmp/resp.json 2>/dev/null || true
+            echo
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "::notice::Rollover succeeded on attempt $attempt"
+              exit 0
+            fi
+            if [ "$HTTP_CODE" = "401" ]; then
+              echo "::error::Token rejected — check ROLLOVER_TOKEN secret matches host env"
+              exit 1
+            fi
+            if [ $attempt -lt 5 ]; then
+              echo "Sleeping 30s before retry (host may be cold-starting)..."
+              sleep 30
+            fi
+          done
+          echo "::error::Rollover failed after 5 attempts. In-browser fallback will fire when a user next loads the site."
+          exit 1

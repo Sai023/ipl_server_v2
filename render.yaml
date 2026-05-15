@@ -1,0 +1,51 @@
+# IPL Fantasy 2026 — Render Blueprint                       render.yaml v1.0.0
+# ──────────────────────────────────────────────────────────────────────────────
+# Phase 5 deploy: declarative Render setup.
+#
+# How to use:
+#   1. Sign in to https://dashboard.render.com → New + → Blueprint
+#   2. Connect this GitHub repo (Sai023/ipl_server_v2). Render reads this file.
+#   3. After it creates the service, set the runtime secrets in the dashboard:
+#         GITHUB_TOKEN   — fine-grained PAT scoped to ipl_server_v2, contents:write
+#         ROLLOVER_TOKEN — random string; ALSO add as repo secret with the same value
+#                          (the monday_rollover.yml workflow reads it from there)
+#   4. Trigger a manual deploy. First boot will take ~3 min (pip install +
+#      seed if data is missing). Subsequent boots are <30s.
+#
+# Why free tier is enough:
+#   - Render free web service: 750h/month, sleeps after 15min idle, auto-wakes
+#     on incoming HTTP (~20-30s cold start).
+#   - Acceptable per the project's stated tolerance for load-up delays.
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  - type: web
+    name: ipl-fantasy-2026
+    runtime: python
+    plan: free
+    pythonVersion: "3.11"
+    region: oregon            # or singapore — match where most players live
+    branch: main
+    autoDeploy: true          # any push to main redeploys
+
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+
+    # `--host 0.0.0.0` so Render's load balancer can reach us.
+    # `--port $PORT` honours Render's injected PORT env var.
+    # No --tunnel (HOSTED=true makes server.py refuse it anyway).
+    startCommand: python server.py --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /api/ping
+
+    envVars:
+      - key: HOSTED
+        value: "true"
+      - key: PYTHONIOENCODING
+        value: utf-8
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Secrets — set values in dashboard, NOT here.
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ROLLOVER_TOKEN
+        sync: false

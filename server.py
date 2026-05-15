@@ -1,6 +1,17 @@
 """
-IPL Fantasy 2026 — Flask Server                             Golden File v13.3
+IPL Fantasy 2026 — Flask Server                             Golden File v13.4
 ===========================================================================
+v13.4 (HOSTED mode, Phase 1):
+  • Detects HOSTED=true env var (set on Render/Fly.io/Codespaces).
+  • In HOSTED mode:
+      - APScheduler discovery is skipped (no Cricbuzz egress in cloud).
+      - _rebuild_scores_and_points() is skipped (ephemeral tables come
+        from the committed fantasy.db via git pull, not from a local
+        scrape — wiping them would leave Match Centre blank until the
+        next pull).
+      - --tunnel flag is refused (the host already provides a public URL).
+  • LOCAL mode (HOSTED unset / false) is unchanged.
+
 v13.3 (daily auto-sync):
   • Calls tasks.start_daily_discovery_scheduler() on startup — APScheduler
     BackgroundScheduler fires once a day at 23:55 IST to run the discovery
@@ -59,6 +70,14 @@ try:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except AttributeError:
     pass  # Python < 3.7 — leave default streams alone
+
+# ── HOSTED mode detection (Phase 1) ──────────────────────────────────────────
+# Set HOSTED=true in Render dashboard, Fly.io fly.toml, or Codespaces devcontainer.
+# Cricbuzz blocks Azure egress, so cloud hosts cannot scrape — the local box
+# is the only Cricbuzz-accessible node. This flag tells the server to skip
+# the local-only behaviours (APScheduler discovery, ephemeral table wipe,
+# tunnel startup) and instead trust the git-committed data.
+IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")
 
 # ── All shared state comes from base.py ──────────────────────────────────────
 import base as _base
@@ -354,8 +373,12 @@ def banner_line(text="", fill=" "): pad = WIDE - len(text); return f"||  {text}{
 def print_banner(port, tunnel, lan_ip):
     bar = "=" * WIDE
     print(f"\n+{bar}+"); print(f"|{'  IPL FANTASY 2026':^{WIDE}}|"); print(f"+{bar}+")
-    print(banner_line(f"Local:    http://localhost:{port}"))
-    print(banner_line(f"Network:  http://{lan_ip}:{port}  (same Wi-Fi)"))
+    if IS_HOSTED:
+        print(banner_line("MODE: HOSTED (cloud) — Cricbuzz scrape disabled"))
+        print(banner_line(f"Listening: 0.0.0.0:{port}  (public URL via host platform)"))
+    else:
+        print(banner_line(f"Local:    http://localhost:{port}"))
+        print(banner_line(f"Network:  http://{lan_ip}:{port}  (same Wi-Fi)"))
     print(f"+{bar}+")
     if tunnel:
         print(banner_line(f"PUBLIC URL ({tunnel.provider}):"))
@@ -409,17 +432,49 @@ if __name__ == "__main__":
     _log(f"Database: {DB_PATH}")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
+    # v13.4 (Phase 1+2): In HOSTED mode, pull latest committed data before
+    # touching the DB. Render redeploys ship with the repo at the moment
+    # of the build; if any user writes / Action scrapes / rollovers landed
+    # between build and boot, this catches us up.
+    if IS_HOSTED:
+        try:
+            import cloud_sync
+            changed, msg = cloud_sync.pull_latest(log=_log)
+            _log(f"Boot-time git pull: {msg}")
+        except Exception as e:
+            _log(f"Boot-time git pull failed (continuing with shipped data): {e}",
+                 "warn")
+
     init_db.run_all_sync()
-    _rebuild_scores_and_points()
+
+    if IS_HOSTED:
+        # v13.4 (Phase 1): In HOSTED mode the ephemeral tables came from the
+        # last git-committed fantasy.db. Wiping them on every container start
+        # (Render restarts on every deploy + on wake-from-sleep) would leave
+        # Match Centre blank until the next git pull, which is a worse UX
+        # than the small risk of stale ephemeral rows. Trust the commit.
+        _log("HOSTED mode: skipping _rebuild_scores_and_points() — "
+             "trusting committed fantasy.db")
+    else:
+        _rebuild_scores_and_points()
+
     _audit_player_id_coverage()
     _audit_monday_match_schedule()
 
     # v13.3: Daily discovery+scrape scheduler.
-    # Idempotent; no-op (with warning) if APScheduler isn't installed.
-    # stop_scheduler is safe to call multiple times and safe even if start
-    # was a no-op — so registering unconditionally is fine.
-    tasks.start_daily_discovery_scheduler()
-    atexit.register(tasks.stop_scheduler)
+    # v13.4: Skipped in HOSTED mode — Cricbuzz blocks Azure egress, the
+    # scheduler would just fire failures every day at 23:55 IST. Discovery
+    # remains on the operator's local box.
+    if IS_HOSTED:
+        _log("HOSTED mode: skipping APScheduler discovery (Cricbuzz egress blocked)")
+    else:
+        tasks.start_daily_discovery_scheduler()
+        atexit.register(tasks.stop_scheduler)
+
+    if args.tunnel and IS_HOSTED:
+        _log("HOSTED mode: --tunnel ignored. The host platform already "
+             "provides a public URL.")
+        args.tunnel = None
 
     if args.tunnel:
         print(f"\nStarting public tunnel ({args.tunnel})...")

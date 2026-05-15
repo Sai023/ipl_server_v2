@@ -319,10 +319,22 @@ class DatabaseManager:
         self._path  = str(path)
         self._local = threading.local()
         self._wlock = threading.Lock()
+        self._generation = 0   # Phase 2: bumped by reload_from_disk()
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        con = getattr(self._local, "con", None)
+        con     = getattr(self._local, "con",     None)
+        con_gen = getattr(self._local, "con_gen", -1)
+        # Phase 2: if reload_from_disk() bumped the generation since this
+        # thread last connected, drop the stale handle so we reopen against
+        # the freshly-pulled fantasy.db.
+        if con is not None and con_gen != self._generation:
+            try:
+                con.close()
+            except Exception:
+                pass
+            con = None
+            self._local.con = None
         if con is None:
             con = sqlite3.connect(self._path, timeout=30, check_same_thread=False,
                                   detect_types=sqlite3.PARSE_DECLTYPES)
@@ -330,8 +342,26 @@ class DatabaseManager:
             con.execute("PRAGMA journal_mode = WAL")
             con.execute("PRAGMA foreign_keys = ON")
             con.execute("PRAGMA busy_timeout  = 30000")
-            self._local.con = con
+            self._local.con     = con
+            self._local.con_gen = self._generation
         return con
+
+    def reload_from_disk(self) -> None:
+        """
+        Phase 2 (HOSTED mode): Invalidate every thread's cached SQLite
+        connection so the next access reopens against whatever fantasy.db
+        is on disk. Called after `cloud_sync.pull_latest()` brings new
+        commits down.
+
+        Implementation: bump a generation counter. Each thread compares its
+        connection's generation in `_connect()` and reopens lazily if it
+        falls behind. No iteration over thread-local state needed; the
+        next request on each thread does the work.
+
+        Safe to call concurrently with in-flight reads — each thread owns
+        its own connection, and the reopen is lazy at the next acquire.
+        """
+        self._generation += 1
 
     @contextmanager
     def _read(self):

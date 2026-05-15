@@ -41,11 +41,14 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 # Per-script version pins
-SERVER_VER       = "13.3"   # Phase 9: start_daily_discovery_scheduler on boot
-ROUTES_VER       = "1.5.0"  # Phase 10: /api/matches-status + teams_json, date_label, dup detection
+SERVER_VER       = "13.4"   # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
+                            #           skip APScheduler + ephemeral wipe + tunnel in cloud
+ROUTES_VER       = "1.6.0"  # Phase 11: /api/sync-now branches to git-pull in HOSTED,
+                            #           _push_if_hosted wrapper on write endpoints,
+                            #           ROLLOVER_TOKEN bearer auth on /api/rollover
 DB_VER           = "6.0"    # Phase 10: _upsert_match enriches title with teams
 SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
@@ -77,4 +80,12 @@ VERSION_MAP = {
                     "teams_json populated by seed_to_db + _upsert_match, "
                     "duplicate Cricbuzz ID detection with red highlight, "
                     "clickable scorecard link in Admin Tab.",
+    "2.4.0":        "Phase 11 — HOSTED mode: server runs on Render (or Codespaces) with "
+                    "HOSTED=true env. Boot-time + on-demand git pull replaces Cricbuzz "
+                    "scrape. _push_if_hosted wraps write endpoints (save-next-week, "
+                    "member, rollover, recalc, update-match-url) so user actions persist "
+                    "back to git. New monday_rollover.yml workflow cron-triggers rollover "
+                    "at Mon 14:00 UTC. daily_sync.yml gains pull-rebase + retry to "
+                    "coexist with host writes. render.yaml blueprint provided. "
+                    "Local mode (HOSTED unset) unchanged.",
 }
