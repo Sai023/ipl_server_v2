@@ -131,61 +131,6 @@ def api_ping():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
-@bp.route("/api/_diag")
-def api_diag():
-    """
-    HOSTED-mode diagnostic endpoint. Returns only booleans and non-secret
-    metadata so it's safe to leave exposed on the public Render URL — never
-    leaks the token values themselves. The only reason this exists: when
-    /api/sync-now returns 200 with "dispatched": false, the operator needs
-    a quick way to confirm the env vars are actually wired up.
-
-    Probes:
-      - HOSTED flag value (true means the cloud branch is active)
-      - GITHUB_TOKEN presence (set / missing)
-      - ROLLOVER_TOKEN presence
-      - Resolved repo slug — confirms _repo_slug() is finding the remote
-      - git remote URL (sanitised — token, if any, is stripped)
-      - cricbuzz reachability hint — does NOT actually dial Cricbuzz, just
-        reports the architectural expectation.
-    """
-    gh_set = bool((os.environ.get("GITHUB_TOKEN")
-                   or os.environ.get("GH_TOKEN") or "").strip())
-    rt_set = bool(os.environ.get("ROLLOVER_TOKEN", "").strip())
-
-    remote_url = "<no git>"
-    try:
-        import subprocess
-        r = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=BASE_DIR, capture_output=True, text=True, timeout=5,
-        )
-        if r.returncode == 0:
-            remote_url = r.stdout.strip()
-            # Sanitise: never leak the embedded token if commit_and_push
-            # rewrote the URL just before a push and somehow left it.
-            if "@github.com" in remote_url:
-                remote_url = remote_url.split("@github.com", 1)[1]
-                remote_url = f"https://<sanitised>@github.com{remote_url}"
-    except Exception as e:
-        remote_url = f"<error: {e}>"
-
-    slug = cloud_sync._repo_slug() or "<unresolved>"
-
-    return jsonify({
-        "ok": True,
-        "is_hosted":         _IS_HOSTED,
-        "github_token":      "set" if gh_set else "MISSING",
-        "rollover_token":    "set" if rt_set else "MISSING",
-        "repo_slug":         slug,
-        "git_remote":        remote_url,
-        "expected_behavior": (
-            "If is_hosted=true and github_token=MISSING, /api/sync-now will "
-            "return dispatched=false and write endpoints will silently fail "
-            "to push. Set GITHUB_TOKEN in your Render Environment tab."
-        ),
-    })
-
 @bp.route("/api/poll", methods=["GET"])
 def api_poll():
     try:
@@ -1148,14 +1093,6 @@ def api_sync_now():
                 inputs={"force_full_rescrape": "true"},
                 log=_log,
             )
-            # Always log the outcome so it's visible in Render's Logs tab
-            # even though the HTTP response is 200. Without this, a silent
-            # dispatch failure (missing PAT, bad scope) looks identical to
-            # success in the access log.
-            if dispatched:
-                _log(f"/api/sync-now: dispatched daily_sync.yml")
-            else:
-                _log(f"/api/sync-now: dispatch FAILED — {dmsg}", "warn")
             return jsonify({
                 "ok":         True,
                 "mode":       "pull_and_dispatch",
