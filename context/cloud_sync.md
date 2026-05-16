@@ -7,16 +7,23 @@
 ## What it does (business view)
 
 `cloud_sync.py` is the **only file allowed to shell out to `git`** in
-HOSTED mode. It turns three high-level intentions into safe git
-plumbing with timeouts and retry:
+HOSTED mode. It turns four high-level intentions into safe git
+plumbing with timeouts, auth injection, and retry:
 
-1. **"Catch up to whatever's on remote"** → `pull_latest()` does
-   `git pull --ff-only` and reports whether anything changed.
-2. **"Persist this local DB write back to git"** →
+1. **"Make sure `origin` is set to the canonical GitHub URL"** →
+   `ensure_origin_remote()` reads `GITHUB_REPOSITORY` env and runs
+   `git remote remove origin` + `git remote add origin
+   https://github.com/<slug>.git`. Called at server boot because
+   Render's container ships with a broken or missing origin remote.
+2. **"Catch up to whatever's on remote"** → `pull_latest()` does
+   `git fetch origin main` + `git reset --hard origin/main` and
+   reports whether anything changed. Hard reset (not merge) is
+   deliberate — see rule #7.
+3. **"Persist this local DB write back to git"** →
    `commit_and_push(paths, message)` stages, commits, rebases on
    remote, and pushes — with a fine-grained PAT injected into the
    remote URL just for the push, then restored.
-3. **"Ask GitHub Actions to scrape Cricbuzz on our behalf"** →
+4. **"Ask GitHub Actions to scrape Cricbuzz on our behalf"** →
    `dispatch_workflow(filename, ref, inputs)` POSTs to the
    `workflow_dispatch` REST API. Used because Render (and any other
    Azure-hosted runner) can't reach Cricbuzz egress.
@@ -124,6 +131,49 @@ own `if:` condition must also string-compare (`== 'true'`) — see
 `git@github.com:<slug>.git` formats are supported. Returns `None` if
 neither path works — the caller fails the operation with a clear
 message.
+
+**Render-specific:** the container's `git remote get-url origin`
+returned an unparseable internal URL during testing, so the env-var
+path is the **only** reliable source in HOSTED mode. `GITHUB_REPOSITORY`
+must be set; without it dispatch fails with `could not resolve repo slug`.
+
+### 6. Render's container quirks and the workarounds
+
+Render's free-tier Python service deploys a container that is *almost*
+a normal git working tree but has three sharp edges. Discovered while
+debugging the Refresh button:
+
+| Quirk | Symptom | Fix in code |
+|---|---|---|
+| **Detached HEAD** at the build commit | `git pull --ff-only` → "You are not currently on a branch" | `pull_latest()` uses `git fetch origin main` + `git reset --hard origin/main` (no merge step). `commit_and_push()` uses explicit `origin main` / `HEAD:main` refspecs everywhere. Works in both attached and detached states |
+| **`origin` remote missing or pointing at an unreachable internal URL** | `git fetch origin main` → "'origin' does not appear to be a git repository" | `ensure_origin_remote()` is called at server boot ([server.py](../server.py)). It `git remote remove origin` (ignores failure) then `git remote add origin https://github.com/<GITHUB_REPOSITORY>.git`. Idempotent, runs once per container start |
+| **Private repo requires HTTPS auth for fetch, not just push** | `git fetch origin main` → "could not read Username for 'https://github.com'" | `_git_auth_args(token)` returns `["-c", "http.extraHeader=Authorization: Bearer <TOKEN>"]`. Spliced into every git command that hits the network (fetch, pull-rebase). Push still uses the URL-rewrite pattern from rule #2 — both authenticate the same PAT |
+
+The push path uses URL rewrite (rule #2), the fetch and pull-rebase
+paths use `http.extraHeader` (rule #6). Two different mechanisms in
+one file is intentional: URL rewrite leaks in `git remote -v` output
+but works reliably; `http.extraHeader` doesn't leak but git's HTTPS
+helper sometimes ignores it for push (per GitHub Actions docs). Mixed
+is empirically the most reliable combo.
+
+### 7. `pull_latest()` is destructive by design
+
+The function does `git fetch origin main` then `git reset --hard
+origin/main` — not a merge. This wipes any local uncommitted changes.
+Safe because:
+
+- `commit_and_push()` is synchronous: every host write commits **and
+  pushes** before its caller's HTTP response returns. By the time
+  `pull_latest()` runs (called from `api_sync_now` or at boot), all
+  in-flight host writes are on remote.
+- The container's filesystem is ephemeral on Render anyway — the
+  build-time `git checkout <sha>` is the only authoritative source of
+  files until the next deploy, and `git reset --hard origin/main`
+  rebuilds from the same source.
+
+**Don't change this to a merge unless you also change `commit_and_push`
+to use async push** — the current invariant breaks if a write is
+pending push when `pull_latest` runs.
 
 ## Called by / Calls into
 

@@ -51,10 +51,19 @@ The container itself just runs Flask.
 
 - **Inputs:**
   - This file (read by Render at Blueprint sync time).
-  - Two **secret** env vars set manually in the Render dashboard
-    (marked `sync: false` here so they're not committed):
-    - `GITHUB_TOKEN` — fine-grained PAT, `contents: write` +
-      `actions: write` on `Sai023/ipl_server_v2`.
+  - Three env vars set manually in the Render dashboard (the first
+    is a plain string, the other two are secret — marked `sync: false`
+    here so the secrets aren't committed):
+    - `GITHUB_REPOSITORY` = `Sai023/ipl_server_v2`. **Required** —
+      `cloud_sync._repo_slug()` reads this to know which repo to
+      target for `git push`, `git fetch`, and the
+      `workflow_dispatch` REST call. The fallback (parse `git remote
+      get-url origin`) does not work in Render's container.
+    - `GITHUB_TOKEN` — fine-grained PAT with **both** `Contents:
+      Read and write` AND `Actions: Read and write` on
+      `Sai023/ipl_server_v2`. Contents alone is enough for
+      `commit_and_push`, but `dispatch_workflow` returns 403 without
+      Actions.
     - `ROLLOVER_TOKEN` — random string; same value also added as
       a GitHub Actions repo secret (`monday_rollover.yml` sends it).
 - **Outputs:**
@@ -101,7 +110,24 @@ the dashboard**, not from this file. Two reasons:
 - Setting them manually lets the operator rotate without touching
   source.
 
-### 5. `region: oregon` — change for latency
+### 5. Render container quirks worked around in code
+
+Three Render-specific behaviours that broke HOSTED mode until we
+worked around them in `cloud_sync.py`. Listed here so a future
+operator who hits the same symptoms knows where the fixes live:
+
+| Symptom | Cause | Where fixed |
+|---|---|---|
+| `git pull` → "You are not currently on a branch" | Render checks out the build commit SHA in **detached HEAD** | `pull_latest()` uses explicit `origin main` / `HEAD:main` refspecs; see [cloud_sync.md](cloud_sync.md) rule #6 |
+| `git fetch` → "'origin' does not appear to be a git repository" | Origin remote missing or pointing at internal Render URL | `ensure_origin_remote()` called at server boot; see [cloud_sync.md](cloud_sync.md) rule #6 |
+| `git fetch` → "could not read Username for 'https://github.com'" | Private repo requires HTTPS auth for fetch too, not just push | `_git_auth_args()` injects `http.extraHeader: Authorization: Bearer <PAT>`; see [cloud_sync.md](cloud_sync.md) rule #6 |
+
+None of these are documented by Render — they were found through
+debugging the Refresh button. The Shell tab on Render's paid Starter
+plan would have made them trivial to diagnose; on free tier the only
+visible signal was the `pull_msg` field in `/api/sync-now` responses.
+
+### 6. `region: oregon` — change for latency
 
 Oregon is the default. For a league played mostly out of IST /
 SAST, `singapore` would have lower latency. Free tier supports
