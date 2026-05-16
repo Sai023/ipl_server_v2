@@ -63,7 +63,8 @@ the DOM in-place. The Flask 404 handler in `base.py` also re-renders
 - **Outputs:**
   - The DOM under `<div id="app">`.
   - Side effects via global functions: `login()`, `logout()`,
-    `switchTab()`, `_nwSave()`, `_simulateRollover()`, etc.
+    `switchTab()`, `_nwSave()`, `_simulateRollover()` (Admin-only),
+    `_showRulesModal()` / `_closeRulesModal()`, etc.
 
 ## The 6 visible tabs
 
@@ -73,11 +74,11 @@ this is the authoritative count, not SKILL.md's "9 tabs" claim:
 | # | Tab ID | Renderer | Default? |
 |---|--------|----------|----------|
 | 1 | `match-centre` | `_buildMatchCentreTab` (mc_hub.js) | **Yes** |
-| 2 | `team` | `_buildThisWeekCard` + `_buildDevTools` | — |
-| 3 | `next` | `_buildNextWeekCard` (includes `_buildPicker`) | — |
+| 2 | `team` | `_buildThisWeekCard` (Scoring Rules button → `_showRulesModal`) | — |
+| 3 | `next` | `_buildNextWeekCard` (includes `_buildPicker`; Scoring Rules button → `_showRulesModal`) | — |
 | 4 | `leaderboard` | `_buildLeaderboardCard` (overridden in ipl_glue.js) | — |
 | 5 | `members` | `_buildMembersCard` | — |
-| 6 | `admin` | `_buildAdminTab` | — |
+| 6 | `admin` | `_buildAdminTab` + `_buildDevTools` (Simulate Monday rollover lives here) | — |
 
 The Points, History, and Matches tab renderers exist in this file
 and/or `ipl_glue.js` but **no tab button references them and no
@@ -155,7 +156,8 @@ Direct 1:1 with [user_capabilities.md](user_capabilities.md):
 | §1.2 Switch user | `logout()` + Switch user button |
 | §3 Match Centre | delegated to `mc_hub.js` |
 | §4.1 This Week XI | `_buildThisWeekCard` + `_buildPitchView` |
-| §4.2 Simulate rollover | `_buildDevTools` + `_simulateRollover` |
+| §4.2 Scoring Rules popup | `_showRulesModal` / `_closeRulesModal` (button injected by `_buildThisWeekCard` and `_buildNextWeekCard`) |
+| §8.5 Simulate rollover (Admin) | `_buildDevTools` + `_simulateRollover` (rendered under the `admin` tab branch) |
 | §5.1 Picker | `_buildPicker` |
 | §5.2 Captain/VC | `_buildNwSquad` (C/V/× buttons), `_nwSetCap`, `_nwSetVc` |
 | §5.3 Save Draft | `_buildBudgetBar` + `_nwSave` |

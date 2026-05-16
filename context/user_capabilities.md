@@ -83,11 +83,15 @@ section at the bottom of this document.
 - Captain / Vice-Captain shown with their multipliers (2× / 1.5×).
 - **Read-only.** The current week's selection cannot be edited.
 
-### 4.2 Dev Tools — Simulate Monday rollover
-- Big red button: "▶ Simulate Monday 2:00 PM Rollover"
-  ([index.html:561-566](../templates/index.html:561)).
-- Calls `IplApi.rollover(true)` → `POST /api/rollover?force=1`.
-- On success, refreshes history and drops the next-week draft.
+### 4.2 Scoring Rules popup (This Week + Next Week)
+- "📖 Scoring Rules" ghost button sits in the week-label row on both the
+  This Week and Next Week tabs.
+- Opens `_showRulesModal()` — a slide-up sheet built in `templates/index.html`
+  with the full point breakdown (participation, batting, bowling, fielding,
+  captain/VC multipliers).
+- The numbers in the modal must stay in sync with `logic/scoring_engine.py`
+  (`calc_pts`). There is no API behind the popup — content is static HTML.
+- Closes via the × icon, the "Got it" button, or by tapping the dim overlay.
 
 ---
 
@@ -163,6 +167,16 @@ section at the bottom of this document.
 ### 8.4 Click a scorecard link
 - When a URL is saved, the row exposes a "View scorecard" link that opens the
   Cricbuzz page in a new tab.
+
+### 8.5 Dev Tools — Simulate Monday rollover
+- Card titled "🛠 Dev Tools" appears at the bottom of the Admin tab
+  (built by `_buildDevTools()` in `templates/index.html`).
+- Big red button: "▶ Simulate Monday 14:00 UTC Rollover".
+- Calls `IplApi.rollover(true)` → `POST /api/rollover?force=1`.
+- On success, refreshes history and drops the next-week draft.
+- Operator escape hatch — use only if the scheduled Monday rollover did not
+  fire. Previously sat under §4 (This Week tab) — moved to Admin so it isn't
+  exposed to everyday members.
 
 ---
 
@@ -264,7 +278,8 @@ by section number. Indicative wiring:
 | §1.1 Pick / Register | `/api/state`, `PUT /api/member/<n>` | `upsert_member`, `get_state` | — | `init_db` (auto-seed members) |
 | §3 Match Centre | `/api/match-centre`, `/api/match-details/<id>` | `get_match_centre`, `get_match_details` | — | scraper (fills `match_scores`) |
 | §4 This Week | `/api/state`, `/api/history/<n>` | `get_state`, `get_history` | `rollover_engine` (active-team pick) | — |
-| §4.2 Simulate rollover | `/api/rollover` | `roll_week` | `rollover_engine` | — |
+| §4.2 Scoring Rules popup | — (static client-side) | — | mirrors `scoring_engine.calc_pts` | — |
+| §8.1 Simulate rollover (Admin) | `/api/rollover` | `roll_week` | `rollover_engine` | — |
 | §5 Next Week draft | `/api/save-next-week/<n>`, `/api/players` | `save_next_week_draft`, `get_players` | `fuzzy_match` (auto-correct typed names) | — |
 | §6 Leaderboard | `/api/leaderboard` | `get_leaderboard` | — | — |
 | §7 Members | `/api/state` | `get_state` | — | — |

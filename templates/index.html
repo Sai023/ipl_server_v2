@@ -466,14 +466,14 @@ function _buildLoginCard(memberNames){
 }
 function _buildThisWeekCard(){
   var tw=_getThisWeekData();
-  var h='<div class="card card-locked"><div class="week-label">Week '+_currentWeek+' &nbsp;<span class="badge-lock">\uD83D\uDD12 Locked</span></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
+  var h='<div class="card card-locked"><div class="week-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+_currentWeek+' &nbsp;<span class="badge-lock">\uD83D\uDD12 Locked</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">\uD83D\uDCD6 Scoring Rules</button></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
   if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+'\'</p></div>';return h;}
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
   return h+'</div>';
 }
 function _buildNextWeekCard(){
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal)">Week '+(_currentWeek+1)+' Draft &nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span></div>';
+  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+(_currentWeek+1)+' Draft &nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
   h+=_buildBudgetBar();
   h+=_buildNwSquad();
   if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
@@ -517,7 +517,7 @@ function _buildLeaderboardCard(lb){
   return h;
 }
 function _buildDevTools(){
-  var h='<div class="devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 14:00 UTC rollover. Promotes Next Week draft into a new locked This Week row.</p>';
+  var h='<div class="card devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 14:00 UTC rollover. Promotes every member\'s Next Week draft into a new locked This Week row. Use only if the scheduled rollover did not fire.</p>';
   h+='<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">\u25B6 Simulate Monday 14:00 UTC Rollover</button>';
   h+='<div id="rollover-result"></div></div>';
   return h;
@@ -625,6 +625,75 @@ function _showSwapModal(incomingId){
   document.body.appendChild(el.firstChild);
 }
 function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.remove();}
+
+// ─── SCORING RULES MODAL ─────────────────────────────────────────────────────
+// Display copy — numbers must stay in sync with logic/scoring_engine.py (calc_pts).
+function _showRulesModal(){
+  if(document.getElementById('rules-modal'))return;
+  var sec='style="font-size:12px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;"';
+  var li ='style="font-size:13px;color:var(--text);line-height:1.55;padding:3px 0;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid rgba(255,255,255,.04);"';
+  var lbl='style="color:var(--text);flex:1;"';
+  var val='style="color:var(--teal);font-weight:700;white-space:nowrap;"';
+  var neg='style="color:#FF6B6B;font-weight:700;white-space:nowrap;"';
+  var note='style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;"';
+  var h ='<div id="rules-modal" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:18px 16px 32px;max-height:85vh;overflow-y:auto;">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">How fantasy points are calculated for each player, every match.</div>';
+
+  h+='<div '+sec+'>🏏 Participation</div>';
+  h+='<div '+li+'><span '+lbl+'>Named in the XI (played)</span><span '+val+'>+4</span></div>';
+
+  h+='<div '+sec+'>🎯 Batting</div>';
+  h+='<div '+li+'><span '+lbl+'>Each run scored</span><span '+val+'>+1</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Boundary bonus (per four)</span><span '+val+'>+1</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Six bonus (per six)</span><span '+val+'>+2</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Milestone — 30+ runs</span><span '+val+'>+4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Milestone — 50+ runs</span><span '+val+'>+8</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Milestone — 100+ runs</span><span '+val+'>+16</span></div>';
+  h+='<div '+note+'>Only the highest milestone applies.</div>';
+  h+='<div '+li+'><span '+lbl+'>Duck (dismissed for 0 off ≥1 ball)</span><span '+neg+'>−2</span></div>';
+  h+='<div '+sec+' style="font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.04em;">Strike rate bonus &nbsp;<span style="color:var(--dim);font-weight:400;text-transform:none">(≥10 balls faced)</span></div>';
+  h+='<div '+li+'><span '+lbl+'>SR &gt; 125</span><span '+val+'>+6</span></div>';
+  h+='<div '+li+'><span '+lbl+'>SR 110–125</span><span '+val+'>+4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>SR 100–109</span><span '+val+'>+2</span></div>';
+  h+='<div '+li+'><span '+lbl+'>SR 60–69</span><span '+neg+'>−2</span></div>';
+  h+='<div '+li+'><span '+lbl+'>SR &lt; 60</span><span '+neg+'>−4</span></div>';
+
+  h+='<div '+sec+'>🎳 Bowling</div>';
+  h+='<div '+li+'><span '+lbl+'>Each wicket taken</span><span '+val+'>+25</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Bowled / LBW bonus (per wicket)</span><span '+val+'>+8</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Maiden over</span><span '+val+'>+12</span></div>';
+  h+='<div '+sec+' style="font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.04em;">Wicket-haul bonus &nbsp;<span style="color:var(--dim);font-weight:400;text-transform:none">(cumulative)</span></div>';
+  h+='<div '+li+'><span '+lbl+'>2 wickets</span><span '+val+'>+4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>3 wickets</span><span '+val+'>+4 more (+8 total)</span></div>';
+  h+='<div '+li+'><span '+lbl+'>4 wickets</span><span '+val+'>+8 more (+16 total)</span></div>';
+  h+='<div '+li+'><span '+lbl+'>5 wickets</span><span '+val+'>+8 more (+24 total)</span></div>';
+  h+='<div '+sec+' style="font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.04em;">Economy bonus &nbsp;<span style="color:var(--dim);font-weight:400;text-transform:none">(≥2 overs bowled)</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ &lt; 5</span><span '+val+'>+6</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ 5–5.99</span><span '+val+'>+4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ 6–6.99</span><span '+val+'>+2</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ 10–10.99</span><span '+neg+'>−2</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ 11–11.99</span><span '+neg+'>−4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Econ &gt; 12</span><span '+neg+'>−6</span></div>';
+
+  h+='<div '+sec+'>🧤 Fielding</div>';
+  h+='<div '+li+'><span '+lbl+'>Each catch</span><span '+val+'>+8</span></div>';
+  h+='<div '+li+'><span '+lbl+'>3+ catches bonus</span><span '+val+'>+4</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Stumping</span><span '+val+'>+12</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Direct run-out</span><span '+val+'>+12</span></div>';
+  h+='<div '+li+'><span '+lbl+'>Run-out assist</span><span '+val+'>+6</span></div>';
+
+  h+='<div '+sec+'>⭐ Captain &amp; Vice-Captain</div>';
+  h+='<div '+li+'><span '+lbl+'><span class="badge badge-c">C</span> Captain — multiplies final points</span><span '+val+'>×2</span></div>';
+  h+='<div '+li+'><span '+lbl+'><span class="badge badge-vc">VC</span> Vice-Captain — multiplies final points</span><span '+val+'>×1.5</span></div>';
+  h+='<div '+note+'>The multiplier is applied to the player\'s total base points for the match.</div>';
+
+  h+='<button onclick="_closeRulesModal()" style="margin-top:18px;width:100%;padding:11px;background:var(--gold);border:none;border-radius:8px;color:#07111F;font-size:13px;font-weight:700;cursor:pointer;">Got it</button>';
+  h+='</div></div>';
+  var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
+}
+function _closeRulesModal(){var m=document.getElementById('rules-modal');if(m)m.remove();}
 function _doSwap(removeId,addId){
   _closeSwapModal();
   _nwDraft.team=_nwDraft.team.filter(function(x){return x!==removeId;});
@@ -669,12 +738,12 @@ function render(state){
       html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
     });
     html+='</div>';
-    if     (_activeTab==="team")         {html+=_buildThisWeekCard();html+=_buildDevTools();}
+    if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
     else if(_activeTab==="leaderboard")  html+=_buildLeaderboardCard(_leaderboard);
     else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
     else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
-    else if(_activeTab==="admin")        html+=_buildAdminTab();
+    else if(_activeTab==="admin")        {html+=_buildAdminTab();html+=_buildDevTools();}
   }
   html+='</div>';
   $app.innerHTML=html;
