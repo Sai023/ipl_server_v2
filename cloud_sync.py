@@ -53,6 +53,48 @@ def _is_git_repo() -> bool:
         return False
 
 
+def ensure_origin_remote() -> tuple[bool, str]:
+    """
+    Render's runtime container has a working .git directory (the build
+    clones the repo) but the `origin` remote is sometimes missing or
+    points at an internal Render URL we can't push to. Result: every
+    `git fetch` / `git push` fails with "'origin' does not appear to be
+    a git repository".
+
+    Idempotently set `origin` to the canonical GitHub HTTPS URL based on
+    GITHUB_REPOSITORY (preferred) or the existing remote if we can find
+    one. Called at server boot before any cloud_sync operations.
+
+    Returns (ok, message). Never raises.
+    """
+    if not _git_available():
+        return False, "git binary not on PATH"
+
+    slug = _repo_slug()
+    if not slug:
+        return False, "no GITHUB_REPOSITORY env var; cannot infer origin URL"
+
+    url = f"https://github.com/{slug}.git"
+
+    # remove + add is the most reliable idempotent path. If origin doesn't
+    # exist, the remove silently fails (returncode 128, we ignore). If it
+    # does exist, this resets it to the canonical URL.
+    try:
+        subprocess.run(
+            ["git", "remote", "remove", "origin"],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=5,
+        )
+        r = subprocess.run(
+            ["git", "remote", "add", "origin", url],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return False, f"remote add failed: {r.stderr.strip()}"
+        return True, f"origin set to {url}"
+    except Exception as e:
+        return False, f"ensure_origin error: {e}"
+
+
 def pull_latest(log=print) -> tuple[bool, str]:
     """
     Fast-forward pull. Used by /api/sync-now and the background poll loop.

@@ -439,10 +439,16 @@ if __name__ == "__main__":
     if IS_HOSTED:
         try:
             import cloud_sync
+            # Render's container boots with a .git directory but no working
+            # `origin` remote — every fetch/push fails until we add one.
+            # ensure_origin_remote() reads GITHUB_REPOSITORY env and sets
+            # origin to https://github.com/<slug>.git. Idempotent.
+            ok, msg = cloud_sync.ensure_origin_remote()
+            _log(f"Boot-time origin setup: {msg}")
             changed, msg = cloud_sync.pull_latest(log=_log)
             _log(f"Boot-time git pull: {msg}")
         except Exception as e:
-            _log(f"Boot-time git pull failed (continuing with shipped data): {e}",
+            _log(f"Boot-time git setup failed (continuing with shipped data): {e}",
                  "warn")
 
     init_db.run_all_sync()
