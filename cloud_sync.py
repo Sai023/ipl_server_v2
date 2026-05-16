@@ -53,6 +53,23 @@ def _is_git_repo() -> bool:
         return False
 
 
+def _git_auth_args(token: str | None) -> list[str]:
+    """
+    Return `-c http.extraHeader=Authorization: Bearer <token>` args.
+
+    Use case: private repos require auth for `git fetch` AND `git push`.
+    Embedding the token in the remote URL works but leaks in `git remote -v`
+    output. The `http.extraHeader` config option is per-command, doesn't
+    persist in any config file, and is the standard way GitHub's own
+    Actions runner injects credentials.
+
+    Returns [] if no token — caller can splat without conditionals.
+    """
+    if not token:
+        return []
+    return ["-c", f"http.extraHeader=Authorization: Bearer {token}"]
+
+
 def ensure_origin_remote() -> tuple[bool, str]:
     """
     Render's runtime container has a working .git directory (the build
@@ -110,9 +127,11 @@ def pull_latest(log=print) -> tuple[bool, str]:
     """
     if not _is_git_repo():
         return False, "not a git repo (skipping pull)"
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    auth = _git_auth_args(token)
     try:
         r = subprocess.run(
-            ["git", "fetch", "origin", "main", "--quiet"],
+            ["git", *auth, "fetch", "origin", "main", "--quiet"],
             cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
         )
         if r.returncode != 0:
@@ -198,9 +217,10 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
         # Render checks out the build SHA in detached HEAD; bare push/pull
         # fail with "You are not currently on a branch". Naming the remote
         # and refs works in both attached and detached HEAD states.
+        auth = _git_auth_args(token)
         for attempt in (1, 2):
             r = subprocess.run(
-                ["git", "pull", "--rebase", "--autostash", "--quiet",
+                ["git", *auth, "pull", "--rebase", "--autostash", "--quiet",
                  "origin", "main"],
                 cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
             )
