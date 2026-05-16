@@ -60,16 +60,31 @@ def pull_latest(log=print) -> tuple[bool, str]:
     Returns (changed, message). `changed` is True iff new commits landed.
     Never raises. On any error, returns (False, "<reason>") and lets the
     caller decide what to log.
+
+    NOTE — explicit `origin main` refspec is required. Render checks out
+    the build SHA in detached HEAD state, so a bare `git pull` fails
+    with "You are not currently on a branch". Naming the remote and
+    branch sidesteps the attached-branch requirement.
     """
     if not _is_git_repo():
         return False, "not a git repo (skipping pull)"
     try:
         r = subprocess.run(
-            ["git", "pull", "--ff-only", "--quiet"],
+            ["git", "fetch", "origin", "main", "--quiet"],
             cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
         )
         if r.returncode != 0:
-            return False, f"pull failed: {r.stderr.strip() or r.stdout.strip()}"
+            return False, f"fetch failed: {r.stderr.strip() or r.stdout.strip()}"
+        # Reset working tree to origin/main. Safe at runtime because the
+        # container has no local file changes — fantasy.db writes go via
+        # commit_and_push which commits + pushes synchronously before
+        # returning, so by the time we get here all work is on remote.
+        r = subprocess.run(
+            ["git", "reset", "--hard", "origin/main", "--quiet"],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return False, f"reset failed: {r.stderr.strip() or r.stdout.strip()}"
         # Detect whether any files changed. If `git pull` was a no-op, stdout
         # is empty. If it fast-forwarded, stdout contains the range.
         msg = (r.stdout + r.stderr).strip()
@@ -136,9 +151,15 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
 
         # Push with one retry: rebase on top of remote first to absorb
         # concurrent scrape / rollover commits.
+        #
+        # NOTE — explicit `origin main` / `HEAD:main` refspecs everywhere.
+        # Render checks out the build SHA in detached HEAD; bare push/pull
+        # fail with "You are not currently on a branch". Naming the remote
+        # and refs works in both attached and detached HEAD states.
         for attempt in (1, 2):
             r = subprocess.run(
-                ["git", "pull", "--rebase", "--autostash", "--quiet"],
+                ["git", "pull", "--rebase", "--autostash", "--quiet",
+                 "origin", "main"],
                 cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
             )
             if r.returncode != 0:
@@ -156,7 +177,7 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
                 if not remote_ok:
                     return False, "could not rewrite remote URL with token"
                 p = subprocess.run(
-                    ["git", "push", "--quiet"],
+                    ["git", "push", "--quiet", "origin", "HEAD:main"],
                     cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
                 )
                 if p.returncode == 0:
