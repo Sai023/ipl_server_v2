@@ -405,7 +405,7 @@
       "run_out_direct": 0,
       "run_out_assist": 0
     },
-    "k23": {
+    "ext_12344": {
       "played": true,
       "runs": 29,
       "balls": 16,
@@ -435,7 +435,7 @@
       "runs_conceded": 25,
       "wickets": 1,
       "maidens": 0,
-      "lbw_bowled": 1,
+      "lbw_bowled": 0,
       "catches": 0,
       "stumpings": 0,
       "run_out_direct": 0,
