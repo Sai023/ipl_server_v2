@@ -210,15 +210,28 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
         if c.returncode != 0:
             return False, f"commit failed: {c.stderr.strip() or c.stdout.strip()}"
 
-        # Push with one retry: rebase on top of remote first to absorb
+        # Push with retry: rebase on top of remote first to absorb
         # concurrent scrape / rollover commits.
         #
-        # NOTE — explicit `origin main` / `HEAD:main` refspecs everywhere.
-        # Render checks out the build SHA in detached HEAD; bare push/pull
-        # fail with "You are not currently on a branch". Naming the remote
-        # and refs works in both attached and detached HEAD states.
+        # CRITICAL FIX (post-launch): the previous implementation used
+        # `_temporary_remote_with_token` (URL-rewrite auth) for the push
+        # step. In Render's container that path silently failed for every
+        # `_push_if_hosted` call — confirmed by zero `ui:` prefix commits
+        # ever appearing on `origin/main` in the first 24h of HOSTED mode
+        # operation. The pull path (which uses `http.extraHeader` via
+        # `_git_auth_args`) was already proven working.
+        #
+        # Refactor: use `http.extraHeader` for BOTH pull-rebase AND push.
+        # One auth mechanism, fewer moving parts, no per-call state
+        # mutation of the remote URL. Capture stderr from every git step
+        # into the return message so failures surface in Render logs at
+        # WARN level via `_push_if_hosted`.
+        #
+        # Explicit `origin main` / `HEAD:main` refspecs are still required
+        # because Render checks out the build SHA in detached HEAD.
         auth = _git_auth_args(token)
-        for attempt in (1, 2):
+        last_err = ""
+        for attempt in (1, 2, 3):
             r = subprocess.run(
                 ["git", *auth, "pull", "--rebase", "--autostash", "--quiet",
                  "origin", "main"],
@@ -231,24 +244,25 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
                     ["git", "rebase", "--abort"],
                     cwd=_BASE_DIR, capture_output=True, text=True, timeout=10,
                 )
-                if attempt == 2:
-                    return False, f"rebase failed: {r.stderr.strip()}"
+                last_err = (r.stderr.strip() or r.stdout.strip()
+                            or f"rebase exit {r.returncode}")
+                if attempt == 3:
+                    return False, f"rebase failed after 3 tries: {last_err}"
                 continue
 
-            with _temporary_remote_with_token(token) as remote_ok:
-                if not remote_ok:
-                    return False, "could not rewrite remote URL with token"
-                p = subprocess.run(
-                    ["git", "push", "--quiet", "origin", "HEAD:main"],
-                    cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
-                )
-                if p.returncode == 0:
-                    return True, "pushed"
-                if attempt == 2:
-                    return False, f"push failed: {p.stderr.strip()}"
-                # else: loop and re-rebase
+            p = subprocess.run(
+                ["git", *auth, "push", "--quiet", "origin", "HEAD:main"],
+                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+            )
+            if p.returncode == 0:
+                return True, f"pushed on attempt {attempt}"
+            last_err = (p.stderr.strip() or p.stdout.strip()
+                        or f"push exit {p.returncode}")
+            if attempt == 3:
+                return False, f"push failed after 3 tries: {last_err}"
+            # else: loop and re-rebase on next attempt
 
-        return False, "push failed after retry"
+        return False, f"push exhausted retries; last error: {last_err}"
     except subprocess.TimeoutExpired:
         return False, "commit/push timed out"
     except Exception as e:
@@ -372,6 +386,11 @@ def dispatch_workflow(workflow_filename: str, ref: str = "main",
         return False, f"dispatch error: {e}"
 
 
+# DEPRECATED — kept only for git history grepping. No live callers since
+# the post-launch refactor of `commit_and_push` to use `http.extraHeader`
+# for push (same as fetch). URL-rewrite auth proved to fail silently in
+# Render's container; the header-based path is the proven working one.
+# Safe to delete in a future cleanup.
 class _temporary_remote_with_token:
     """
     Context manager that swaps the `origin` URL to include the PAT, then

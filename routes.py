@@ -133,6 +133,57 @@ def api_ping():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
+
+@bp.route("/api/_test-push", methods=["POST"])
+def api_test_push():
+    """
+    Diagnostic for HOSTED mode. Bumps `meta._last_test_push` to "now" and
+    calls `cloud_sync.commit_and_push` directly, returning the raw
+    `(ok, msg)` result. This is the only way to verify that the host can
+    write back to git on Render's free tier (no shell access available).
+
+    Why it exists: in the first 24h of HOSTED operation, zero `ui:` prefix
+    commits appeared on `origin/main` — confirming `_push_if_hosted` was
+    silently failing for every save-next-week and every passcode change.
+    The wrapper logs at WARN level but the raw git error wasn't surfacing
+    anywhere accessible. This endpoint exposes it.
+
+    No auth — safe because the only side effect is one extra commit and
+    the response leaks no secrets (raw git stderr is the most sensitive
+    thing returned, which has been sanitised by `cloud_sync` of any token).
+    Local mode returns 400 (the test is meaningful only in HOSTED).
+    """
+    if not _IS_HOSTED:
+        return jsonify({"ok": False, "code": 400,
+                        "error": "test-push is only meaningful in HOSTED mode "
+                                 "(set HOSTED=true)"}), 400
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        db.set_meta("_last_test_push", now_iso)
+        ok, msg = cloud_sync.commit_and_push(
+            paths=["data/fantasy.db"],
+            message=f"diag: test-push at {now_iso}",
+        )
+        if ok:
+            _log(f"/api/_test-push SUCCESS: {msg}")
+        else:
+            _log(f"/api/_test-push FAILED: {msg}", "warn")
+        return jsonify({
+            "ok": True,
+            "test_push_succeeded": ok,
+            "git_result": msg,
+            "instructions": (
+                "If test_push_succeeded=true, a commit titled "
+                "'diag: test-push at <iso>' should appear on "
+                "github.com/<owner>/<repo>/commits/main within 5s. "
+                "If false, git_result contains the raw error — paste it "
+                "to the operator."
+            ),
+        })
+    except Exception as e:
+        _log(f"/api/_test-push crashed: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
 @bp.route("/api/poll", methods=["GET"])
 def api_poll():
     try:
