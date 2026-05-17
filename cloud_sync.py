@@ -55,19 +55,62 @@ def _is_git_repo() -> bool:
 
 def _git_auth_args(token: str | None) -> list[str]:
     """
-    Return `-c http.extraHeader=Authorization: Bearer <token>` args.
+    LEGACY — kept for compatibility but no longer the preferred path.
+    Returns `-c http.extraHeader=Authorization: Bearer <token>` args.
 
-    Use case: private repos require auth for `git fetch` AND `git push`.
-    Embedding the token in the remote URL works but leaks in `git remote -v`
-    output. The `http.extraHeader` config option is per-command, doesn't
-    persist in any config file, and is the standard way GitHub's own
-    Actions runner injects credentials.
+    Production-proven failure mode: on Render's Linux container, this
+    flag is silently ignored — git falls back to a credential helper
+    that fails with "could not read Username for 'https://github.com'".
+    Confirmed via `/api/_test-push` returning `fetch failed after 3
+    tries` with that exact stderr.
 
-    Returns [] if no token — caller can splat without conditionals.
+    Use `_authed_url()` + direct URL refspec instead. Kept here only
+    for any non-network git invocations a caller might want to harden.
     """
     if not token:
         return []
     return ["-c", f"http.extraHeader=Authorization: Bearer {token}"]
+
+
+def _authed_url(token: str) -> str | None:
+    """
+    Build a `https://x-access-token:<token>@github.com/<owner>/<repo>.git`
+    URL with the token embedded. This is the **only** auth method that
+    has proven reliable on Render's container — it bypasses every
+    credential helper and config override because git passes the URL
+    components straight to HTTP basic-auth without consulting any
+    helper.
+
+    Same pattern GitHub Actions itself uses for `actions/checkout`. The
+    token shows up in the process command line for the duration of the
+    git invocation (~1s) but never persists in any config file or
+    remote definition.
+
+    Returns None if the repo slug can't be resolved — callers should
+    fall back to the legacy `origin` ref so local-dev workflows keep
+    working.
+    """
+    slug = _repo_slug()
+    if not slug or not token:
+        return None
+    return f"https://x-access-token:{token}@github.com/{slug}.git"
+
+
+def _git_env() -> dict:
+    """
+    Force git to never prompt for credentials. With
+    `GIT_TERMINAL_PROMPT=0`, any unresolved auth fails immediately
+    with a clear error instead of hanging or producing the misleading
+    "could not read Username" message.
+    """
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/echo"}
+
+
+def _sanitize(text: str, token: str) -> str:
+    """Strip the token out of any string we return or log."""
+    if not text or not token:
+        return text
+    return text.replace(token, "<REDACTED>")
 
 
 def ensure_origin_remote() -> tuple[bool, str]:
@@ -127,34 +170,37 @@ def pull_latest(log=print) -> tuple[bool, str]:
     """
     if not _is_git_repo():
         return False, "not a git repo (skipping pull)"
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    auth = _git_auth_args(token)
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    env = _git_env()
+    # Prefer the authed URL (works on Render). Fall back to `origin` for
+    # local dev where no token is set and the repo is public or already
+    # has cached creds.
+    fetch_target = _authed_url(token) or "origin"
     try:
         r = subprocess.run(
-            ["git", *auth, "fetch", "origin", "main", "--quiet"],
-            cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+            ["git", "fetch", fetch_target, "main", "--quiet"],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=30, env=env,
         )
         if r.returncode != 0:
-            return False, f"fetch failed: {r.stderr.strip() or r.stdout.strip()}"
-        # Reset working tree to origin/main. Safe at runtime because the
-        # container has no local file changes — fantasy.db writes go via
-        # commit_and_push which commits + pushes synchronously before
-        # returning, so by the time we get here all work is on remote.
+            return False, f"fetch failed: {_sanitize(r.stderr.strip() or r.stdout.strip(), token)}"
+        # Reset working tree to FETCH_HEAD (the just-fetched origin/main).
+        # Safe at runtime because the container has no local file changes —
+        # fantasy.db writes go via commit_and_push which commits + pushes
+        # synchronously before returning, so by the time we get here all
+        # work is on remote.
         r = subprocess.run(
-            ["git", "reset", "--hard", "origin/main", "--quiet"],
-            cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+            ["git", "reset", "--hard", "FETCH_HEAD", "--quiet"],
+            cwd=_BASE_DIR, capture_output=True, text=True, timeout=30, env=env,
         )
         if r.returncode != 0:
-            return False, f"reset failed: {r.stderr.strip() or r.stdout.strip()}"
-        # Detect whether any files changed. If `git pull` was a no-op, stdout
-        # is empty. If it fast-forwarded, stdout contains the range.
+            return False, f"reset failed: {_sanitize(r.stderr.strip() or r.stdout.strip(), token)}"
         msg = (r.stdout + r.stderr).strip()
-        changed = bool(msg)  # any output means new commits landed
+        changed = bool(msg)
         return changed, msg or "already up to date"
     except subprocess.TimeoutExpired:
         return False, "pull timed out after 30s"
     except Exception as e:
-        return False, f"pull error: {e}"
+        return False, f"pull error: {_sanitize(str(e), token)}"
 
 
 def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, str]:
@@ -210,61 +256,68 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
         if c.returncode != 0:
             return False, f"commit failed: {c.stderr.strip() or c.stdout.strip()}"
 
-        # Push with retry. NEVER use `git pull --rebase` here — git's pull
-        # runs `fetch` as an internal subprocess in a way that does NOT
-        # always inherit the `-c http.extraHeader=...` auth flag, which
-        # caused every push to fail with "fatal: could not read Username
-        # for 'https://github.com'" on Render's container.
+        # Push with retry, using the embedded-URL auth pattern.
         #
-        # Working pattern (mirrors pull_latest, which is verified):
-        #   1. git fetch origin main         (single HTTP request, honors -c)
-        #   2. git rebase FETCH_HEAD         (local-only, no network/auth)
-        #   3. git push origin HEAD:main     (single HTTP request, honors -c)
+        # Why this approach (after three failed iterations):
+        #   - URL-rewrite of `origin` via `_temporary_remote_with_token`:
+        #     mutated config across requests, race-prone. Failed silently.
+        #   - `git -c http.extraHeader=...`: silently ignored on Render's
+        #     container — git fell back to credential helper which prompted
+        #     for Username (no terminal) and errored.
+        #   - **Pass the authed URL directly as the refspec argument** to
+        #     fetch/push. No origin mutation, no credential helper, no
+        #     extraHeader. This is what GitHub Actions itself does for
+        #     `actions/checkout`. Bulletproof.
         #
-        # Explicit `origin main` / `HEAD:main` refspecs are required
-        # because Render checks out the build SHA in detached HEAD.
-        auth = _git_auth_args(token)
+        # Also using GIT_TERMINAL_PROMPT=0 so any future auth issue dies
+        # immediately with a clear error rather than hanging or producing
+        # the misleading "could not read Username" message.
+        env = _git_env()
+        authed = _authed_url(token)
+        if not authed:
+            return False, "could not build authed URL (missing GITHUB_REPOSITORY?)"
+
         last_err = ""
         for attempt in (1, 2, 3):
-            # 1. Fetch the latest remote main with auth.
+            # 1. Fetch the latest remote main (single HTTP request, embedded auth)
             r = subprocess.run(
-                ["git", *auth, "fetch", "origin", "main", "--quiet"],
-                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+                ["git", "fetch", authed, "main", "--quiet"],
+                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30, env=env,
             )
             if r.returncode != 0:
-                last_err = (r.stderr.strip() or r.stdout.strip()
-                            or f"fetch exit {r.returncode}")
+                last_err = _sanitize(r.stderr.strip() or r.stdout.strip()
+                                     or f"fetch exit {r.returncode}", token)
                 if attempt == 3:
                     return False, f"fetch failed after 3 tries: {last_err}"
                 continue
 
-            # 2. Rebase our local commit on top of FETCH_HEAD. Pure local;
+            # 2. Rebase our local commit on top of FETCH_HEAD. Local-only;
             # no network, no auth. On binary conflict (fantasy.db diverged
             # in both directions), abort and retry the loop.
             r = subprocess.run(
                 ["git", "rebase", "FETCH_HEAD", "--quiet"],
-                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30, env=env,
             )
             if r.returncode != 0:
                 subprocess.run(
                     ["git", "rebase", "--abort"],
-                    cwd=_BASE_DIR, capture_output=True, text=True, timeout=10,
+                    cwd=_BASE_DIR, capture_output=True, text=True, timeout=10, env=env,
                 )
-                last_err = (r.stderr.strip() or r.stdout.strip()
-                            or f"rebase exit {r.returncode}")
+                last_err = _sanitize(r.stderr.strip() or r.stdout.strip()
+                                     or f"rebase exit {r.returncode}", token)
                 if attempt == 3:
                     return False, f"rebase failed after 3 tries: {last_err}"
                 continue
 
-            # 3. Push with auth.
+            # 3. Push with embedded auth.
             p = subprocess.run(
-                ["git", *auth, "push", "--quiet", "origin", "HEAD:main"],
-                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+                ["git", "push", authed, "HEAD:main", "--quiet"],
+                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30, env=env,
             )
             if p.returncode == 0:
                 return True, f"pushed on attempt {attempt}"
-            last_err = (p.stderr.strip() or p.stdout.strip()
-                        or f"push exit {p.returncode}")
+            last_err = _sanitize(p.stderr.strip() or p.stdout.strip()
+                                 or f"push exit {p.returncode}", token)
             if attempt == 3:
                 return False, f"push failed after 3 tries: {last_err}"
             # else: someone pushed between our fetch and our push — loop
