@@ -231,9 +231,15 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
         return False, "GITHUB_TOKEN not set — cannot push from host"
 
     try:
-        # Stage. `git add -f` so .gitignore'd files (fantasy.db) are included.
+        # Stage. `-A` so deletions get staged too (not just adds/mods). `-f`
+        # so .gitignore'd files (fantasy.db) are included. Combined `-Af`:
+        # any change inside the listed paths — add, modify, OR delete — is
+        # captured. Without `-A`, `api_update_match_url`'s `jp.unlink()` of
+        # a cached match JSON would be a local-only delete that the workflow
+        # never sees, and the per-match Save & Scrape becomes a no-op
+        # because scraper.py still finds the (stale) JSON on origin/main.
         subprocess.run(
-            ["git", "add", "-f", *paths],
+            ["git", "add", "-Af", *paths],
             cwd=_BASE_DIR, capture_output=True, text=True, timeout=15,
         )
 

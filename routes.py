@@ -47,11 +47,20 @@ import cloud_sync   # Phase 2: git pull / push helpers (HOSTED mode)
 _IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")
 
 
-def _push_if_hosted(reason: str) -> None:
+def _push_if_hosted(reason: str, extra_paths: list | None = None) -> None:
     """
     Phase 4: After a successful write in HOSTED mode, commit fantasy.db and
     push so other clients (and the local box / Actions) see the change on
     their next git pull.
+
+    `extra_paths` lets callers include adjacent file changes in the same
+    commit — e.g. `api_update_match_url` deletes a cached
+    `data/matches/match_NN.json` to force the workflow to re-scrape that
+    match. Without passing the JSON path here, the deletion stays local
+    and the workflow finds the stale JSON on its checkout, then skips
+    the match (scraper.py:615 cache short-circuit). All non-fantasy.db
+    paths in `extra_paths` get the same `git add -Af` treatment as
+    fantasy.db.
 
     Sync, not async — durability matters more than the 2-5s latency. If the
     container dies between the local DB write and the git push, the change
@@ -70,8 +79,9 @@ def _push_if_hosted(reason: str) -> None:
         # data on next Render redeploy. See db.checkpoint() docstring for the
         # passcode-change-lost-on-redeploy bug this resolves.
         db.checkpoint()
+        paths = ["data/fantasy.db"] + list(extra_paths or [])
         ok, msg = cloud_sync.commit_and_push(
-            paths=["data/fantasy.db"],
+            paths=paths,
             message=f"ui: {reason}",
         )
         if not ok:
@@ -1210,18 +1220,29 @@ def api_update_match_url():
             # the workflow checks out a cached file, the scraper sees it,
             # skips this match, and we get a "data: scrape ..." commit with
             # no real change. Targeted deletion = targeted re-scrape.
+            json_rel_path = None
             try:
                 mno_match = re.search(r'(\d+)\s*$', match_id)
                 if mno_match:
                     mns = mno_match.group(1).zfill(2)
                     jp = DATA_DIR / "matches" / f"match_{mns}.json"
+                    # Path RELATIVE to the repo root — git add needs it this
+                    # way. Always pass it through to _push_if_hosted so the
+                    # deletion is STAGED, even if the file didn't exist
+                    # locally (the workflow's checkout might have it).
+                    json_rel_path = f"data/matches/match_{mns}.json"
                     if jp.exists():
                         jp.unlink()
                         _log(f"Deleted cached {jp.name} so workflow re-scrapes M{mns}")
             except Exception as e:
                 _log(f"Could not delete cached match JSON for {match_id}: {e}",
                      "warn")
-            _push_if_hosted(f"admin-url:{match_id}={cb_id}")
+            # Pass the JSON path as extra so the deletion is committed —
+            # without this the workflow checks out the stale JSON on
+            # origin/main and scraper.py:615 short-circuits, defeating the
+            # whole point of Save & Scrape.
+            _push_if_hosted(f"admin-url:{match_id}={cb_id}",
+                            extra_paths=[json_rel_path] if json_rel_path else None)
             dispatched, dmsg = cloud_sync.dispatch_workflow(
                 "daily_sync.yml", ref="main", log=_log,
             )
