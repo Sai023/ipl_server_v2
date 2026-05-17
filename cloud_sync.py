@@ -210,36 +210,42 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
         if c.returncode != 0:
             return False, f"commit failed: {c.stderr.strip() or c.stdout.strip()}"
 
-        # Push with retry: rebase on top of remote first to absorb
-        # concurrent scrape / rollover commits.
+        # Push with retry. NEVER use `git pull --rebase` here — git's pull
+        # runs `fetch` as an internal subprocess in a way that does NOT
+        # always inherit the `-c http.extraHeader=...` auth flag, which
+        # caused every push to fail with "fatal: could not read Username
+        # for 'https://github.com'" on Render's container.
         #
-        # CRITICAL FIX (post-launch): the previous implementation used
-        # `_temporary_remote_with_token` (URL-rewrite auth) for the push
-        # step. In Render's container that path silently failed for every
-        # `_push_if_hosted` call — confirmed by zero `ui:` prefix commits
-        # ever appearing on `origin/main` in the first 24h of HOSTED mode
-        # operation. The pull path (which uses `http.extraHeader` via
-        # `_git_auth_args`) was already proven working.
+        # Working pattern (mirrors pull_latest, which is verified):
+        #   1. git fetch origin main         (single HTTP request, honors -c)
+        #   2. git rebase FETCH_HEAD         (local-only, no network/auth)
+        #   3. git push origin HEAD:main     (single HTTP request, honors -c)
         #
-        # Refactor: use `http.extraHeader` for BOTH pull-rebase AND push.
-        # One auth mechanism, fewer moving parts, no per-call state
-        # mutation of the remote URL. Capture stderr from every git step
-        # into the return message so failures surface in Render logs at
-        # WARN level via `_push_if_hosted`.
-        #
-        # Explicit `origin main` / `HEAD:main` refspecs are still required
+        # Explicit `origin main` / `HEAD:main` refspecs are required
         # because Render checks out the build SHA in detached HEAD.
         auth = _git_auth_args(token)
         last_err = ""
         for attempt in (1, 2, 3):
+            # 1. Fetch the latest remote main with auth.
             r = subprocess.run(
-                ["git", *auth, "pull", "--rebase", "--autostash", "--quiet",
-                 "origin", "main"],
+                ["git", *auth, "fetch", "origin", "main", "--quiet"],
                 cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
             )
             if r.returncode != 0:
-                # Rebase conflict on a binary blob (fantasy.db) — abort and
-                # keep local commit. Next loop iteration will retry.
+                last_err = (r.stderr.strip() or r.stdout.strip()
+                            or f"fetch exit {r.returncode}")
+                if attempt == 3:
+                    return False, f"fetch failed after 3 tries: {last_err}"
+                continue
+
+            # 2. Rebase our local commit on top of FETCH_HEAD. Pure local;
+            # no network, no auth. On binary conflict (fantasy.db diverged
+            # in both directions), abort and retry the loop.
+            r = subprocess.run(
+                ["git", "rebase", "FETCH_HEAD", "--quiet"],
+                cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode != 0:
                 subprocess.run(
                     ["git", "rebase", "--abort"],
                     cwd=_BASE_DIR, capture_output=True, text=True, timeout=10,
@@ -250,6 +256,7 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
                     return False, f"rebase failed after 3 tries: {last_err}"
                 continue
 
+            # 3. Push with auth.
             p = subprocess.run(
                 ["git", *auth, "push", "--quiet", "origin", "HEAD:main"],
                 cwd=_BASE_DIR, capture_output=True, text=True, timeout=30,
@@ -260,7 +267,8 @@ def commit_and_push(paths: list[str], message: str, log=print) -> tuple[bool, st
                         or f"push exit {p.returncode}")
             if attempt == 3:
                 return False, f"push failed after 3 tries: {last_err}"
-            # else: loop and re-rebase on next attempt
+            # else: someone pushed between our fetch and our push — loop
+            # and re-fetch on next attempt to absorb their commit.
 
         return False, f"push exhausted retries; last error: {last_err}"
     except subprocess.TimeoutExpired:
