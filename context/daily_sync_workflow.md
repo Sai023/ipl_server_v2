@@ -185,6 +185,38 @@ killed the workflow before commit. The whole scrape silently produced
 nothing. Now uses `git diff --cached --quiet`, which is the correct
 primitive (exits 0 = nothing staged, exits 1 = something staged).
 
+### 12. Next Week drafts and Phase 12 sessions are preserved across scrapes
+
+The workflow writes to **score tables only** (`match_scores`,
+`player_match_points`, `players.season_pts/points`,
+`user_selections.week_pts`). It does **not** touch
+`user_selections.nw_team_json` (Next Week drafts), `members`, or
+`sessions` (Phase 12 auth state).
+
+Three possible interleavings with a host write, and what happens to
+each table:
+
+| Sequence | Host write (draft / member / session) | Scrape data |
+|---|---|---|
+| Host pushes → workflow checkout → scrape → push (no contention) | preserved (workflow's checkout has it) | committed |
+| Workflow checkout → scrape → host pushes → workflow tries push | preserved on remote | **lost** — workflow rebase-aborts on the binary `fantasy.db` conflict and exits non-zero; next cron run picks up |
+| Workflow checkout → host pushes → workflow scrape → push | preserved on remote | **lost** — same rebase-abort path; workflow's pre-push pull-rebase from rule #10 hits the binary conflict, aborts, retries, then exits after 3 failures |
+
+The third case is the one that matters for Phase 12 (it's now reachable
+not only via Save Draft but also Register / Passcode Change / Admin
+Reset). The rebase-abort is the **safety mechanism** — git refuses to
+auto-resolve binary blob diffs, which protects host writes from being
+overwritten by the workflow's stale-snapshot scrape.
+
+**Cost:** one workflow cron run produces no commit. **Benefit:** no
+host write is ever lost. The next 18:30 / 21:30 UTC run will pick up
+the latest state on a fresh checkout and scrape cleanly.
+
+For a friends league with bursty Sunday-night picks and 2 cron runs
+per day, contention probability is low; sacrificing one scrape run
+every few weeks is preferable to silently overwriting picks or
+passcode changes.
+
 ## Called by / Calls into
 
 - **Called by:**

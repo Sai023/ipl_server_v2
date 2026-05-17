@@ -225,6 +225,32 @@ Failures are logged at WARN level and the response still returns 200
 — the local DB has the change and the next successful write catches
 it up.
 
+**Notable omission — `/api/login` (Phase 12).** Login DOES write to
+`fantasy.db` (`db.create_session` inserts a row in `sessions`) but
+**deliberately is NOT wrapped in `_push_if_hosted`**. Reasoning:
+
+- Render's `autoDeploy: true` means every push to `main` triggers a
+  container restart. If every login pushed, every login would log
+  out every other user (their sessions would survive on remote but
+  the new container boot would race with their next request) —
+  a doom loop for any league with > 1 active member.
+- Sessions are intentionally **weakly persistent**: they're written
+  to the local container's `fantasy.db` and survive on remote ONLY
+  if a different write piggyback-pushes the DB before the next
+  redeploy (e.g. a Save Draft commits the whole `fantasy.db`,
+  including any in-flight sessions).
+- Trade-off: when Render redeploys (after a scrape commit or a code
+  push), users whose sessions weren't piggybacked are logged out
+  and must re-login. Acceptable for a friends league; users only
+  hit `_require_token` on `/api/whoami`, `/api/passcode/change`, and
+  the `/api/admin/*` routes — regular gameplay (`?user=<n>`) is
+  unaffected.
+
+Same reasoning applies to the opportunistic `DELETE FROM sessions
+WHERE expires_at < now` inside `db.get_session`: it writes locally
+but doesn't push (and shouldn't — cleanup runs on every authed read
+and would otherwise dominate the push channel).
+
 ### B. `/api/sync-now` forks completely
 
 Local mode keeps the existing behaviour: spawns
