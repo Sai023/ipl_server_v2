@@ -74,6 +74,7 @@ Phase 7.
 |---|-------|-------|--------|---------|
 | 1 | System | `/api/version` | GET | Returns `APP_VERSION` + every module's version pin + `VERSION_MAP` changelog. |
 | 1 | System | `/api/ping` | GET | Liveness check + `public_url` + budget constants. |
+| 1 | System | `/api/_test-push` | POST | **HOSTED-only diagnostic.** Bumps `meta._last_test_push`, calls `db.checkpoint()`, then `cloud_sync.commit_and_push` directly. Returns raw `(ok, msg)` from the push attempt — the only way to verify the host→git write path on Render free tier (no shell available). Returns 400 in local mode. No auth — only side effect is one extra commit and no secrets leak (token is sanitised). Added post-launch when zero `ui:` commits appeared in the first 24h of HOSTED operation. |
 | 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint. |
 | 1 | System | `/api/current-week` | GET | Just the integer week number. |
 | 1.5 | Auth | `/api/register` | POST | Phase 12 — create a new member with display name + 4-digit passcode. Returns `{ok, name, token, must_change:false, is_admin:false}`. |
@@ -201,8 +202,15 @@ forks. Local mode (`HOSTED` unset) keeps every behaviour from above.
 ### A. `_push_if_hosted(reason)` wraps every write
 
 After a successful DB write, the handler calls
-`_push_if_hosted("<event>:<args>")` which delegates to
-`cloud_sync.commit_and_push(paths=["data/fantasy.db"], message=...)`.
+`_push_if_hosted("<event>:<args>")` which:
+
+1. Calls **`db.checkpoint()`** to flush WAL into `fantasy.db` — see
+   [db_manager.md](db_manager.md) §6b for why this is required (the
+   silent passcode-loss bug it fixes).
+2. Calls `cloud_sync.commit_and_push(paths=["data/fantasy.db"], ...)`
+   which `git add`s, commits, and pushes via the URL-embedded auth
+   pattern documented in [cloud_sync.md](cloud_sync.md) §2.
+
 This is **synchronous** — the user's `POST` doesn't return until the
 push finishes (or fails). Trade-off: ~2–5s extra latency per write,
 in exchange for durability against Render container restarts (which

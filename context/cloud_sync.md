@@ -7,8 +7,18 @@
 ## What it does (business view)
 
 `cloud_sync.py` is the **only file allowed to shell out to `git`** in
-HOSTED mode. It turns four high-level intentions into safe git
-plumbing with timeouts, auth injection, and retry:
+HOSTED mode. Helpers:
+
+| Function | What it does |
+|---|---|
+| `_repo_slug()` | Returns `owner/repo` from `GITHUB_REPOSITORY` env (preferred) or origin URL |
+| `_authed_url(token)` | Builds `https://x-access-token:<token>@github.com/<slug>.git` — production auth path |
+| `_git_env()` | Returns env dict with `GIT_TERMINAL_PROMPT=0` + `GIT_ASKPASS=/bin/echo` to prevent interactive prompts |
+| `_sanitize(text, token)` | Strips token from any returned/logged string |
+| `_git_auth_args(token)` | **DEPRECATED**: `-c http.extraHeader=...` (didn't work on Render — see rule #2) |
+| `_ensure_identity()` | Sets bot `user.email`/`user.name` if unconfigured (Render container boots without git config) |
+
+Public API — four high-level intentions:
 
 1. **"Make sure `origin` is set to the canonical GitHub URL"** →
    `ensure_origin_remote()` reads `GITHUB_REPOSITORY` env and runs
@@ -82,20 +92,34 @@ request handlers (`api_save_next_week`, `api_sync_now`, etc.). An
 uncaught exception there returns a 500 to the user even though the
 DB write itself succeeded.
 
-### 2. Token never lives in the remote URL except during push
+### 2. Auth: token embedded directly in the URL passed to fetch/push
 
-`commit_and_push` uses a context manager `_temporary_remote_with_token`
-that:
-1. Captures the original `origin` URL.
-2. Rewrites it to `https://x-access-token:<TOKEN>@github.com/...`.
-3. Runs `git push`.
-4. Restores the original URL on exit, even on exception.
+**The auth approach in production is `_authed_url()` — token embedded
+in the URL passed as the refspec argument**. Three approaches were
+tried in production; only this one works on Render's free-tier
+container:
 
-This keeps the token out of `git remote -v` for the bulk of the
-container's lifetime. The PAT only appears in the FD's argument list
-for the duration of one `git push` invocation.
+| Attempt | Mechanism | Verdict |
+|---|---|---|
+| 1 | `_temporary_remote_with_token` (URL-rewrite of `origin` config) | Race-prone state mutation; failed silently — zero `ui:` commits in first 24h of HOSTED operation |
+| 2 | `git -c http.extraHeader=Authorization: Bearer <token>` | Render's container has a default credential helper that intercepts auth BEFORE git applies the `-c` flag → silently fell back to credential helper which prompted for Username → `fatal: could not read Username for 'https://github.com'` |
+| 3 (production) | **`git fetch https://x-access-token:<token>@github.com/<slug>.git main`** | Bypasses every credential helper. Same pattern `actions/checkout` uses. Verified working: passcode changes + Save Draft now produce `ui:*` commits reliably |
 
-### 3. Push retries on rebase failure
+`_temporary_remote_with_token` is kept as DEPRECATED in the code for
+git-history grep but no longer called. `_git_auth_args` (extraHeader)
+is also kept as a legacy helper but production code uses `_authed_url`.
+
+**Belt-and-suspenders hardening:**
+
+- `GIT_TERMINAL_PROMPT=0` + `GIT_ASKPASS=/bin/echo` in subprocess env
+  (`_git_env()`): any future auth issue dies immediately with a clear
+  error instead of hanging or producing the misleading "could not read
+  Username" message.
+- `_sanitize(text, token)` strips the token from every returned error
+  message and log line — defence in depth, since git itself already
+  strips tokens from URLs in user-facing stderr.
+
+### 3. Push retries with re-fetch on failure
 
 The push sequence inside `commit_and_push`:
 
@@ -103,18 +127,35 @@ The push sequence inside `commit_and_push`:
 git add -f <paths>
 git diff --cached --name-only  # bail if nothing staged
 git commit -m "<message>"
-for attempt in (1, 2):
-    git pull --rebase --autostash
-    if rebase fails:
+
+for attempt in (1, 2, 3):
+    git fetch <authed_url> main              # honors embedded auth
+    git rebase FETCH_HEAD                    # local-only, no auth
+    if rebase fails:                         # binary conflict on fantasy.db
         git rebase --abort; continue
-    git push
-    if push succeeds: return (True, "pushed")
-return (False, "push failed after retry")
+    git push <authed_url> HEAD:main          # honors embedded auth
+    if push succeeds: return (True, ...)
+    # else: race with another writer; loop re-fetches and retries
+return (False, "<step> failed after 3 tries: <sanitized stderr>")
 ```
 
-A binary conflict on `fantasy.db` aborts the rebase and bails — git
-can't merge SQLite blobs. The local commit is kept; the next
-successful sync (workflow or future user write) picks it up.
+The `pull --rebase` shortcut was rejected because git's internal
+fetch inside pull does NOT always inherit `-c http.extraHeader` —
+confirmed via production-failure stack trace. Explicit fetch + rebase
++ push lets each network step carry the token in its URL.
+
+A binary conflict on `fantasy.db` aborts the rebase and retries on
+the next loop iteration (with a fresh fetch). After 3 unresolved
+attempts the function returns `(False, ...)`; the local commit is
+kept and `_push_if_hosted` logs at WARN. The next successful write
+picks up the local commit.
+
+**For the symmetric problem on the workflow side** (where the workflow
+holds new scrape data that diverges from a host-write that landed
+during scraping), see
+[daily_sync_workflow.md](daily_sync_workflow.md) §13 — the workflow
+implements a complementary "re-apply on conflict" pattern that uses
+the same `git reset --hard origin/main` recovery.
 
 ### 4. `dispatch_workflow` passes inputs as strings
 

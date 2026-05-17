@@ -148,34 +148,15 @@ data. Must be `== 'true'` with quotes.
 clause excludes the cron paths. Daily scheduled scrapes are about
 *new* matches; they don't need to redo old ones.
 
-### 10. Phase 11 — pull-rebase + 3-retry push
+### 10. Phase 11 — pull-rebase + 3-retry push (SUPERSEDED — see §13)
 
-The hosted Render server is now also a writer to `fantasy.db`
-(user picks, rollover, admin URL changes via the `_push_if_hosted`
-wrapper in `routes.py`). A workflow push and a host push can race.
-
-Step 7 now does (after `git commit`):
-
-```bash
-for attempt in 1 2 3; do
-  if git pull --rebase --autostash origin main; then
-    if git push origin main; then exit 0; fi
-  else
-    git rebase --abort || true        # binary conflict on fantasy.db
-    [ $attempt -eq 3 ] && exit 1
-  fi
-  sleep 5
-done
-```
-
-Narrows the conflict window to ~1s between rebase and push. Three
-retries handles the case where the host pushes a write between our
-rebase and our push.
-
-On unresolvable binary conflict (rare; git can't merge SQLite blobs),
-the workflow exits non-zero with a loud log line. The next scheduled
-run produces a fresh scrape commit; the host's write that won the
-race is already on remote and preserved.
+Original Phase 11 design: `git pull --rebase --autostash` + 3-retry.
+**Replaced by section 13's re-apply-on-conflict pattern** after a
+production failure (workflow run #113 on 2026-05-17) where a host
+`ui:passcode-change` landed during the scrape window and the rebase
+hit a binary conflict on `fantasy.db` that git cannot resolve. The
+old pattern aborted, retried twice with the same conflict, exited
+1, and the scrape data was lost. See §13 for the working pattern.
 
 ### 11. Phase 11 — `git status` syntax fix
 
@@ -216,6 +197,69 @@ For a friends league with bursty Sunday-night picks and 2 cron runs
 per day, contention probability is low; sacrificing one scrape run
 every few weeks is preferable to silently overwriting picks or
 passcode changes.
+
+### 13. Post-launch fix — re-apply scrape on binary conflict
+
+§12's "acceptable trade-off" turned out to be unacceptable in
+practice. After Phase 12 (passcodes) shipped, every legitimate user
+action — Save Draft, passcode change, admin reset — became a
+candidate to land during the workflow's scrape window and trigger
+the conflict that §10 just exits 1 on. With 2 scheduled runs/day
++ manual triggers, the workflow was failing **more often than not**.
+
+**Real failure** (run #113, 2026-05-17T16:53Z): host pushed
+`ui:passcode-change:Sai` while the workflow was scraping. Workflow's
+pre-push pull-rebase aborted on `data/fantasy.db` binary conflict.
+Retried 3 times — same conflict. Exited 1. Scrape data dropped.
+
+**Fix**: re-apply the scrape on top of the latest `origin/main` when
+a conflict happens. Step 7 now:
+
+```bash
+# Back up scraped JSONs BEFORE first push attempt
+mkdir -p /tmp/scrape-output
+cp -r data/matches/*.json /tmp/scrape-output/
+cp data/schedule.json /tmp/scrape-output/
+
+push_attempt() {
+  git add -f data/{schedule.json,matches/*.json,fantasy.db}
+  git diff --cached --quiet && return 0  # nothing to commit
+  git commit -m "data: scrape $(date)Z"
+  git push origin main
+}
+
+for attempt in 1 2 3; do
+  push_attempt && exit 0          # success
+  [ $attempt -eq 3 ] && exit 1    # exhausted
+  # Conflict path: reset to host's latest, restore our JSONs, rescrape
+  git fetch origin main && git reset --hard origin/main
+  cp -n /tmp/scrape-output/*.json data/matches/    # don't overwrite host's
+  cp -n /tmp/scrape-output/schedule.json data/
+  python Seed_Matches.py --no-live
+  python scraper.py                                # uses cached JSONs, ~5s
+done
+```
+
+**Why this works:**
+- `cp -n` ("no-clobber") means host's newer JSONs win over ours
+- `scraper.py` at [scraper.py:615](../scraper.py:615) short-circuits
+  on cached `data/matches/match_NN.json` → re-run is ~5s, not 3 min
+- After re-run, `fantasy.db` has host's writes (members, sessions,
+  user_selections) AND our scrape data (match_scores,
+  player_match_points, season_pts, week_pts)
+- Both sides preserved at the application layer instead of trying
+  to merge at the binary layer
+
+**Cost:** ~5–10s extra per conflict (the re-scrape against cached
+JSONs). For a friends league this is invisible.
+
+**Edge case left documented but not fixed:** if Cricbuzz UPDATED an
+already-cached match (late stats corrections), our pre-conflict
+scrape would have new content for `match_NN.json` but the cached
+JSON on origin/main has the old content. After reset, `cp -n` keeps
+the OLD cached JSON (no-clobber), and scraper's line-615 check
+skips re-fetching. The corrections are lost until someone triggers
+a `force_full_rescrape` workflow run. Worth noting but rare.
 
 ## Called by / Calls into
 

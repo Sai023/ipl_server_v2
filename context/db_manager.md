@@ -157,6 +157,35 @@ SQLite's WAL mode handles the read/write isolation for that window.
 `cloud_sync.pull_latest()` returns `changed=True`. Never called in
 local mode.
 
+### 6b. `checkpoint()` — WAL flush before git operations (post-launch fix)
+
+`checkpoint()` runs `PRAGMA wal_checkpoint(TRUNCATE)` on the
+thread-local connection, forcing all committed WAL frames into the
+main `fantasy.db` file.
+
+**Why it exists:** SQLite in WAL mode writes commits to
+`fantasy.db-wal`, not `fantasy.db` itself. The main file only
+catches up when a checkpoint fires (default: when WAL hits 1000
+frames or on connection close). Between the application's commit
+and the next checkpoint, `fantasy.db` on disk is stale relative
+to what queries return.
+
+**Production bug this fixes:** in HOSTED mode, `_push_if_hosted` was
+calling `git add data/fantasy.db` immediately after the application
+committed a write. Git read the pre-WAL file, saw no diff, returned
+"nothing to commit", and the push was a no-op. Passcode changes on
+mobile didn't appear on desktop because the change was in
+`fantasy.db-wal`, never made it to `fantasy.db`, never made it to
+git. Moe's change *happened* to land because the WAL had been
+opportunistically auto-flushed for unrelated reasons. Sai's didn't.
+Pure timing roulette.
+
+**Called by:** `routes._push_if_hosted` (every HOSTED-mode write
+endpoint) and `routes.api_test_push` (the diagnostic). Always called
+**immediately before** `cloud_sync.commit_and_push`. Best-effort;
+never raises — a checkpoint failure means a stale push (which fails
+loud at the next git command), not silent data loss.
+
 ### 6. Player ID auto-correction on save
 Doesn't live here directly — but `save_next_week()` and `upsert_member()`
 write whatever IDs the caller passes. `base.resolve_id_list` is what
