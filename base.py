@@ -21,9 +21,11 @@ Neither routes.py nor server.py imports from the other.
 """
 
 import collections
+import hashlib as _hashlib
 import json as _json
 import logging as _logging
 import re
+import secrets as _secrets
 import sqlite3
 import threading
 import time
@@ -242,3 +244,29 @@ def _security_headers(response):
 # ── Mutable global — updated by server.py via `import base; base.CURRENT_PUBLIC_URL = url` ──
 
 CURRENT_PUBLIC_URL = ""
+
+
+# ── Passcode + session helpers (Phase: Passcodes) ────────────────────────────
+# Threat model: 4-digit passcode is friction, not real auth. Salting with the
+# username prevents identical-passcode users from sharing the same hash; the
+# 4-digit space (10k combos) is offline-brute-forceable by anyone with the DB.
+# Treat passcodes as "stops the casual sibling," not as a secret credential.
+
+PASSCODE_RE = re.compile(r"^\d{4}$")
+
+def hash_passcode(passcode: str, username: str) -> str:
+    return _hashlib.sha256(f"{username}:{passcode}".encode("utf-8")).hexdigest()
+
+def verify_passcode(passcode: str, username: str, stored_hash: str) -> bool:
+    if not stored_hash: return False
+    return _secrets.compare_digest(hash_passcode(passcode, username), stored_hash)
+
+def new_session_token() -> str:
+    return _secrets.token_hex(32)
+
+def get_bearer_token():
+    h = request.headers.get("Authorization", "")
+    if h.startswith("Bearer "):
+        t = h[7:].strip()
+        return t or None
+    return None

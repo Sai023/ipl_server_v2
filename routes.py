@@ -81,6 +81,8 @@ from base import (
     resolve_player_id, resolve_id_list, _ID_RE, _jloads,
     BASE_DIR, DATA_DIR, STATIC_DIR,
     BUDGET_TOTAL, XI_SIZE, MAX_WEEKS,
+    PASSCODE_RE, hash_passcode, verify_passcode,
+    new_session_token, get_bearer_token,
 )
 from config import (
     DB_PATH, DEADLINE_HOUR, DEADLINE_MIN,
@@ -144,6 +146,161 @@ def api_current_week():
         return jsonify({"week_no": db.get_current_week(), "max_weeks": MAX_WEEKS, "ok": True})
     except Exception as e:
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 1.5 AUTH (Passcodes feature)
+# ════════════════════════════════════════════════════════════════════════════
+# Bearer-token surface for /api/passcode/* and /api/admin/* only. The rest of
+# the API remains trust-based (?user=<n>) per the project's "private league"
+# stance documented in user_capabilities.md §1.
+
+def _require_token():
+    """Returns (username, None) on success, (None, (json_resp, status)) on failure."""
+    token = get_bearer_token()
+    if not token:
+        return None, (jsonify({"ok": False, "error": "auth required", "code": 401}), 401)
+    sess = db.get_session(token)
+    if not sess:
+        return None, (jsonify({"ok": False, "error": "invalid or expired token", "code": 401}), 401)
+    return sess["username"], None
+
+def _require_admin():
+    username, err = _require_token()
+    if err: return None, err
+    m = db.get_member_auth(username)
+    if not m or not m["is_admin"]:
+        return None, (jsonify({"ok": False, "error": "admin only", "code": 403}), 403)
+    return username, None
+
+
+@bp.route("/api/register", methods=["POST"])
+def api_register():
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        d = request.get_json(force=True, silent=True) or {}
+        name = (d.get("name") or "").strip()
+        passcode = str(d.get("passcode") or "").strip()
+        if not name or len(name) > 30:
+            return jsonify({"ok": False, "error": "name must be 1-30 chars", "code": 400}), 400
+        if not PASSCODE_RE.match(passcode):
+            return jsonify({"ok": False, "error": "passcode must be exactly 4 digits", "code": 400}), 400
+        if db.get_member_auth(name):
+            return jsonify({"ok": False, "error": "name already registered", "code": 409}), 409
+        # Create empty user_selections row using existing helper.
+        db.upsert_member(name, {"this_week": {"team": [], "cap": None, "vc": None},
+                                "next_week": {"team": [], "cap": None, "vc": None}})
+        db.upsert_member_auth(name, hash_passcode(passcode, name),
+                              must_change=0, is_admin=0)
+        token = new_session_token()
+        db.create_session(token, name)
+        _push_if_hosted(f"register:{name}")
+        return jsonify({"ok": True, "name": name, "token": token,
+                        "must_change": False, "is_admin": False})
+    except Exception as e:
+        _log(f"POST /api/register: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
+@bp.route("/api/login", methods=["POST"])
+def api_login():
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        d = request.get_json(force=True, silent=True) or {}
+        name = (d.get("name") or "").strip()
+        passcode = str(d.get("passcode") or "").strip()
+        if not name or not PASSCODE_RE.match(passcode):
+            return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400}), 400
+        m = db.get_member_auth(name)
+        if not m or not verify_passcode(passcode, name, m["passcode_hash"]):
+            # Same error message for unknown-user vs wrong-passcode — don't
+            # leak which member names exist beyond what /api/state already shows.
+            return jsonify({"ok": False, "error": "wrong name or passcode", "code": 401}), 401
+        token = new_session_token()
+        db.create_session(token, name)
+        return jsonify({"ok": True, "name": name, "token": token,
+                        "must_change": bool(m["must_change"]),
+                        "is_admin": bool(m["is_admin"])})
+    except Exception as e:
+        _log(f"POST /api/login: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
+@bp.route("/api/whoami", methods=["GET"])
+def api_whoami():
+    try:
+        username, err = _require_token()
+        if err: return err
+        m = db.get_member_auth(username) or {}
+        return jsonify({"ok": True, "name": username,
+                        "must_change": bool(m.get("must_change")),
+                        "is_admin": bool(m.get("is_admin"))})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
+@bp.route("/api/passcode/change", methods=["POST"])
+def api_passcode_change():
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        username, err = _require_token()
+        if err: return err
+        d = request.get_json(force=True, silent=True) or {}
+        new_pc = str(d.get("new") or "").strip()
+        if not PASSCODE_RE.match(new_pc):
+            return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400}), 400
+        # No current-passcode check by design — user is already authenticated via
+        # bearer token; for forced resets (must_change=1) the user can't verify
+        # the current passcode anyway because the admin reset it without telling
+        # them. Matches the user's stated UX: "no verification is needed".
+        db.set_passcode(username, hash_passcode(new_pc, username), must_change=0)
+        # Rotate all sessions for this user so any other tab is forced to re-login.
+        db.delete_sessions_for_user(username)
+        token = new_session_token()
+        db.create_session(token, username)
+        _push_if_hosted(f"passcode-change:{username}")
+        return jsonify({"ok": True, "token": token, "must_change": False})
+    except Exception as e:
+        _log(f"POST /api/passcode/change: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
+@bp.route("/api/admin/passcode/reset", methods=["POST"])
+def api_admin_passcode_reset():
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        username, err = _require_admin()
+        if err: return err
+        d = request.get_json(force=True, silent=True) or {}
+        target = (d.get("target_username") or "").strip()
+        if not target:
+            return jsonify({"ok": False, "error": "target_username required", "code": 400}), 400
+        m = db.get_member_auth(target)
+        if not m:
+            return jsonify({"ok": False, "error": "target user not found", "code": 404}), 404
+        db.set_passcode(target, hash_passcode("1234", target), must_change=1)
+        # Force the target to re-login with 1234 on whatever device they're on.
+        db.delete_sessions_for_user(target)
+        _push_if_hosted(f"admin-passcode-reset:{target}")
+        return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True})
+    except Exception as e:
+        _log(f"POST /api/admin/passcode/reset: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
+@bp.route("/api/admin/members", methods=["GET"])
+def api_admin_members():
+    try:
+        username, err = _require_admin()
+        if err: return err
+        return jsonify({"ok": True, "members": db.list_members_admin_view()})
+    except Exception as e:
+        _log(f"GET /api/admin/members: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════

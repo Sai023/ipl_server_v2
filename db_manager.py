@@ -49,7 +49,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from config import DB_VER  # noqa: F401
@@ -143,6 +143,26 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
+-- Passcode feature: per-member auth row. Hash is sha256("<username>:<passcode>").
+-- must_change=1 forces the user through the Reset Passcode flow on next login
+-- (set by admin reset). is_admin=1 unlocks the Admin tab + /api/admin/* endpoints.
+CREATE TABLE IF NOT EXISTS members (
+    username       TEXT    PRIMARY KEY CHECK (length(username) BETWEEN 1 AND 30),
+    passcode_hash  TEXT    NOT NULL,
+    must_change    INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0,1)),
+    is_admin       INTEGER NOT NULL DEFAULT 0 CHECK (is_admin    IN (0,1)),
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Bearer-token sessions for /api/passcode/* and /api/admin/*. Other endpoints
+-- still trust ?user=<n> (trust-based league). Tokens expire 30 days after issue.
+CREATE TABLE IF NOT EXISTS sessions (
+    token       TEXT PRIMARY KEY,
+    username    TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_us_name     ON user_selections (display_name);
 CREATE INDEX IF NOT EXISTS idx_us_week     ON user_selections (week_no);
 CREATE INDEX IF NOT EXISTS idx_ms_match    ON match_scores (match_id);
@@ -151,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_pmp_week    ON player_match_points (week_no);
 CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, player_id);
 CREATE INDEX IF NOT EXISTS idx_ump_name    ON user_match_points (display_name);
 CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
+CREATE INDEX IF NOT EXISTS idx_sess_user   ON sessions (username);
 """
 
 
@@ -807,4 +828,70 @@ class DatabaseManager:
             """, (name, current_week, "[]", None, None, json.dumps(team), cap, vc))
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
         return {"week_no": current_week}
+
+    # ── Passcode / Auth DAO (Phase: Passcodes) ─────────────────────────────
+
+    def get_member_auth(self, username: str) -> dict:
+        with self._read() as con:
+            r = con.execute(
+                "SELECT username, passcode_hash, must_change, is_admin "
+                "FROM members WHERE username=?", (username,)
+            ).fetchone()
+            return dict(r) if r else None
+
+    def upsert_member_auth(self, username: str, passcode_hash: str,
+                           must_change: int = 0, is_admin: int = 0) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            con.execute("""
+                INSERT INTO members (username, passcode_hash, must_change, is_admin, created_at)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(username) DO UPDATE SET
+                    passcode_hash = excluded.passcode_hash,
+                    must_change   = excluded.must_change
+            """, (username, passcode_hash, int(must_change), int(is_admin), now_iso))
+
+    def set_passcode(self, username: str, passcode_hash: str,
+                     must_change: int = 0) -> None:
+        with self._write() as con:
+            con.execute(
+                "UPDATE members SET passcode_hash=?, must_change=? WHERE username=?",
+                (passcode_hash, int(must_change), username)
+            )
+
+    def list_members_admin_view(self) -> list:
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT username, must_change, is_admin, created_at "
+                "FROM members ORDER BY username"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Sessions ──────────────────────────────────────────────────────────
+
+    def create_session(self, token: str, username: str, ttl_days: int = 30) -> str:
+        expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
+        with self._write() as con:
+            con.execute(
+                "INSERT INTO sessions (token, username, expires_at) VALUES (?,?,?)",
+                (token, username, expires)
+            )
+        return expires
+
+    def get_session(self, token: str) -> dict:
+        if not token:
+            return None
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            # Opportunistic cleanup of expired tokens — keeps the table small.
+            con.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso,))
+            r = con.execute(
+                "SELECT username, expires_at FROM sessions WHERE token=?", (token,)
+            ).fetchone()
+            return dict(r) if r else None
+
+    def delete_sessions_for_user(self, username: str) -> int:
+        with self._write() as con:
+            cur = con.execute("DELETE FROM sessions WHERE username=?", (username,))
+            return cur.rowcount or 0
 

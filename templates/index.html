@@ -18,11 +18,13 @@ var BUDGET_TOTAL=100.0,XI_SIZE=11;
 
 // ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 var _state=null,_leaderboard=null,_players=null,_username=null;
+var _isAdmin=false,_mustChange=false;
 var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
 var _pickerSearch="",_pickerRole="All",_pickerTeam="All",_pickerSort="season";
 var _pickerNotice=null,_pickerNoticeTimer=null;
 var _adminMatches=null,_adminFilter="all";
+var _adminMembersList=null;
 var members={},matches=[];
 var $app=document.getElementById("app"),$loading=document.getElementById("app-loading"),$errorBanner=document.getElementById("error-banner");
 
@@ -79,20 +81,30 @@ function _initials(name){
 }
 
 // ─── SESSION ─────────────────────────────────────────────────────────────────
-function login(name){
-  if(!name)return false;
-  var known=_state?Object.keys(_state.members||{}):[];
-  if(known.length>0&&!_state.members[name])return false;
-  _username=name;_activeTab="match-centre";_historyData=null;_historyViewWk=null;
-  _adminMatches=null;
+// _establishSession is called after a successful /api/login or /api/register
+// (or whoami on bootstrap). It sets globals and triggers initial loads.
+function _establishSession(name, isAdmin, mustChange){
+  _username=name;_isAdmin=!!isAdmin;_mustChange=!!mustChange;
+  _activeTab="match-centre";_historyData=null;_historyViewWk=null;
+  _adminMatches=null;_adminMembersList=null;
   window.dispatchEvent(new CustomEvent('ipl:state-updated'));
   saveUsername(name);_loadHistory();
   if(_state)render(_state);
+  if(_mustChange) _showResetPasscodeModal(true);
+  return true;
+}
+// attemptLogin(name) is what every member-chip / pill click calls. It opens
+// the passcode prompt. Form submits route to IplApi.login → _establishSession.
+function attemptLogin(name){
+  if(!name)return false;
+  _showPasscodePromptModal(name);
   return true;
 }
 function logout(){
-  _username=null;clearUsername();_historyData=null;_historyViewWk=null;
-  _nwDraft={team:[],cap:null,vc:null};_adminMatches=null;
+  if(window.IplApi&&IplApi.logoutClearToken)IplApi.logoutClearToken();
+  _username=null;_isAdmin=false;_mustChange=false;
+  clearUsername();_historyData=null;_historyViewWk=null;
+  _nwDraft={team:[],cap:null,vc:null};_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
 }
 function switchTab(tab){
@@ -454,15 +466,35 @@ function _buildLoginCard(memberNames){
   var h='<div class="card"><h3 class="section-title">Who are you?</h3>';
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
-    memberNames.forEach(function(n){h+='<button class="login-chip" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
+    memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
     h+='</div><p class="register-hint">New member? <button style="background:none;border:none;color:var(--teal);cursor:pointer;font-size:12px;text-decoration:underline" onclick="document.getElementById(\'register-panel\').style.display=\'block\'">Register here</button></p><div id="register-panel" style="display:none;margin-top:10px">';
   } else {
-    h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet \u2014 enter your name to join.</p><div id="register-panel" style="display:block;margin-top:0">';
+    h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet \u2014 enter your name and pick a 4-digit passcode to join.</p><div id="register-panel" style="display:block;margin-top:0">';
   }
-  h+='<input id="register-input" type="text" maxlength="30" placeholder="Your display name">';
-  h+='<button class="btn btn-teal" onclick="(function(){var inp=document.getElementById(\'register-input\'),name=inp?inp.value.trim():\'\';if(!name||name.length>30){alert(\'Name must be 1\u201330 characters.\');return;}_username=name;saveUsername(name);if(window.IplApi){window.IplApi.saveMember(name,{this_week:{team:[],cap:null,vc:null},next_week:{team:[],cap:null,vc:null}}).then(function(){window.dispatchEvent(new CustomEvent(\'ipl:saved\'));}).catch(function(e){console.error(e);});}if(_state)render(_state);})()" style="margin-top:6px;width:100%">Join League</button>';
+  h+='<input id="register-input" type="text" maxlength="30" placeholder="Your display name" style="margin-bottom:6px;">';
+  h+='<input id="register-passcode" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="4-digit passcode" style="margin-bottom:4px;letter-spacing:6px;text-align:center;font-weight:700;">';
+  h+='<div id="register-error" style="color:#FF6B6B;font-size:11px;min-height:14px;text-align:center;"></div>';
+  h+='<button class="btn btn-teal" onclick="_doRegister()" style="margin-top:6px;width:100%">Join League</button>';
   h+='</div></div>';
   return h;
+}
+function _doRegister(){
+  var inp=document.getElementById('register-input');
+  var pin=document.getElementById('register-passcode');
+  var errEl=document.getElementById('register-error');
+  var name=inp?inp.value.trim():'';
+  var pc=pin?pin.value.trim():'';
+  if(!name||name.length>30){if(errEl)errEl.textContent='Name must be 1\u201330 characters.';return;}
+  if(!/^\d{4}$/.test(pc)){if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';return;}
+  if(errEl)errEl.textContent='';
+  window.IplApi.register(name,pc).then(function(d){
+    if(!d||!d.ok)throw new Error('register failed');
+    window.dispatchEvent(new CustomEvent('ipl:saved'));
+    _establishSession(d.name,d.is_admin,d.must_change);
+  }).catch(function(e){
+    var msg=(e&&e.serverMessage)?e.serverMessage:'Could not register';
+    if(errEl)errEl.textContent='\u26a0 '+msg;
+  });
 }
 function _buildThisWeekCard(){
   var tw=_getThisWeekData();
@@ -482,14 +514,14 @@ function _buildNextWeekCard(){
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
-  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
+  memberNames.forEach(function(n){var isMe=n===_username;h+='<span class="member-pill'+(isMe?' me':'')+'" onclick="if(\''+escAttr(n)+'\'!==_username)attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</span>';});
   h+='</div></div><div class="members-dual">';
   memberNames.forEach(function(n){
     var isMe=n===_username,tw=[],capId=null,vcId=null;
     if(isMe&&_historyData){var cur=_getCurrentWeekRow();if(cur){var src=null;if(cur.this_week&&cur.this_week.team&&cur.this_week.team.length>0)src=cur.this_week;else if(cur.next_week&&cur.next_week.team&&cur.next_week.team.length>0)src=cur.next_week;if(src){tw=src.team;capId=src.cap;vcId=src.vc;}}}
     if(tw.length===0){var picks=_state&&_state.members&&_state.members[n];if(picks){var raw=null;if(picks.this_week&&picks.this_week.team&&picks.this_week.team.length>0)raw=picks.this_week;else if(picks.next_week&&picks.next_week.team&&picks.next_week.team.length>0)raw=picks.next_week;else if(picks.team&&picks.team.length>0)raw=picks;if(raw){tw=raw.team||[];capId=raw.cap||null;vcId=raw.vc||null;}}}
     var cost=0;tw.forEach(function(id){var p=resolvePlayer(id);cost+=(p.price||0);});cost=Math.round(cost*10)/10;
-    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'" onclick="login(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
+    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'" onclick="if(\''+escAttr(n)+'\'!==_username)attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
     if(tw.length>0)h+=_buildXiGrid(tw,capId,vcId);
     else{h+='<p class="empty" style="padding:14px 0;color:var(--dim)">No XI set this week</p>';if(isMe)h+='<button class="btn btn-teal btn-sm" onclick="switchTab(\'next\')" style="margin-top:4px">\u270F\uFE0F Set my XI</button>';else h+='<p style="font-size:11px;color:var(--dim);margin-top:4px">Waiting for '+esc(n)+' to set their squad.</p>';}
     h+='</div>';
@@ -524,8 +556,53 @@ function _buildDevTools(){
 }
 
 // ─── ADMIN TAB ───────────────────────────────────────────────────────────────
+// \u2500\u2500\u2500 ADMIN: MEMBER PASSCODES \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function _loadAdminMembers(){
+  if(!window.IplApi)return;
+  window.IplApi.adminListMembers().then(function(d){
+    if(d&&d.ok){_adminMembersList=d.members;}
+    if(_state&&_activeTab==="admin")render(_state);
+  }).catch(function(e){console.warn("[admin] members:",e);});
+}
+function _adminResetPasscode(targetUsername){
+  if(!confirm('Reset passcode for "'+targetUsername+'" back to 1234? They will be asked to set a new one on next login.'))return;
+  window.IplApi.adminResetPasscode(targetUsername).then(function(d){
+    if(!d||!d.ok)throw new Error('reset failed');
+    _adminMembersList=null;_loadAdminMembers();
+  }).catch(function(e){
+    alert('Could not reset passcode: '+((e&&e.serverMessage)||e.message||'unknown error'));
+  });
+}
+function _buildAdminPasscodesCard(){
+  var h='<div class="card" style="margin-bottom:14px">';
+  h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">\uD83D\uDD10 Member Passcodes</h3>';
+  h+='<button class="btn btn-ghost btn-sm" onclick="_adminMembersList=null;_loadAdminMembers();if(_state)render(_state)">\u27F3 Refresh</button></div>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Reset any member\'s passcode back to <strong style="color:var(--gold)">1234</strong>. They\'ll be forced to choose a new one on their next login.</p>';
+  if(!_adminMembersList){
+    _loadAdminMembers();
+    return h+'<p style="color:var(--muted);font-size:13px">Loading members\u2026</p></div>';
+  }
+  if(_adminMembersList.length===0){return h+'<p style="color:var(--muted);font-size:13px">No members yet.</p></div>';}
+  _adminMembersList.forEach(function(m){
+    var statusPill=m.must_change
+      ? '<span style="font-size:10px;background:rgba(245,197,24,.15);color:var(--gold);padding:2px 7px;border-radius:6px;font-weight:600">\u26A0 Default (1234)</span>'
+      : '<span style="font-size:10px;background:rgba(34,197,94,.12);color:#22C55E;padding:2px 7px;border-radius:6px;font-weight:600">\uD83D\uDD12 Custom</span>';
+    var adminTag=m.is_admin
+      ? '&nbsp;<span style="font-size:9px;background:var(--gold);color:#07111F;padding:1px 6px;border-radius:6px;font-weight:700">ADMIN</span>'
+      : '';
+    var isSelf=(m.username===_username);
+    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);margin-bottom:7px;">';
+    h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--text)">'+esc(m.username)+adminTag+'</div><div style="font-size:11px;color:var(--muted);margin-top:2px">'+statusPill+'</div></div>';
+    h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px"'+(isSelf?' disabled title="Use the header Reset Passcode button for your own account."':'')+' onclick="_adminResetPasscode(\''+escAttr(m.username)+'\')">Reset to 1234</button>';
+    h+='</div>';
+  });
+  return h+'</div>';
+}
+
+// \u2500\u2500\u2500 ADMIN TAB \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function _buildAdminTab(){
-  var h='<div class="card">';
+  var h=_buildAdminPasscodesCard();
+  h+='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:14px">';
   h+='<h3 class="section-title" style="margin:0">\u2699\uFE0F Match URL Admin</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMatches=null;_loadAdminMatches();if(_state)render(_state)">\u27F3 Refresh</button>';
@@ -596,6 +673,118 @@ function _buildAdminTab(){
     h+='</div>';
   });
   return h+'</div>';
+}
+
+// ─── PASSCODE PROMPT MODAL ────────────────────────────────────────────────────
+// Opens when an existing member clicks their chip / pill. Asks for the 4-digit
+// passcode, calls IplApi.login, and either establishes the session or shows
+// an inline error and clears the boxes.
+function _showPasscodePromptModal(name){
+  var existing=document.getElementById('passcode-prompt-modal');
+  if(existing)existing.remove();
+  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">🔒 Welcome back, '+esc(name)+'</div><button onclick="_closePasscodePrompt()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your 4-digit passcode to sign in.</div>';
+  h+='<input id="passcode-input" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:24px;letter-spacing:14px;text-align:center;padding:14px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+='<div id="passcode-error" style="color:#FF6B6B;font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
+  h+='<button id="passcode-submit-btn" onclick="_submitPasscode(\''+escAttr(name)+'\')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Sign in</button>';
+  h+='</div></div>';
+  var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
+  setTimeout(function(){
+    var inp=document.getElementById('passcode-input');
+    if(inp){
+      inp.focus();
+      inp.addEventListener('keydown',function(e){if(e.key==='Enter'){_submitPasscode(name);}});
+      inp.addEventListener('input',function(){
+        // Auto-submit when user types the 4th digit. Less friction than tapping Sign in.
+        if(inp.value.replace(/\D/g,'').length===4){
+          inp.value=inp.value.replace(/\D/g,'');
+          _submitPasscode(name);
+        }
+      });
+    }
+  },50);
+}
+function _closePasscodePrompt(){var m=document.getElementById('passcode-prompt-modal');if(m)m.remove();}
+function _submitPasscode(name){
+  var inp=document.getElementById('passcode-input');
+  var errEl=document.getElementById('passcode-error');
+  var btn=document.getElementById('passcode-submit-btn');
+  var pc=inp?inp.value.trim():'';
+  if(!/^\d{4}$/.test(pc)){
+    if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';
+    if(inp){inp.value='';inp.focus();}
+    return;
+  }
+  if(btn){btn.disabled=true;btn.textContent='Signing in…';}
+  if(errEl)errEl.textContent='';
+  window.IplApi.login(name,pc).then(function(d){
+    if(!d||!d.ok){throw new Error('login failed');}
+    _closePasscodePrompt();
+    _establishSession(d.name,d.is_admin,d.must_change);
+  }).catch(function(e){
+    var msg=(e&&e.serverMessage)?e.serverMessage:'Wrong passcode';
+    if(errEl)errEl.textContent='⚠ '+msg;
+    if(inp){inp.value='';inp.focus();}
+    if(btn){btn.disabled=false;btn.textContent='Sign in';}
+  });
+}
+
+// ─── RESET PASSCODE MODAL ─────────────────────────────────────────────────────
+// Two flows share this modal:
+//   forced=true  → after admin reset; title says "Temporary passcode — set a new one".
+//                  Cannot be dismissed without setting one (no ×, no Cancel).
+//   forced=false → user-initiated via header button. Has cancel.
+// In BOTH flows we do NOT ask for the current passcode (per project decision).
+function _showResetPasscodeModal(forced){
+  var existing=document.getElementById('reset-passcode-modal');
+  if(existing)existing.remove();
+  var title=forced?'🔑 Set a New Passcode':'🔑 Reset Passcode';
+  var sub=forced
+    ?'Your passcode was reset to the default by an admin. Choose a new 4-digit passcode now.'
+    :'Choose a new 4-digit passcode. Your other devices will be signed out.';
+  var h='<div id="reset-passcode-modal" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.92);display:flex;align-items:flex-end;justify-content:center;">';
+  h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">'+title+'</div>';
+  if(!forced)h+='<button onclick="_closeResetPasscode()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button>';
+  h+='</div>';
+  h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">'+sub+'</div>';
+  h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">New passcode</label>';
+  h+='<input id="rp-new" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;margin-bottom:10px;">';
+  h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Confirm new passcode</label>';
+  h+='<input id="rp-confirm" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+='<div id="rp-error" style="color:#FF6B6B;font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
+  h+='<button id="rp-submit-btn" onclick="_submitResetPasscode('+(forced?'true':'false')+')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Save Passcode</button>';
+  h+='</div></div>';
+  var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
+  setTimeout(function(){var inp=document.getElementById('rp-new');if(inp)inp.focus();},50);
+}
+function _closeResetPasscode(){var m=document.getElementById('reset-passcode-modal');if(m)m.remove();}
+function _submitResetPasscode(forced){
+  var n=document.getElementById('rp-new'),c=document.getElementById('rp-confirm');
+  var errEl=document.getElementById('rp-error'),btn=document.getElementById('rp-submit-btn');
+  var nv=n?n.value.trim():'',cv=c?c.value.trim():'';
+  if(!/^\d{4}$/.test(nv)){if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';if(n)n.focus();return;}
+  if(nv!==cv){if(errEl)errEl.textContent='Passcodes do not match.';if(c){c.value='';c.focus();}return;}
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  if(errEl)errEl.textContent='';
+  window.IplApi.changePasscode(nv).then(function(d){
+    if(!d||!d.ok)throw new Error('change failed');
+    _mustChange=false;
+    _closeResetPasscode();
+    // Toast-style success — reuse error banner positioning, green colour.
+    var t=document.createElement('div');
+    t.textContent='✅ Passcode updated.';
+    t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--teal);color:#07111F;padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.4);';
+    document.body.appendChild(t);
+    setTimeout(function(){t.remove();},2500);
+    if(_state)render(_state);
+  }).catch(function(e){
+    var msg=(e&&e.serverMessage)?e.serverMessage:'Could not save passcode';
+    if(errEl)errEl.textContent='⚠ '+msg;
+    if(btn){btn.disabled=false;btn.textContent='Save Passcode';}
+  });
 }
 
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
@@ -725,19 +914,21 @@ function render(state){
     html+=_buildMembersCard(memberNames);
   } else {
     var ini=_initials(_username);
-    html+='<div class="card"><div class="user-header-bar"><div class="user-header-left"><div class="user-avatar-large">'+esc(ini)+'</div><div><p class="label">Logged in as</p><p class="name">'+esc(_username)+'</p></div></div><div class="user-header-btns"><button class="btn-refresh" id="refresh-btn" onclick="_refreshData()" title="Refresh">\u27F3 Refresh</button><button class="btn btn-ghost btn-sm" onclick="logout()">Switch user</button></div></div><div id="refresh-status" class="refresh-status" style="margin-top:4px;text-align:right"></div></div>';
+    html+='<div class="card"><div class="user-header-bar"><div class="user-header-left"><div class="user-avatar-large">'+esc(ini)+'</div><div><p class="label">Logged in as</p><p class="name">'+esc(_username)+(_isAdmin?' &nbsp;<span style="font-size:9px;background:var(--gold);color:#07111F;padding:1px 6px;border-radius:6px;font-weight:700;vertical-align:middle">ADMIN</span>':'')+'</p></div></div><div class="user-header-btns"><button class="btn btn-ghost btn-sm" onclick="_showResetPasscodeModal(false)" title="Reset Passcode">\uD83D\uDD11 Reset Passcode</button><button class="btn-refresh" id="refresh-btn" onclick="_refreshData()" title="Refresh">\u27F3 Refresh</button><button class="btn btn-ghost btn-sm" onclick="logout()">Switch user</button></div></div><div id="refresh-status" class="refresh-status" style="margin-top:4px;text-align:right"></div></div>';
     html+='<div class="tabs">';
-    [
+    var _tabs=[
       {id:"match-centre",label:"Match Centre \uD83C\uDFAF"},
       {id:"team",label:"This Week \uD83D\uDD12"},
       {id:"next",label:"Next Week \u270F\uFE0F"},
       {id:"leaderboard",label:"Leaderboard"},
       {id:"members",label:"Members"},
-      {id:"admin",label:"Admin \u2699\uFE0F"},
-    ].forEach(function(t){
+    ];
+    if(_isAdmin)_tabs.push({id:"admin",label:"Admin \u2699\uFE0F"});
+    _tabs.forEach(function(t){
       html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
     });
     html+='</div>';
+    if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
     if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
     else if(_activeTab==="leaderboard")  html+=_buildLeaderboardCard(_leaderboard);
@@ -765,7 +956,25 @@ function _bootstrap(){
   var lbP=fetch("/api/leaderboard",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var wkP=fetch("/api/current-week",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   stP.then(function(state){
-    if(!_username){if(savedUser&&state.members&&state.members[savedUser])_username=savedUser;else if(savedUser)clearUsername();}
+    if(!_username){
+      var savedTok=(window.IplAuth&&window.IplAuth.getToken)?window.IplAuth.getToken():null;
+      if(savedUser&&savedTok&&state.members&&state.members[savedUser]&&window.IplApi){
+        // Validate the token against the server before trusting localStorage.
+        // 401 inside _fetchJson auto-clears the token; we then drop to login.
+        window.IplApi.whoami().then(function(d){
+          if(d&&d.ok&&d.name===savedUser){
+            _establishSession(d.name,d.is_admin,d.must_change);
+          } else {
+            clearUsername();render(state);
+          }
+        }).catch(function(){
+          clearUsername();render(state);
+        });
+        return;  // skip render \u2014 _establishSession or the catch will render.
+      } else if(savedUser){
+        clearUsername();
+      }
+    }
     render(state);
   }).catch(function(err){
     console.error("[IPL] bootstrap:",err);

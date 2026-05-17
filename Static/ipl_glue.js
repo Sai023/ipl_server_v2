@@ -136,11 +136,23 @@
   function _fetchJson(url, options) {
     options = options || {};
     var headers = Object.assign({ "Accept": "application/json" }, options.headers || {});
+    // Auto-attach bearer token on /api/passcode/*, /api/admin/*, /api/whoami calls.
+    if (!headers["Authorization"]) {
+      var t = IplAuth.getToken();
+      if (t && (url.indexOf("/api/passcode") === 0 || url.indexOf("/api/admin") === 0 || url.indexOf("/api/whoami") === 0)) {
+        headers["Authorization"] = "Bearer " + t;
+      }
+    }
     return fetch(url, Object.assign({}, options, { headers: headers }))
       .then(function (res) {
         if (res.status === 304) return null;
         if (!res.ok) {
           var err = new Error("HTTP " + res.status); err.status = res.status;
+          // 401 on a passcode/admin endpoint → token expired/revoked. Clear it
+          // so the next bootstrap drops to the login card instead of looping.
+          if (res.status === 401 && (url.indexOf("/api/passcode") === 0 || url.indexOf("/api/admin") === 0 || url.indexOf("/api/whoami") === 0)) {
+            IplAuth.clearToken();
+          }
           return res.json().catch(function () { return {}; }).then(function (j) {
             err.serverMessage = j.error || j.detail || ""; err.serverData = j; throw err;
           });
@@ -148,6 +160,17 @@
         return res.json();
       });
   }
+
+  // ── AUTH TOKEN STORE (Phase: Passcodes) ────────────────────────────────────
+  // Bearer token issued by /api/login or /api/register, persisted in localStorage
+  // under `ipl_session_token`. Cleared on logout or 401.
+
+  var TOK_KEY = "ipl_session_token";
+  var IplAuth = {
+    getToken:   function () { try { return localStorage.getItem(TOK_KEY) || null; } catch (e) { return null; } },
+    setToken:   function (t) { try { if (t) localStorage.setItem(TOK_KEY, t); } catch (e) {} },
+    clearToken: function ()  { try { localStorage.removeItem(TOK_KEY); } catch (e) {} },
+  };
 
   // ── ROLLOVER SCHEDULER ──────────────────────────────────────────────────
 
@@ -245,6 +268,35 @@
 
     saveMember: function (n,d){ return _fetchJson("/api/member/"+encodeURIComponent(n), { method:"PUT",  headers:{"Content-Type":"application/json"}, body:JSON.stringify(d) }); },
 
+    // ── Phase: Passcodes — auth surface ────────────────────────────────────
+    register: function (name, passcode) {
+      return _fetchJson("/api/register", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, passcode: passcode }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    login: function (name, passcode) {
+      return _fetchJson("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, passcode: passcode }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    whoami: function () { return _fetchJson("/api/whoami"); },
+    changePasscode: function (newPasscode) {
+      return _fetchJson("/api/passcode/change", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ "new": newPasscode }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    adminListMembers: function () { return _fetchJson("/api/admin/members"); },
+    adminResetPasscode: function (targetUsername) {
+      return _fetchJson("/api/admin/passcode/reset", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_username: targetUsername }),
+      });
+    },
+    logoutClearToken: function () { IplAuth.clearToken(); },
+
     rollover: function (force) {
       var url = force ? "/api/rollover?force=1" : "/api/rollover";
       return _fetchJson(url, { method: "POST" }).then(function (data) {
@@ -336,6 +388,7 @@
   // ── EXPORTS ────────────────────────────────────────────────────────────
 
   window.IplApi               = IplApi;
+  window.IplAuth              = IplAuth;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
   window.IplConfig            = IplConfig;
   window.IplRollover          = IplRollover;

@@ -41,18 +41,19 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 # Per-script version pins
 SERVER_VER       = "13.4"   # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.6.0"  # Phase 11: /api/sync-now branches to git-pull in HOSTED,
-                            #           _push_if_hosted wrapper on write endpoints,
-                            #           ROLLOVER_TOKEN bearer auth on /api/rollover
-DB_VER           = "6.0"    # Phase 10: _upsert_match enriches title with teams
+ROUTES_VER       = "1.7.0"  # Phase 12 (Passcodes): /api/register, /api/login, /api/whoami,
+                            #           /api/passcode/change, /api/admin/passcode/reset,
+                            #           /api/admin/members. Bearer-token auth for the new
+                            #           passcode + admin surface only; rest of API unchanged.
+DB_VER           = "6.1"    # Phase 12: members + sessions tables (passcode hash + bearer tokens)
 SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
-INIT_DB_VER      = "1.0.0"  # (unchanged)
+INIT_DB_VER      = "1.1.0"  # Phase 12: _auto_seed_members_if_needed backfill (1234 + must_change=1)
 TASKS_VER        = "2.0.0"  # Phase 9: APScheduler daily 23:55 IST + run_discovery_and_scrape
 SEED_MATCHES_VER = "4.1"    # Phase 10: populate teams_json from title; always refresh title in DB
 
@@ -88,4 +89,15 @@ VERSION_MAP = {
                     "at Mon 14:00 UTC. daily_sync.yml gains pull-rebase + retry to "
                     "coexist with host writes. render.yaml blueprint provided. "
                     "Local mode (HOSTED unset) unchanged.",
+    "2.5.0":        "Phase 12 — Passcodes & Admin: 4-digit passcode gates login and "
+                    "register. New `members` table (passcode_hash, must_change, is_admin) "
+                    "and `sessions` table (bearer token, 30-day TTL). Existing users "
+                    "backfilled with passcode '1234' + must_change=1 at first boot. "
+                    "Sai seeded as the sole admin. Six new endpoints: /api/register, "
+                    "/api/login, /api/whoami, /api/passcode/change, "
+                    "/api/admin/passcode/reset, /api/admin/members. Admin tab and "
+                    "Member Passcodes card visible only to admins. Reset Passcode "
+                    "header button (no current-passcode verification by design — see "
+                    "routes.py). All writes pass through _push_if_hosted so the new "
+                    "tables are committed to git in HOSTED mode like every other write.",
 }
