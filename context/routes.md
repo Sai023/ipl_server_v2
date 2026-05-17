@@ -305,6 +305,24 @@ JSON is missing, so when scraper.py runs, only that one match
 re-scrapes from Cricbuzz. Avoids the ~90s cost of a full rescrape
 when the operator only changed one match's URL.
 
+**Critical detail (post-launch fix):** the deletion must be **staged**
+for the commit, not just removed from the local filesystem. The
+handler passes `extra_paths=["data/matches/match_NN.json"]` to
+`_push_if_hosted`, which forwards them to `cloud_sync.commit_and_push`
+where `git add -Af` picks up the deletion (the `-A` is what makes
+git stage removals, not just adds/mods).
+
+**The bug this guards against:** without staging the deletion, the
+local `jp.unlink()` is invisible to git, the commit only carries
+the fantasy.db URL change, the workflow's checkout still has the
+stale JSON on disk, scraper.py's line-615 cache short-circuit
+triggers, and the "scrape" is a no-op. Verified end-to-end on
+2026-05-17: M37 Save & Scrape now produces a `ui:admin-url:ipl26_m37=…`
+commit whose "Files changed" view shows BOTH `data/fantasy.db`
+(modified) AND `data/matches/match_37.json` (deleted), and the
+follow-up `data: scrape …` commit shows the JSON re-added with
+fresh content.
+
 Also: in HOSTED mode the handler does NOT call
 `tasks.start_bg_scrape` (no Cricbuzz egress). The work goes to the
 workflow via `cloud_sync.dispatch_workflow("daily_sync.yml")`. The

@@ -124,8 +124,8 @@ is also kept as a legacy helper but production code uses `_authed_url`.
 The push sequence inside `commit_and_push`:
 
 ```
-git add -f <paths>
-git diff --cached --name-only  # bail if nothing staged
+git add -Af <paths>                          # -A: stage deletions too; -f: force gitignored
+git diff --cached --name-only                # bail if nothing staged
 git commit -m "<message>"
 
 for attempt in (1, 2, 3):
@@ -138,6 +138,19 @@ for attempt in (1, 2, 3):
     # else: race with another writer; loop re-fetches and retries
 return (False, "<step> failed after 3 tries: <sanitized stderr>")
 ```
+
+**The `-A` is critical** (post-launch fix). With just `-f`, deletions
+of files inside `paths` are NOT staged — only adds and modifications.
+This broke `api_update_match_url`: the handler deleted the cached
+`data/matches/match_NN.json` locally but the deletion never reached
+git, so the workflow's checkout still had the stale JSON and
+scraper.py's line-615 cache short-circuit defeated the whole point
+of Save & Scrape. `git add -Af` stages adds, mods, AND deletions
+inside each listed path, fixing the per-match re-scrape path.
+
+Callers can include adjacent files via `_push_if_hosted`'s
+`extra_paths` parameter (see [routes.md](routes.md) §D for the
+production use case).
 
 The `pull --rebase` shortcut was rejected because git's internal
 fetch inside pull does NOT always inherit `-c http.extraHeader` —
