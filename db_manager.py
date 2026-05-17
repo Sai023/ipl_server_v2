@@ -428,6 +428,33 @@ class DatabaseManager:
         with self._write() as con:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, value))
 
+    def checkpoint(self) -> None:
+        """
+        Flush WAL frames into the main `fantasy.db` file. Required before
+        any `git add data/fantasy.db` in HOSTED mode — without it, fresh
+        writes can sit in `fantasy.db-wal` and git captures a pre-write
+        snapshot, causing `_push_if_hosted` to return "nothing to commit"
+        even when there's a real change to push.
+
+        Real-world bug this fixes: passcode changes and save-next-week
+        writes silently failed to push because the WAL hadn't been
+        flushed by the time `git add` ran. Moe's change happened to
+        coincide with an opportunistic flush and landed; Sai's didn't
+        and was lost on the next Render redeploy.
+
+        `TRUNCATE` mode resets the WAL file size to zero after the
+        checkpoint, keeping the working directory tidy. Best-effort —
+        a checkpoint failure is logged but doesn't raise (the worst
+        case is a stale push, not data loss; the next write triggers
+        another checkpoint attempt).
+        """
+        try:
+            # Use the thread-local connection; PRAGMA outside a transaction
+            # checkpoints all committed pages without acquiring a new lock.
+            self._connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass  # best-effort, never raise
+
     # ── State ─────────────────────────────────────────────────────────────────
 
     def get_state(self) -> dict:

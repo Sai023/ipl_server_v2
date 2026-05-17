@@ -64,6 +64,12 @@ def _push_if_hosted(reason: str) -> None:
     if not _IS_HOSTED:
         return
     try:
+        # CRITICAL — flush WAL before git add. Without this, the just-committed
+        # write is sitting in fantasy.db-wal and git captures a pre-write
+        # snapshot, returning "nothing to commit" → silent push failure → lost
+        # data on next Render redeploy. See db.checkpoint() docstring for the
+        # passcode-change-lost-on-redeploy bug this resolves.
+        db.checkpoint()
         ok, msg = cloud_sync.commit_and_push(
             paths=["data/fantasy.db"],
             message=f"ui: {reason}",
@@ -72,6 +78,8 @@ def _push_if_hosted(reason: str) -> None:
             _log(f"git push after '{reason}' failed: {msg}. "
                  f"Local DB has the change; will catch up on next write.",
                  "warn")
+        else:
+            _log(f"git push after '{reason}': {msg}")
     except Exception as e:
         _log(f"_push_if_hosted({reason}) crashed: {e}", "error")
 
@@ -160,6 +168,10 @@ def api_test_push():
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         db.set_meta("_last_test_push", now_iso)
+        # Same WAL-flush as _push_if_hosted — without this, the meta-table
+        # write sits in fantasy.db-wal and the test push reports
+        # "nothing to commit" while actually doing nothing useful.
+        db.checkpoint()
         ok, msg = cloud_sync.commit_and_push(
             paths=["data/fantasy.db"],
             message=f"diag: test-push at {now_iso}",
