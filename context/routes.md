@@ -11,8 +11,9 @@
 
 `routes.py` is the **whole HTTP API** of the league — every URL the
 browser, the cloud cron, or an operator-side script can hit.
-It's a Flask Blueprint registered onto the app at startup, with **29
-route handlers** organised into 9 named groups.
+It's a Flask Blueprint registered onto the app at startup, with **35
+route handlers** organised into 10 named groups (Phase 12 added the
+six AUTH endpoints — see §1.5 below).
 
 Every handler follows the same shape:
 1. Authenticate (read `?user=` or `<n>` from the URL — there is no
@@ -75,6 +76,12 @@ Phase 7.
 | 1 | System | `/api/ping` | GET | Liveness check + `public_url` + budget constants. |
 | 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint. |
 | 1 | System | `/api/current-week` | GET | Just the integer week number. |
+| 1.5 | Auth | `/api/register` | POST | Phase 12 — create a new member with display name + 4-digit passcode. Returns `{ok, name, token, must_change:false, is_admin:false}`. |
+| 1.5 | Auth | `/api/login` | POST | Phase 12 — verify passcode, issue 30-day bearer token. Returns `{ok, name, token, must_change, is_admin}`. Generic 401 hides unknown-user vs wrong-passcode. |
+| 1.5 | Auth | `/api/whoami` | GET | Phase 12 — validate the bearer token. Used by the bootstrap to decide whether to auto-login or drop to the login card. |
+| 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
+| 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
+| 1.5 | Auth | `/api/admin/members` | GET | Phase 12 — admin-only. Lists every member with `must_change` + `is_admin` flags for the Member Passcodes card. |
 | 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). |
 | 2 | State | `/api/state` | POST | **DEAD** — see Dead Code. Was a generic "save anything" endpoint. |
 | 3 | Players | `/api/players` | GET | All players sorted by `season_pts DESC`. |
@@ -109,7 +116,11 @@ Phase 7.
 
 ### 1. Display names are the identity
 - Capped at **30 characters** everywhere (`if not n or len(n)>30: return 400`).
-- No authentication — anyone who knows a name can act as them.
+- **Phase 12 update:** login + passcode endpoints now require the 4-digit
+  passcode and issue a bearer token. The token gates ONLY `/api/passcode/*`
+  and `/api/admin/*`. Every other endpoint (`/api/save-next-week`,
+  `/api/member`, `/api/rollover`, `/api/update-match-url`, etc.) still trusts
+  `?user=<n>` exactly as before — see Open Question 1.
 
 ### 2. Writes are rate-limited
 Every `POST` / `PUT` handler starts with `_check_rate(_write_limiter)`
@@ -151,6 +162,35 @@ both audit results to `data/snapshot_<ts>.json`. The intended use:
 take a snapshot **before** a risky change, then take another after,
 and diff them. Not for full DB backup — see Open Questions.
 
+### 8. Passcode change requires no current passcode (Phase 12)
+Both flows that mutate a member's passcode — the header **Reset Passcode**
+button (self-service) and the auto-opened **Forced Reset** modal (after an
+admin reset) — call `/api/passcode/change` with only `{new}` in the body
+plus the bearer token in the header. The endpoint never asks the user to
+type their old passcode.
+
+This is **intentional**, not an oversight:
+- Bearer token already proves the user is authenticated.
+- Forced-reset users *cannot* type their current passcode because the admin
+  just rewrote the hash without telling them.
+- Friction without security gain hurts adoption in a casual league.
+
+The trade-off: someone with physical access to a logged-in browser can
+change the passcode and lock the user out. Documented in
+[user_capabilities.md](user_capabilities.md) §1.5.
+
+### 9. Admin gate is DB-driven, not hardcoded (Phase 12)
+`_require_admin()` reads `members.is_admin` for the token's user. `Sai` is
+seeded as the sole admin on first boot ([init_db.md](init_db.md)
+§_auto_seed_members_if_needed), but adding a second admin later is a
+single `UPDATE members SET is_admin=1 WHERE username=...` — no code
+change, no redeploy.
+
+### 10. Sessions are opportunistically cleaned (Phase 12)
+Every call to `db.get_session(token)` runs
+`DELETE FROM sessions WHERE expires_at < now` first, then SELECTs the
+token. No cron job needed; the table self-prunes on read.
+
 ## HOSTED mode (Phase 11) — behaviour deltas
 
 `_IS_HOSTED` is read once at module scope (line ~47) from the
@@ -177,6 +217,9 @@ Wrapped endpoints (in route order):
 | `POST /api/recalculate-points` | `recalc:rows=<n>` |
 | `POST /api/rollover` | `rollover:w<N>` |
 | `POST /api/update-match-url` | `admin-url:<match_id>=<cb_id>` |
+| `POST /api/register` | `register:<user>` (Phase 12) |
+| `POST /api/passcode/change` | `passcode-change:<user>` (Phase 12) |
+| `POST /api/admin/passcode/reset` | `admin-passcode-reset:<target>` (Phase 12) |
 
 Failures are logged at WARN level and the response still returns 200
 — the local DB has the change and the next successful write catches
@@ -277,8 +320,11 @@ Direct mapping from [user_capabilities.md](user_capabilities.md):
 
 | Capability | Endpoint(s) |
 |------------|-------------|
-| §1.1 Pick / Register | `/api/state`, `PUT /api/member/<n>` |
-| §1.2 Switch user | (frontend-only) |
+| §1.1 Register (Phase 12) | `POST /api/register` |
+| §1.2 Login (Phase 12) | `POST /api/login`, `GET /api/whoami` (bootstrap auto-login) |
+| §1.3 Reset Passcode (Phase 12) | `POST /api/passcode/change` |
+| §1.4 Switch user | (frontend-only — clears `localStorage`) |
+| §8.6 Member Passcodes (Admin, Phase 12) | `GET /api/admin/members`, `POST /api/admin/passcode/reset` |
 | §3.1 Match Centre hub | `/api/match-centre` |
 | §3.2 Box Score | `/api/match-details/<id>` |
 | §4.1 This Week locked XI | `/api/state`, `/api/history/<n>` |
@@ -311,11 +357,15 @@ suggest the API client was speculatively over-built.
 
 ## Open Questions
 
-1. **No authentication.** Anyone with a member name can call any
-   endpoint as that member — there's no token, no session cookie, no
-   IP allowlist. This is documented behaviour (it's a private
-   trust-based league), but worth confirming the deployment never
-   exposes the tunnel URL beyond a private group.
+1. **Partial authentication after Phase 12.** Login and passcode endpoints
+   now require a bearer token, but every other write endpoint
+   (`/api/save-next-week`, `PUT /api/member`, `/api/rollover`,
+   `/api/update-match-url`, `/api/recalculate-points`, `/api/clean-scores`)
+   still trusts `?user=<n>`. A user who knows another member's name can
+   still act as them on those endpoints. To close the gap, extend
+   `_require_token()` to every `_check_rate(_write_limiter)` site and check
+   `sess["username"] == n`. The 4-digit passcode would then be doing actual
+   authentication, not just login-screen friction.
 2. **The IplApi client is over-broad.** Five endpoints (E2–E6) are
    defined on the client *and* the server but called nowhere. Worth
    either trimming the client or restoring a use for the endpoints.

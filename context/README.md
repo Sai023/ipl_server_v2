@@ -28,6 +28,7 @@ that's the live workbook with every item's status (`fixed` / `kept` /
 | E | doc-only | Docstring drift in `logic/__init__.py`, `rollover_engine.py`, `mc_hub.js`; `Seed_Matches.py --force` flag removed; README "Daily Sync" section + troubleshooting refresh. |
 | **Cleanup total** | **~−1,300 lines** | No behavioural regressions; live API surface preserved; **`Sai W1-W2` audit total computed via refactored path = stored value, bit-identical**. |
 | **Phase 11** | **+~500 lines, new infra** | HOSTED mode for Render/Codespaces deploy: env-aware boot, `cloud_sync.py` (git pull / push / workflow_dispatch), per-write `_push_if_hosted`, `monday_rollover.yml` cron, `daily_sync.yml` `force_full_rescrape` + pull-rebase retry, `render.yaml` blueprint. Local mode unchanged. |
+| **Phase 12** | **+~650 lines** | Passcode login + admin role. New `members` + `sessions` tables, six AUTH endpoints (`/api/register`, `/api/login`, `/api/whoami`, `/api/passcode/change`, `/api/admin/passcode/reset`, `/api/admin/members`), idempotent backfill seeds `1234`+`must_change=1` for existing users and Sai as sole admin. Bearer-token auth gates only the new passcode + admin surface — rest of API stays trust-based per project's existing stance. Admin tab + Member Passcodes card visible only to admins; "Reset Passcode" button in every user's header. All writes pass through `_push_if_hosted` so new tables travel with the HOSTED git pipeline (no `render.yaml` change). |
 
 ### What's still open
 

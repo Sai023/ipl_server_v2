@@ -11,22 +11,30 @@
 
 `ipl_glue.js` is the **API client + lifecycle controller** for the
 browser-side app. Loaded after the inline script in
-[index.html:822](../templates/index.html:822), it does six things:
+[index.html:822](../templates/index.html:822), it does seven things:
 
 1. **Defines `window.IplApi`** — the shim that wraps every `/api/*`
    call (`getState`, `getLeaderboard`, `saveNextWeek`, `rollover`,
-   etc.) into a Promise-returning method.
-2. **Polls `/api/poll` every 60 seconds**, ETag-aware. When the
+   plus the Phase 12 AUTH methods — see below) into a
+   Promise-returning method.
+2. **Defines `window.IplAuth` (Phase 12)** — bearer-token store backed
+   by `localStorage["ipl_session_token"]`. Three methods: `getToken()`,
+   `setToken(t)`, `clearToken()`. The token is auto-attached as
+   `Authorization: Bearer <t>` on any `_fetchJson` call whose URL
+   starts with `/api/passcode`, `/api/admin`, or `/api/whoami`. A 401
+   from any of those endpoints auto-calls `clearToken()` so the next
+   `_bootstrap()` drops to the login card.
+3. **Polls `/api/poll` every 60 seconds**, ETag-aware. When the
    server's ETag changes, it re-fetches state + leaderboard and
    broadcasts `ipl:state-updated` / `ipl:leaderboard-updated` events.
-3. **Schedules the auto-rollover** — a single `setTimeout` set for the
+4. **Schedules the auto-rollover** — a single `setTimeout` set for the
    next Monday at 14:00 UTC. When it fires, calls `IplApi.rollover(false)`.
-4. **Injects CSS** for the maintenance overlay and the Match Centre
+5. **Injects CSS** for the maintenance overlay and the Match Centre
    look-and-feel.
-5. **Provides the "Safe Boot" timeout** — if `/api/state` hasn't
+6. **Provides the "Safe Boot" timeout** — if `/api/state` hasn't
    responded within 5 seconds, dismiss the loading spinner and show
    the error banner so the user isn't stuck behind a spinner forever.
-6. **Overrides several inline renderers** (`_buildHistoryTab`,
+7. **Overrides several inline renderers** (`_buildHistoryTab`,
    `_buildLeaderboardCard`, `_buildPointsTab`, `_buildMatchesTab`)
    defined in `index.html`. This is the "v7.4 UI OVERRIDES" section at
    line 352. The override pattern works because the inline script runs
@@ -62,8 +70,8 @@ The file's docstring still claims version **v7.8** and mentions Phase
   - `/api/*` HTTP responses.
   - Browser `localStorage`, `document.visibilityState`, DOM events.
 - **Outputs:**
-  - `window.IplApi`, `window.IplPolling`, `window.IplConfig`,
-    `window.IplRollover`, `window.normaliseLeaderboard`.
+  - `window.IplApi`, `window.IplAuth` (Phase 12), `window.IplPolling`,
+    `window.IplConfig`, `window.IplRollover`, `window.normaliseLeaderboard`.
   - Custom events on `window`: `ipl:ready`, `ipl:state-updated`,
     `ipl:leaderboard-updated`, `ipl:players-updated`,
     `ipl:rollover-triggered`, `ipl:week-changed`, `ipl:season-complete`,
@@ -86,6 +94,29 @@ The file's docstring still claims version **v7.8** and mentions Phase
 - `_executeRollover()` calls `IplApi.rollover(false)`. The server's
   `already_rolled` guard ensures multiple browsers firing
   simultaneously produce exactly one rollover.
+
+### 3. Bearer-token attach is URL-prefix-scoped (Phase 12)
+
+`_fetchJson` inspects the URL and only attaches `Authorization: Bearer
+<token>` when the path starts with `/api/passcode`, `/api/admin`, or
+`/api/whoami`. This keeps the token off **every other** request —
+including reads (`/api/state`, `/api/leaderboard`) and writes
+(`/api/save-next-week`, etc.) — matching the server's deliberate scope
+in [routes.md](routes.md) Rule #1. If the token surface is ever widened
+to gate writes (Open Question 1 in routes.md), this is the one place to
+update on the client.
+
+Phase 12 also adds six methods to `IplApi`:
+
+| Method | Endpoint | Stores token? |
+|--------|----------|----------------|
+| `register(name, passcode)` | `POST /api/register` | Yes, on success |
+| `login(name, passcode)` | `POST /api/login` | Yes, on success |
+| `whoami()` | `GET /api/whoami` | — (validates an existing one) |
+| `changePasscode(newPasscode)` | `POST /api/passcode/change` | Yes (token rotates) |
+| `adminListMembers()` | `GET /api/admin/members` | — |
+| `adminResetPasscode(targetUsername)` | `POST /api/admin/passcode/reset` | — |
+| `logoutClearToken()` | — (local-only) | Clears |
 
 ### 3. ETag invalidation triggers
 - On `ipl:saved` → `_lastStateEtag = null`.

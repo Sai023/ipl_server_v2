@@ -50,6 +50,11 @@ and `server.py`. It must never import from those upper layers.
   - **Paths:** `BASE_DIR`, `DATA_DIR`, `STATIC_DIR`
   - **Helpers:** `_db_con`, `_log`, `_jloads`, `_check_rate`
   - **Player resolution:** `resolve_player_id`, `resolve_id_list`, `_ID_RE`
+  - **Passcode + sessions (Phase 12):** `PASSCODE_RE` (4-digit regex),
+    `hash_passcode(passcode, username)`, `verify_passcode(...)` (constant-time
+    via `secrets.compare_digest`), `new_session_token()` (32-byte hex from
+    `secrets.token_hex`), `get_bearer_token()` (parses `Authorization:
+    Bearer <token>` from the current Flask request).
   - **Mutable global:** `CURRENT_PUBLIC_URL` — set by `server.py` when a
     tunnel comes up, read by `routes.py` for the `/api/ping` response.
 
@@ -85,6 +90,14 @@ and `server.py`. It must never import from those upper layers.
    `Cache-Control: no-store` on `/api/*` paths.
 9. **404 falls back to the SPA.** Unknown paths re-render `index.html`, so
    client-side routes work on hard reload.
+10. **Passcode hashing is salted-but-cheap (Phase 12).** `hash_passcode`
+    returns `sha256("<username>:<passcode>")`. Username acts as the salt so
+    two users picking `1234` produce different hashes. SHA-256 (not bcrypt)
+    is deliberate — for a 4-digit space (10,000 combos) a slow hash buys
+    almost nothing against an offline brute-force, and SHA-256 is fast
+    enough that we don't have to think about login latency. See
+    [user_capabilities.md](user_capabilities.md) §1.5 for the honest
+    threat model.
 
 ## Called by / Calls into
 
@@ -97,12 +110,17 @@ and `server.py`. It must never import from those upper layers.
 
 Cross-references to [user_capabilities.md](user_capabilities.md):
 
-- **§1.1 Pick / Register** — `resolve_id_list` auto-corrects typed names into
-  player IDs when a draft is saved.
-- **§5.1 Build a draft XI** — same resolver normalises names from the picker.
+- **§1.1 Register / §1.2 Login / §1.3 Reset Passcode (Phase 12)** —
+  `PASSCODE_RE`, `hash_passcode`, `verify_passcode`, `new_session_token`,
+  and `get_bearer_token` are the primitives every `/api/passcode/*` and
+  `/api/admin/*` handler in `routes.py` is built on.
+- **§5.1 Build a draft XI** — `resolve_id_list` normalises names from
+  the picker.
+- **§5.3 Save the draft** — `resolve_id_list` auto-corrects typed names
+  into player IDs when a draft is saved.
 - **§9.1 Refresh / §10.2 Auto-rollover** — write endpoints behind these
   features are gated by `_write_limiter` (30/min/IP).
-- **§1.2 Switch user** — 404 fallback re-renders `index.html` so the SPA
+- **§1.4 Switch user** — 404 fallback re-renders `index.html` so the SPA
   routes still work on hard reload.
 - **All tabs** — every page request gets the `_security_headers` middleware.
 
@@ -128,6 +146,7 @@ Cross-references to [user_capabilities.md](user_capabilities.md):
 | `CURRENT_PUBLIC_URL` | `server.py` writes, `routes.py` reads | **Live.** |
 | Flask error handlers (`_handle_integrity`, `_handle_operational`, `_handle_500`, `_handle_404`) | Wired via `@app.errorhandler` decorators | **Live.** |
 | `_security_headers` (after_request) | Wired via `@app.after_request` | **Live.** |
+| `PASSCODE_RE`, `hash_passcode`, `verify_passcode`, `new_session_token`, `get_bearer_token` (Phase 12) | `routes.py` AUTH group | **Live.** |
 
 **No outright dead code.** One real duplication concern below.
 

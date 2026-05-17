@@ -13,23 +13,63 @@ backend context file should map its work back to one of these capabilities.
 
 ## 1. Identity
 
-### 1.1 Pick a profile to play as
-- **What:** "Who are you?" card on first load. The user clicks one of the
-  existing member chips, or types a new display name and clicks **Join League**.
-- **How it's remembered:** name is stored in `localStorage` under key
-  `ipl_username` ([index.html:53-56](../templates/index.html:53)). On reload,
-  the saved name is automatically logged back in *if* it still exists in the
-  member list returned by `/api/state`.
-- **What backend it touches:**
-  - Existing member → no write. Just sets `_username`.
-  - New member → `IplApi.saveMember(name, …)` → `PUT /api/member/<n>`
-    ([index.html:478](../templates/index.html:478)).
+> **Phase 12 — Passcodes.** Identity now requires a 4-digit passcode. The
+> "trust-based" stance from earlier phases is replaced by a friction barrier:
+> a sibling can't impersonate another member by typing their name. The barrier
+> stops short of being real auth — see §1.5 for the honest threat model.
 
-### 1.2 Switch user / log out
-- **What:** "Switch user" button in the header bar
-  ([index.html:743](../templates/index.html:743)).
-- **Effect:** clears `_username`, drops the cached `localStorage` entry, and
-  re-renders the login screen.
+### 1.1 Register a new profile
+- **What:** "Who are you?" card on first load shows a **Register here** link
+  that expands into two fields: display name + 4-digit passcode.
+- **Backend:** `IplApi.register(name, passcode)` →
+  `POST /api/register` returns `{token, must_change:false, is_admin:false}`.
+  Server creates the `members` row + an empty `user_selections` row.
+- **`Sai` is the only admin** — seeded by [init_db.py](../init_db.py) on first
+  boot. New registrations get `is_admin=0`.
+
+### 1.2 Log in as an existing member
+- **What:** Click a member chip → 4-box passcode prompt slides up; auto-submits
+  on the 4th digit.
+- **Backend:** `IplApi.login(name, passcode)` → `POST /api/login` returns
+  `{token, must_change, is_admin}` on success, 401 with a generic "wrong name
+  or passcode" otherwise (intentionally doesn't distinguish unknown-user from
+  wrong-passcode).
+- **How sessions persist:** the token is stored in `localStorage` under
+  `ipl_session_token`. Together with `ipl_username`, the bootstrap calls
+  `/api/whoami` to validate; valid → auto-login, invalid → token cleared and
+  login card shown. 30-day TTL on the server side.
+
+### 1.3 Reset your passcode (header button)
+- **What:** **🔑 Reset Passcode** button next to ⟳ Refresh, visible whenever
+  a user is logged in.
+- **Effect:** opens a modal that asks for **new + confirm** (no current
+  passcode — the user is already authenticated via bearer token, so requiring
+  it would be friction without security gain). On save, all of that user's
+  other sessions are invalidated and a fresh token is issued.
+- **Forced variant:** when `must_change=1` (after an admin reset), the same
+  modal opens automatically right after login, has no × close button, and
+  blocks the rest of the UI until a new passcode is set.
+
+### 1.4 Switch user / log out
+- **What:** "Switch user" button in the header bar.
+- **Effect:** clears `_username`, drops `ipl_session_token` from
+  `localStorage`, calls `IplApi.logoutClearToken()`, and re-renders the
+  login screen. The bearer token stays valid server-side until the next
+  passcode change for that user — log-out is client-only.
+
+### 1.5 Honest threat model
+- 4-digit passcode = **friction, not security**. 10,000 combinations is
+  trivially brute-forceable, and only `/api/passcode/*` + `/api/admin/*`
+  require the token — *every other* write endpoint (`/api/save-next-week`,
+  `PUT /api/member`, `/api/rollover`, `/api/update-match-url`) still trusts
+  `?user=<n>` exactly as before. A determined attacker who can hand-craft an
+  HTTP request can still act as anyone.
+- Hashed passcodes (sha256 of `username:passcode`) are committed to git in
+  HOSTED mode along with `fantasy.db` — anyone with repo read access can
+  brute-force them offline.
+- For a private friends league this is the intended trade-off.
+  Tracked in [routes.md](routes.md) Open Question 1 as the follow-up if real
+  auth ever matters.
 
 ---
 
@@ -45,10 +85,14 @@ The full tab list rendered for a logged-in user
 | 3 | `next` | Next Week ✏️ | Editable draft for next week — picker, budget tracker, swap modal, Save Draft button. |
 | 4 | `leaderboard` | Leaderboard | Ranking table with rank, name, total pts, MVP per user. |
 | 5 | `members` | Members | All members listed with their current XIs side-by-side. |
-| 6 | `admin` | Admin ⚙️ | Per-match Cricbuzz scorecard URL editor with duplicate-URL detection. |
+| 6 | `admin` | Admin ⚙️ | **Admin-only** (Phase 12) — visible only to members with `is_admin=1`. Hosts the Member Passcodes card (§8.6), Match URL editor, and Dev Tools. |
 
 There is **no Points tab** in the rendered tab list. See the Dead Capabilities
 section at the bottom of this document.
+
+The Admin tab is gated client-side on `_isAdmin` (set from
+`/api/login`/`/api/whoami`) AND server-side on `members.is_admin=1` for every
+`/api/admin/*` endpoint — defence-in-depth, neither side trusts the other.
 
 ---
 
@@ -178,11 +222,31 @@ section at the bottom of this document.
   fire. Previously sat under §4 (This Week tab) — moved to Admin so it isn't
   exposed to everyday members.
 
+### 8.6 Member Passcodes (Phase 12)
+- Card titled "🔐 Member Passcodes" sits at the **top** of the Admin tab.
+- Lists every registered member with:
+  - **Status pill:** ⚠ **Default (1234)** if `must_change=1`, 🔒 **Custom** otherwise.
+  - **ADMIN** badge if `is_admin=1`.
+  - **Reset to 1234** button (disabled on the admin's own row — they self-reset
+    via the header button in §1.3).
+- Clicking Reset → `confirm("Reset passcode for X back to 1234?")` →
+  `IplApi.adminResetPasscode(name)` → `POST /api/admin/passcode/reset`. Server
+  rewrites the hash to `sha256("X:1234")`, sets `must_change=1`, and **deletes
+  every session for that user** so they're forced through §1.3's forced-reset
+  flow on their next page load.
+- The card auto-refreshes after every reset.
+
 ---
 
 ## 9. Header Bar (shared on every tab)
 
-### 9.1 Refresh button
+Buttons in left-to-right order: **🔑 Reset Passcode** · **⟳ Refresh** · **Switch user**.
+Admins also see an inline **ADMIN** chip next to their display name.
+
+### 9.1 Reset Passcode button (Phase 12)
+- See §1.3 for the modal flow. Always visible to a logged-in user.
+
+### 9.2 Refresh button
 - `_refreshData()` ([index.html:259-303](../templates/index.html:259)) does
   three things in sequence:
   1. `POST /api/sync-now` → triggers a background **discovery + scrape**.
@@ -275,7 +339,10 @@ by section number. Indicative wiring:
 
 | Capability | Routes (Phase 5) | DAO (Phase 3) | Logic (Phase 2) | Ingestion (Phase 4) |
 |------------|------------------|----------------|------------------|----------------------|
-| §1.1 Pick / Register | `/api/state`, `PUT /api/member/<n>` | `upsert_member`, `get_state` | — | `init_db` (auto-seed members) |
+| §1.1 Register | `POST /api/register` | `upsert_member`, `upsert_member_auth`, `create_session` | `hash_passcode`, `new_session_token` (base.py) | — |
+| §1.2 Login | `POST /api/login` | `get_member_auth`, `create_session` | `verify_passcode` (base.py) | — |
+| §1.3 Reset Passcode | `POST /api/passcode/change` | `set_passcode`, `delete_sessions_for_user`, `create_session` | `hash_passcode`, `_require_token` | — |
+| §1.4 Switch user | (frontend-only — clears localStorage) | — | — | — |
 | §3 Match Centre | `/api/match-centre`, `/api/match-details/<id>` | `get_match_centre`, `get_match_details` | — | scraper (fills `match_scores`) |
 | §4 This Week | `/api/state`, `/api/history/<n>` | `get_state`, `get_history` | `rollover_engine` (active-team pick) | — |
 | §4.2 Scoring Rules popup | — (static client-side) | — | mirrors `scoring_engine.calc_pts` | — |
@@ -284,8 +351,10 @@ by section number. Indicative wiring:
 | §6 Leaderboard | `/api/leaderboard` | `get_leaderboard` | — | — |
 | §7 Members | `/api/state` | `get_state` | — | — |
 | §8 Admin | `/api/matches-status`, `/api/update-match-url` | `get_matches`, `upsert_match` | — | `tasks.start_bg_scrape` |
+| §8.6 Member Passcodes (Admin) | `GET /api/admin/members`, `POST /api/admin/passcode/reset` | `list_members_admin_view`, `set_passcode`, `delete_sessions_for_user` | `_require_admin` | — |
 | §9.1 Refresh | `/api/sync-now` | — | `cricbuzz_discovery` (find new IDs) | `tasks`, `scraper` |
 | §10.1 Polling | `/api/poll` | `get_state_etag` | — | — |
 | §10.2 Auto-rollover | `/api/rollover` | `roll_week` | `rollover_engine` | — |
+| (bootstrap auto-login) | `GET /api/whoami` | `get_session`, `get_member_auth` | `_require_token` | — |
 
 This table will be expanded and corrected per-file in the subsequent phases.

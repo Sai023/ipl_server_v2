@@ -10,7 +10,7 @@
 ## What it does (business view)
 
 `init_db.py` runs **once per server boot**, before the web app accepts
-its first request. Its job is to answer three questions in order:
+its first request. Its job is to answer four questions in order:
 
 1. **Are there any players in the roster?** If not, run
    `Seed_Players.py` to populate the 220-player IPL 2026 roster.
@@ -21,8 +21,13 @@ its first request. Its job is to answer three questions in order:
    and reinsert** those weeks — but **preserve any next-week draft a
    user has already saved** and any extra weeks past W4 the rollover
    has already produced.
+4. **(Phase 12)** **Does every member in `user_selections` have a
+   `members` auth row?** If `meta._members_backfill_done != 'v1'`, insert
+   a row for each unique `display_name` with
+   `passcode_hash = sha256("<name>:1234")`, `must_change=1`, and seed
+   `Sai` with `is_admin=1`. The flag prevents repeat backfills.
 
-If all three answers are "yes, we're fine", the file does nothing and
+If all four answers are "yes, we're fine", the file does nothing and
 the server boots in milliseconds.
 
 ## Where it sits in the flow
@@ -32,7 +37,8 @@ server.py __main__
    └── init_db.run_all_sync(db)             ← called once
          ├── _auto_seed_players_if_needed() ← spawns Seed_Players.py if empty
          ├── _auto_seed_if_needed()         ← spawns Seed_Matches.py if empty
-         └── _auto_seed_history_if_needed() ← compares _seed_version meta
+         ├── _auto_seed_history_if_needed() ← compares _seed_version meta
+         └── _auto_seed_members_if_needed() ← Phase 12: passcode backfill
 ```
 
 After this, `server.py` continues with `_rebuild_scores_and_points()`
@@ -92,6 +98,17 @@ suspiciously identical.
   it needs to read existing state, decide what to preserve, and write
   back — all under one transaction.
 
+### 5. Members backfill is one-shot, gated by a meta flag (Phase 12)
+`_auto_seed_members_if_needed` keys off `meta._members_backfill_done`.
+The first boot after the Phase 12 deploy sets it to `'v1'`; every
+subsequent boot exits early. The function also runs a defensive
+`UPDATE members SET is_admin=1 WHERE username='Sai' AND is_admin=0` on
+every boot so a manual DB edit can't accidentally orphan the league
+without an admin. The hash function (`sha256("<username>:<passcode>")`)
+is duplicated here rather than imported from `base.py` so init_db can
+run before `base.py` constructs the Flask app — keeping the dependency
+graph (`config → init_db → base`) acyclic at boot.
+
 ## Called by / Calls into
 
 - **Called by:**
@@ -116,6 +133,12 @@ From [user_capabilities.md](user_capabilities.md):
 - **§4 / §5 / §6** — by virtue of seeding W1-W4 history, the
   This Week / Next Week / Leaderboard tabs all have data on first boot
   rather than being empty.
+- **§1.2 Login / §8 Admin (Phase 12)** —
+  `_auto_seed_members_if_needed` ensures every existing member has a
+  passcode (`1234` + `must_change=1`) so they can log in immediately
+  after the Phase 12 deploy, and seeds `Sai` as the sole admin so the
+  Admin tab + `/api/admin/*` endpoints have at least one authorised
+  user.
 
 ## Dead Code Audit
 

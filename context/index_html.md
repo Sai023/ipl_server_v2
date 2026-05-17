@@ -78,7 +78,7 @@ this is the authoritative count, not SKILL.md's "9 tabs" claim:
 | 3 | `next` | `_buildNextWeekCard` (includes `_buildPicker`; Scoring Rules button → `_showRulesModal`) | — |
 | 4 | `leaderboard` | `_buildLeaderboardCard` (overridden in ipl_glue.js) | — |
 | 5 | `members` | `_buildMembersCard` | — |
-| 6 | `admin` | `_buildAdminTab` + `_buildDevTools` (Simulate Monday rollover lives here) | — |
+| 6 | `admin` | `_buildAdminTab` (which now opens with `_buildAdminPasscodesCard`, Phase 12) + `_buildDevTools`. **Admin-only**: tab button rendered only when `_isAdmin === true`. | — |
 
 The Points, History, and Matches tab renderers exist in this file
 and/or `ipl_glue.js` but **no tab button references them and no
@@ -86,12 +86,16 @@ render-switch branch dispatches to them** — see Dead Code.
 
 ## Key business rules it enforces
 
-### 1. Identity is a localStorage string
-`localStorage["ipl_username"]` is set by `saveUsername(name)` on join
-and on click of an existing member chip. The `_bootstrap()` function
-auto-logs the user back in **only if** the saved name exists in the
-member list returned by `/api/state` ([index.html:783](../templates/index.html:783)).
-No authentication, no tokens.
+### 1. Identity is a localStorage string + a bearer token (Phase 12)
+- `localStorage["ipl_username"]` is set on register / successful login.
+- `localStorage["ipl_session_token"]` is set on `/api/register` /
+  `/api/login` / `/api/passcode/change` (managed by `IplAuth` in
+  `ipl_glue.js`). Token cleared on `logout()` or any 401 from
+  `/api/passcode/*` or `/api/admin/*`.
+- The bootstrap auto-logs the user back in **only if** both keys are
+  present **and** `/api/whoami` validates. Invalid token → both keys
+  cleared and login card shown. The pre-Phase-12 "trust the name in
+  state.members" path is gone.
 
 ### 2. Hard constraints in the draft picker
 - Squad size = `XI_SIZE` (= 11), hardcoded on line 17.
@@ -118,10 +122,12 @@ While running, polling is paused via `IplPolling.stop()` and restarted
 at the end. The 75 s figure is tuned to the typical discovery+scrape
 cycle (the docstring in `tasks.py` agrees).
 
-### 5. The Members tab lets you log in as anyone
-Clicking another member's pill calls `login(otherName)`
-([index.html:518, 525](../templates/index.html:518)). This is by
-design — it's a private trust-based league.
+### 5. The Members tab "log in as anyone" hole is closed (Phase 12)
+Clicking another member's pill / xi-name now calls `attemptLogin(otherName)`,
+which opens the passcode prompt modal — same flow as a login-card chip
+click. You can still see everyone's XIs (read-only `_buildMembersCard`),
+but you can't *become* them without their passcode. Pre-Phase 12 this was
+a one-click impersonation by design.
 
 ### 6. Captain ≠ Vice-Captain enforced on toggle
 `_nwSetCap(id)` and `_nwSetVc(id)` each clear the *other* role if the
@@ -135,6 +141,26 @@ mentioned in the README's frontend section.
 ### 8. 404 falls back to this file
 `base.py`'s 404 handler re-renders `index.html`, so a hard refresh of
 e.g. `/leaderboard` (if anyone ever bookmarked one) still loads the SPA.
+
+### 9. Passcode modals + admin gate (Phase 12)
+
+Three new modal builders + one global flag drive the entire auth UX:
+
+| Function | Purpose |
+|----------|---------|
+| `_showPasscodePromptModal(name)` | Slides up after a member chip click. Auto-submits on the 4th digit (`input` listener strips non-digits then calls `_submitPasscode`). On success → `_establishSession`; if `must_change` → immediately opens forced reset. |
+| `_showResetPasscodeModal(forced)` | Two flows in one modal: `forced=true` hides the × and the cancel button; `forced=false` keeps both. Calls `IplApi.changePasscode(new)` which rotates the token. |
+| `_buildAdminPasscodesCard()` | Top of the Admin tab. Renders each member as a row with a status pill (⚠ Default / 🔒 Custom) and a "Reset to 1234" button. Button disabled on the admin's own row (they use the header self-reset). |
+
+Globals added:
+- `_isAdmin` (default `false`) — set by `_establishSession` from
+  `/api/login` or `/api/whoami`. The Admin tab button is conditionally
+  pushed into `_tabs` only when this is true; if the user lands on
+  `_activeTab="admin"` without being admin (e.g. after a passcode-reset
+  forced demotion), the render switches them to `match-centre`.
+- `_mustChange` — drives the auto-open of the forced reset modal.
+- `_adminMembersList` — cache for `/api/admin/members`, invalidated and
+  reloaded after every admin reset.
 
 ## Called by / Calls into
 
@@ -152,8 +178,11 @@ Direct 1:1 with [user_capabilities.md](user_capabilities.md):
 
 | Capability | Renderer / handler |
 |------------|---------------------|
-| §1.1 Pick / Register | `_buildLoginCard` |
-| §1.2 Switch user | `logout()` + Switch user button |
+| §1.1 Register (Phase 12) | `_buildLoginCard` + `_doRegister` |
+| §1.2 Login (Phase 12) | `attemptLogin` → `_showPasscodePromptModal` → `_submitPasscode` → `_establishSession` |
+| §1.3 Reset Passcode (Phase 12) | header "🔑 Reset Passcode" → `_showResetPasscodeModal(false)`; forced variant auto-opened from `_establishSession` when `must_change=1` |
+| §1.4 Switch user | `logout()` + Switch user button (also clears `ipl_session_token`) |
+| §8.6 Member Passcodes (Admin, Phase 12) | `_buildAdminPasscodesCard` + `_adminResetPasscode` |
 | §3 Match Centre | delegated to `mc_hub.js` |
 | §4.1 This Week XI | `_buildThisWeekCard` + `_buildPitchView` |
 | §4.2 Scoring Rules popup | `_showRulesModal` / `_closeRulesModal` (button injected by `_buildThisWeekCard` and `_buildNextWeekCard`) |
