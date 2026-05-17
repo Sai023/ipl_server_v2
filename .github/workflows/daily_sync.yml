@@ -117,58 +117,77 @@ jobs:
           mkdir -p data/matches
           python scraper.py
 
-      - name: 7. Commit & push updated data (pull-rebase + retry)
-        # Phase 6: the hosted server may have pushed user writes (picks,
-        # rollover, admin) while we were scraping. Pull-rebase before push
-        # so we land on top of those rather than racing them. Retry once
-        # if push still fails — the host could push between our rebase and
-        # our push.
+      - name: 7. Commit & push updated data (re-apply on binary conflict)
+        # The hosted server pushes user writes (Save Draft, passcode change,
+        # rollover) to fantasy.db at unpredictable times. When that happens
+        # during the scrape window, the workflow's local fantasy.db and the
+        # remote diverge in *different* tables (host: members/sessions/
+        # user_selections; workflow: match_scores/player_match_points/
+        # season_pts). Git cannot binary-merge SQLite, so a plain rebase
+        # always fails with the conflict you see in screenshot 3 of the
+        # 2026-05-17 debugging session.
         #
-        # On a binary merge conflict (very rare; fantasy.db is binary, git
-        # cannot auto-merge), abort the rebase, log loud, and exit non-zero.
-        # The next scheduled run will produce a fresh scrape commit, and
-        # the host's writes are already preserved on remote.
+        # FIX (post-launch): if rebase fails, RESET to origin/main (taking
+        # the host's writes), then RE-RUN scraper.py on top. scraper.py is
+        # idempotent and uses data/matches/*.json as a cache, so the
+        # re-run is fast (~5s) when JSONs are already on disk. We back up
+        # the scrape's JSON output to /tmp before each attempt so the
+        # reset can restore them via `cp -n` (don't-overwrite-existing).
+        # End result: scrape data lands on top of host writes; both
+        # preserved.
         run: |
           set -e
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          git add -f data/schedule.json  2>/dev/null || true
-          git add -f data/matches/*.json 2>/dev/null || true
-          git add -f data/fantasy.db     2>/dev/null || true
+          # Back up scraped JSONs BEFORE pushing so we can re-apply on
+          # conflict. -n on later cp means "don't overwrite" — host's
+          # potentially-newer JSONs win.
+          mkdir -p /tmp/scrape-output
+          cp -r data/matches/*.json /tmp/scrape-output/ 2>/dev/null || true
+          cp data/schedule.json /tmp/scrape-output/ 2>/dev/null || true
 
-          # `git diff --cached --quiet` exits 0 when nothing is staged, 1 when
-          # something is. The previous version used `git status --porcelain
-          # --cached` which is invalid syntax (git status has no --cached
-          # flag — it exits 129 and `set -e` kills the workflow before commit,
-          # making the whole scrape look like a silent success that produced
-          # nothing). This is the right primitive.
-          if git diff --cached --quiet; then
-            echo "No data changes — nothing to commit."
-            exit 0
-          fi
+          push_attempt() {
+            git add -f data/schedule.json  2>/dev/null || true
+            git add -f data/matches/*.json 2>/dev/null || true
+            git add -f data/fantasy.db     2>/dev/null || true
 
-          git commit -m "data: scrape $(date -u +%Y-%m-%dT%H:%M)Z"
+            if git diff --cached --quiet; then
+              echo "Nothing to commit — host already has equivalent state."
+              return 0
+            fi
+
+            git commit -m "data: scrape $(date -u +%Y-%m-%dT%H:%M)Z"
+            git push origin main
+          }
 
           for attempt in 1 2 3; do
-            echo "Push attempt $attempt"
-            if git pull --rebase --autostash origin main; then
-              if git push origin main; then
-                echo "::notice::Scrape pushed on attempt $attempt"
-                exit 0
-              fi
-              echo "Push failed (probably non-fast-forward) — looping"
-            else
-              echo "::warning::Rebase failed (binary conflict on fantasy.db). Aborting."
-              git rebase --abort || true
-              if [ $attempt -eq 3 ]; then
-                echo "::error::Could not reconcile with remote after 3 tries."
-                echo "::error::Host writes during scrape window probably stomped this run."
-                echo "::error::Next scheduled run will re-scrape and try again."
-                exit 1
-              fi
+            echo "=== Push attempt $attempt ==="
+            if push_attempt; then
+              echo "::notice::Scrape pushed on attempt $attempt"
+              exit 0
             fi
-            sleep 5
+
+            echo "Push failed (host likely wrote during scrape window)."
+
+            if [ $attempt -eq 3 ]; then
+              echo "::error::Could not reconcile with remote after 3 tries."
+              echo "::error::Re-running this workflow manually usually resolves it."
+              exit 1
+            fi
+
+            echo "Re-applying scrape on top of latest origin/main:"
+            git fetch origin main --quiet
+            git reset --hard origin/main --quiet
+            # Restore our scraped JSONs (without overwriting host's newer
+            # ones, if any)
+            cp -n /tmp/scrape-output/*.json data/matches/ 2>/dev/null || true
+            cp -n /tmp/scrape-output/schedule.json data/ 2>/dev/null || true
+            # Re-sync the matches table from schedule.json (idempotent)
+            python Seed_Matches.py --no-live
+            # Re-run scraper — uses cached JSONs so it's fast (~5s)
+            python scraper.py
+            sleep 2
           done
           echo "::error::Push failed after 3 retries"
           exit 1
