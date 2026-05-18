@@ -46,7 +46,10 @@ and `server.py`. It must never import from those upper layers.
 - **Outputs (the workshop tools):**
   - **Singletons:** `app` (Flask), `db` (DatabaseManager), `_write_limiter`
   - **Constants for the rules of fantasy:** `BUDGET_TOTAL = 100.0`,
-    `XI_SIZE = 11`, `MAX_WEEKS = 8`
+    `XI_SIZE = 11`, **`MAX_WEEKS = 10`** (was 8 until 2026-05-18 —
+    bumped to match `data/schedule.json` which has 10 weeks across 74
+    matches; with 8, the W8→W9 Monday rollover silently no-op'd
+    because `api_rollover` short-circuits on `current_week >= MAX_WEEKS`)
   - **Paths:** `BASE_DIR`, `DATA_DIR`, `STATIC_DIR`
   - **Helpers:** `_db_con`, `_log`, `_jloads`, `_check_rate`
   - **Player resolution:** `resolve_player_id`, `resolve_id_list`, `_ID_RE`

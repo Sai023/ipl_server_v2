@@ -143,7 +143,7 @@ returns a `resolution_log` showing what changed. Same for `cap`/`vc`.
 `/api/rollover` always:
 1. Computes `lmd = last_monday_deadline(now, 14, 0)`.
 2. If `force=False` and `already_rolled(_last_rollover, lmd)` → no-op.
-3. If current_week ≥ MAX_WEEKS=8 → season complete, no-op.
+3. If current_week ≥ MAX_WEEKS (=10 since 2026-05-18; was 8) → season complete, no-op.
 4. Otherwise: per-user, pick the active team (`pick_active_team`),
    resolve IDs, insert a new week row, then update points.
 5. Set `_last_rollover` (unless `force=True`).

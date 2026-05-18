@@ -87,6 +87,13 @@ The file's docstring still claims version **v7.8** and mentions Phase
   changes — the typical poll is a tiny ETag-only call.
 - Polling pauses when `document.hidden` and resumes immediately on
   visibility return.
+- **On ETag change, refreshes three endpoints** (post-launch fix
+  2026-05-18): `/api/state`, `/api/leaderboard`, AND `/api/players`.
+  Players had originally been fetched only once at bootstrap, which
+  meant `ext_*` dynamic players added by the scraper after page-load
+  would appear in selections as their raw ID (e.g. `ext_10945` with
+  no name/team/role) until the user full-reloaded. Same fix mirrored
+  in `_doStateRefresh` (index.html) for the Refresh-button path.
 
 ### 2. The auto-rollover is local to each browser
 - `ROLLOVER_HOUR_UTC = 14`, `ROLLOVER_MIN_UTC = 0` (line 23-24).
