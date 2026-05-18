@@ -434,7 +434,10 @@ _buildLeaderboardCard = function (lb) {
     });
   });
   allWeeks.sort(function (a, b) { return a - b; });
-  h += '<table class="lb-table"><thead><tr><th>#</th><th>Name</th>';
+  // Wrap in lb-scroll so the table can swipe horizontally on narrow screens
+  // without squishing the per-week columns. Sticky #/Name columns + a
+  // right-edge fade hint at hidden content. See .lb-scroll in style.css.
+  h += '<div class="lb-scroll"><table class="lb-table lb-table-wide"><thead><tr><th>#</th><th>Name</th>';
   allWeeks.forEach(function (wk) { h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>'; });
   h += '<th style="text-align:right" title="Cap \xd72 + VC \xd71.5 applied">Total\u00A0\u2605</th><th>MVP</th></tr></thead><tbody>';
   lb.rankings.forEach(function (row) {
@@ -455,9 +458,10 @@ _buildLeaderboardCard = function (lb) {
     var mvpCell = mvpName ? mvpName + ' <span style="color:var(--teal);font-size:11px">(' + mvpPts + ')</span>' : '\u2014';
     h += '<td class="mvp">' + mvpCell + '</td></tr>';
   });
-  h += '</tbody></table>';
+  h += '</tbody></table></div>';
   h += '<p style="font-size:10px;color:var(--dim);margin:8px 0 0;text-align:right">'
-     + '\u2605 Total = sum of per-match pts with Cap(\xd72) and VC(\xd71.5) applied</p>';
+     + '\u2605 Total = sum of per-match pts with Cap(\xd72) and VC(\xd71.5) applied'
+     + ' &nbsp;\u00b7&nbsp; <span class="lb-mobile-hint">swipe \u2194 to see all weeks</span></p>';
   h += '</div>';
   return h;
 };
