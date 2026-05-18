@@ -34,7 +34,7 @@
   var IplConfig = {
     budget:       100.0,
     xi_size:      11,
-    max_weeks:    8,
+    max_weeks:    10,
     current_week: 1,
   };
 

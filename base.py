@@ -43,7 +43,14 @@ DATA_DIR.mkdir(exist_ok=True)
 
 BUDGET_TOTAL = 100.0
 XI_SIZE      = 11
-MAX_WEEKS    = 8
+# Matches the IPL 2026 schedule in data/schedule.json — 10 fantasy weeks
+# spanning the season (Weeks 1–10, totalling 74 matches; see schedule's
+# week-breakdown log line on workflow runs). Originally 8 (placeholder
+# from before the full schedule landed). Bumped 2026-05-18 after the
+# Monday rollover at the end of W8 returned "season_complete" instead
+# of producing a `ui:rollover:w9` commit — the api_rollover endpoint
+# at routes.py:1138 short-circuits when current_week >= MAX_WEEKS.
+MAX_WEEKS    = 10
 
 _ID_RE = re.compile(r'^[a-z]{1,3}\d{1,2}$')
 
