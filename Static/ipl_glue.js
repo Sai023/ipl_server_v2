@@ -329,9 +329,20 @@
         _cancelOverlay();
         var serverEtag = poll && poll.state_etag;
         if (!serverEtag || serverEtag === _lastStateEtag) return;
-        return Promise.all([ IplApi.getState(), IplApi.getLeaderboard() ])
+        // Also refresh /api/players on ETag change — the scraper adds new
+        // ext_* players (Washington Sundar = ext_10945 etc) and without
+        // this the frontend catalogue stays stuck with the snapshot from
+        // initial page load. resolvePlayer() then falls through to its
+        // default and the UI displays the raw ID like "ext_10945" with
+        // no name, team or role.
+        return Promise.all([
+          IplApi.getState(),
+          IplApi.getLeaderboard(),
+          IplApi.getPlayers().catch(function () { return null; }),
+        ])
           .then(function (results) {
-            var state = results[0]; var lb = results[1];
+            var state = results[0]; var lb = results[1]; var pl = results[2];
+            if (pl)    { window.dispatchEvent(new CustomEvent("ipl:players-updated", { detail: pl })); }
             if (state) { _lastStateEtag = state._saved || serverEtag; window.dispatchEvent(new CustomEvent("ipl:state-updated", { detail: state })); }
             if (lb)    { window.dispatchEvent(new CustomEvent("ipl:leaderboard-updated", { detail: lb })); }
           });

@@ -242,11 +242,18 @@ function _doStateRefresh(onDone){
   var stP=fetch("/api/state",{headers:{"Accept":"application/json","Cache-Control":"no-cache"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var lbP=fetch("/api/leaderboard",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var hP=(_username&&window.IplApi)?window.IplApi.getHistory(_username).catch(function(){return null;}):Promise.resolve(null);
-  Promise.all([stP,lbP,hP]).then(function(results){
-    var state=results[0],lb=results[1],history=results[2];
+  // Also refresh /api/players — without this, ext_* players added by the
+  // scraper since page-load show up in selections as raw IDs (e.g.
+  // "ext_10945" with no name/team/role) because the catalogue is stuck
+  // on the bootstrap snapshot. See ipl_glue.js _pollCycle for the same
+  // fix on the ETag-driven polling path.
+  var plP=window.IplApi?window.IplApi.getPlayers().catch(function(){return null;}):Promise.resolve(null);
+  Promise.all([stP,lbP,hP,plP]).then(function(results){
+    var state=results[0],lb=results[1],history=results[2],players=results[3];
     if(state){
       if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;}
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
+      if(players&&players.ok!==false){_players=players;}
       window.dispatchEvent(new CustomEvent('ipl:state-updated'));
       render(state);
     }
