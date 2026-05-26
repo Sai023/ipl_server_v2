@@ -517,6 +517,15 @@ def merge_discoveries(
         print(f"  [merge] skipped {dedup_skipped} discovered IDs already "
               f"present elsewhere in schedule.json")
 
+    # Sort each team-pair bucket by integer ID ascending. Within a single
+    # IPL series Cricbuzz allocates IDs in chronological batches (lower ID
+    # = earlier match), so the Nth pop now corresponds to the Nth unfilled
+    # slot in match_no order. Without this sort, the bucket follows
+    # Cricbuzz's response order — which is NOT chronological — and the
+    # round-1 / round-2 IDs of any repeat team-pair end up swapped.
+    for key in by_pair:
+        by_pair[key].sort(key=lambda cid: int(cid))
+
     new_matches: list[dict] = []
     filled = already_had = unfilled_known = unfilled_playoff = 0
 

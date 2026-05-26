@@ -3,7 +3,7 @@
   "ipl_year": 2026,
   "series_id": "9241",
   "series_slug": "indian-premier-league-2026",
-  "last_updated": "2026-05-15T23:55:08+05:30",
+  "last_updated": "2026-05-26T12:16:18+05:30",
   "discovery_source": "bootstrap_from_seed_matches_v3.3+series_id_corrected_9237_to_9241",
   "notes": "Writable source of truth for IPL 2026 schedule. Updated daily by logic/cricbuzz_discovery.py. cricbuzz_id=null means ID not yet discovered. teams[] is derived from title and used for title-keyed merge during discovery (more robust than positional matching). series_id corrected from 9237 to 9241 on 2026-05-14 after resolver discovered the actual IPL 2026 ID from cricbuzz.com homepage.",
   "matches": [
@@ -548,7 +548,7 @@
     },
     {
       "match_no": 50,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152053",
       "title": "LSG vs RCB, 50th Match",
       "teams": [
         "LSG",
@@ -559,7 +559,7 @@
     },
     {
       "match_no": 51,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152064",
       "title": "DC vs KKR, 51st Match",
       "teams": [
         "DC",
@@ -570,7 +570,7 @@
     },
     {
       "match_no": 52,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152075",
       "title": "RR vs GT, 52nd Match",
       "teams": [
         "RR",
@@ -581,7 +581,7 @@
     },
     {
       "match_no": 53,
-      "cricbuzz_id": "152152",
+      "cricbuzz_id": "152086",
       "title": "CSK vs LSG, 53rd Match",
       "teams": [
         "CSK",
@@ -592,7 +592,7 @@
     },
     {
       "match_no": 54,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152097",
       "title": "RCB vs MI, 54th Match",
       "teams": [
         "RCB",
@@ -603,7 +603,7 @@
     },
     {
       "match_no": 55,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152108",
       "title": "PBKS vs DC, 55th Match",
       "teams": [
         "PBKS",
@@ -614,7 +614,7 @@
     },
     {
       "match_no": 56,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152119",
       "title": "GT vs SRH, 56th Match",
       "teams": [
         "GT",
@@ -647,7 +647,7 @@
     },
     {
       "match_no": 59,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152152",
       "title": "LSG vs CSK, 59th Match",
       "teams": [
         "LSG",
@@ -669,7 +669,7 @@
     },
     {
       "match_no": 61,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152174",
       "title": "PBKS vs RCB, 61st Match",
       "teams": [
         "PBKS",
@@ -680,7 +680,7 @@
     },
     {
       "match_no": 62,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152185",
       "title": "DC vs RR, 62nd Match",
       "teams": [
         "DC",
@@ -691,7 +691,7 @@
     },
     {
       "match_no": 63,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152196",
       "title": "CSK vs SRH, 63rd Match",
       "teams": [
         "CSK",
@@ -702,7 +702,7 @@
     },
     {
       "match_no": 64,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152207",
       "title": "RR vs LSG, 64th Match",
       "teams": [
         "RR",
@@ -713,7 +713,7 @@
     },
     {
       "match_no": 65,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152218",
       "title": "KKR vs MI, 65th Match",
       "teams": [
         "KKR",
@@ -724,7 +724,7 @@
     },
     {
       "match_no": 66,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152229",
       "title": "CSK vs GT, 66th Match",
       "teams": [
         "CSK",
@@ -735,7 +735,7 @@
     },
     {
       "match_no": 67,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152240",
       "title": "SRH vs RCB, 67th Match",
       "teams": [
         "SRH",
@@ -746,7 +746,7 @@
     },
     {
       "match_no": 68,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152241",
       "title": "LSG vs PBKS, 68th Match",
       "teams": [
         "LSG",
@@ -757,7 +757,7 @@
     },
     {
       "match_no": 69,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152252",
       "title": "MI vs RR, 69th Match",
       "teams": [
         "MI",
@@ -768,7 +768,7 @@
     },
     {
       "match_no": 70,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "152263",
       "title": "KKR vs DC, 70th Match",
       "teams": [
         "KKR",
@@ -779,7 +779,7 @@
     },
     {
       "match_no": 71,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "155376",
       "title": "Qualifier 1",
       "teams": [],
       "date": "2026-05-27",
@@ -787,7 +787,7 @@
     },
     {
       "match_no": 72,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "155387",
       "title": "Eliminator",
       "teams": [],
       "date": "2026-05-28",
@@ -795,7 +795,7 @@
     },
     {
       "match_no": 73,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "155398",
       "title": "Qualifier 2",
       "teams": [],
       "date": "2026-05-30",
@@ -803,7 +803,7 @@
     },
     {
       "match_no": 74,
-      "cricbuzz_id": null,
+      "cricbuzz_id": "155409",
       "title": "Final",
       "teams": [],
       "date": "2026-05-31",
