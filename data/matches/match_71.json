@@ -189,7 +189,7 @@
       "run_out_direct": 0,
       "run_out_assist": 0
     },
-    "r08": {
+    "ext_c247db": {
       "played": true,
       "runs": 0,
       "balls": 0,
@@ -202,12 +202,12 @@
       "wickets": 2,
       "maidens": 1,
       "lbw_bowled": 0,
-      "catches": 0,
+      "catches": 1,
       "stumpings": 0,
       "run_out_direct": 0,
       "run_out_assist": 0
     },
-    "ext_291001": {
+    "ext_10808": {
       "played": true,
       "runs": 5,
       "balls": 13,
@@ -243,7 +243,7 @@
       "run_out_direct": 0,
       "run_out_assist": 0
     },
-    "ext_ac9d84": {
+    "ext_8313": {
       "played": true,
       "runs": 0,
       "balls": 3,
@@ -255,7 +255,7 @@
       "runs_conceded": 39,
       "wickets": 2,
       "maidens": 0,
-      "lbw_bowled": 0,
+      "lbw_bowled": 1,
       "catches": 0,
       "stumpings": 0,
       "run_out_direct": 0,
@@ -291,7 +291,7 @@
       "runs_conceded": 53,
       "wickets": 1,
       "maidens": 0,
-      "lbw_bowled": 0,
+      "lbw_bowled": 1,
       "catches": 0,
       "stumpings": 0,
       "run_out_direct": 0,
