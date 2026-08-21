@@ -239,8 +239,8 @@ function _pickerRowClick(id){
 }
 
 function _doStateRefresh(onDone){
-  var stP=fetch("/api/state",{headers:{"Accept":"application/json","Cache-Control":"no-cache"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
-  var lbP=fetch("/api/leaderboard",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json","Cache-Control":"no-cache"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  var lbP=fetch(_withComp("/api/leaderboard"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var hP=(_username&&window.IplApi)?window.IplApi.getHistory(_username).catch(function(){return null;}):Promise.resolve(null);
   // Also refresh /api/players — without this, ext_* players added by the
   // scraper since page-load show up in selections as raw IDs (e.g.
@@ -607,8 +607,59 @@ function _buildAdminPasscodesCard(){
 }
 
 // \u2500\u2500\u2500 ADMIN TAB \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function _buildAdminCompetitionsCard(){
+  var h='<div class="card">';
+  h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">🏆 Competitions</h3>';
+  h+='<button class="btn btn-ghost btn-sm" onclick="_bootstrap()">⟳ Refresh</button></div>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Create a competition, then add its <code>data/&lt;slug&gt;/players.json</code> + <code>schedule.json</code> and seed. Activate it so members can pick before match 1; close &amp; crown when it ends.</p>';
+  h+='<table class="lb-table"><thead><tr><th>Competition</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+  (_competitions||[]).forEach(function(c){
+    var act;
+    if(c.status==="upcoming") act='<button class="btn btn-teal btn-sm" onclick="_adminCompAction(\'activate\',\''+escAttr(c.slug)+'\')">Activate</button>';
+    else if(c.status==="active") act='<button class="btn btn-sm" style="background:var(--gold);color:#07111F;font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
+    else act='🏆 '+esc(c.champion||"—");
+    h+='<tr><td>'+esc(c.name)+'<br><span style="font-size:10px;color:var(--muted)">'+esc(c.slug)+'</span></td><td>'+esc(c.status)+'</td><td>'+act+'</td></tr>';
+  });
+  h+='</tbody></table>';
+  var ist='background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
+  h+='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">';
+  h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
+  h+='<input id="newcomp-slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
+  h+='<input id="newcomp-name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
+  h+='<input id="newcomp-anchor" type="date" title="Week-1 lock date (Mon before match 1)" style="'+ist+'">';
+  h+='<button class="btn btn-teal btn-sm" onclick="_adminCreateComp()">Create</button>';
+  h+='</div></div>';
+  return h;
+}
+function _adminCompAction(action,slug){
+  window.IplApi.adminCompetition({action:action,slug:slug}).then(function(d){
+    if(d&&d.ok){_bootstrap();}else{alert("Failed: "+((d&&d.error)||"error"));}
+  }).catch(function(e){alert("Failed: "+e.message);});
+}
+function _adminCloseComp(slug){
+  if(!confirm("Close & crown "+slug+"?\nThe current leaderboard #1 gets a championship point."))return;
+  window.IplApi.adminCompetition({action:"close",slug:slug}).then(function(d){
+    if(d&&d.ok){alert("🏆 Crowned "+d.champion);_bootstrap();}
+    else if(d&&d.tie){var who=prompt("Tie for #1 ("+d.tied.join(", ")+").\nType the champion exactly:");if(who){window.IplApi.adminCompetition({action:"close",slug:slug,champion:who.trim()}).then(function(d2){if(d2&&d2.ok){alert("🏆 Crowned "+d2.champion);_bootstrap();}else alert("Failed: "+((d2&&d2.error)||"error"));});}}
+    else{alert("Failed: "+((d&&d.error)||"error"));}
+  }).catch(function(e){alert("Failed: "+e.message);});
+}
+function _adminCreateComp(){
+  var slug=((document.getElementById("newcomp-slug")||{}).value||"").trim();
+  var name=((document.getElementById("newcomp-name")||{}).value||"").trim();
+  var anchor=((document.getElementById("newcomp-anchor")||{}).value||"").trim();
+  if(!slug||!name){alert("slug and name are required");return;}
+  var body={action:"create",slug:slug,name:name};
+  if(anchor)body.week1_anchor_utc=anchor+"T14:00:00+00:00";
+  window.IplApi.adminCompetition(body).then(function(d){
+    if(d&&d.ok){alert("Created "+slug+".\nNext: add data/"+slug+"/players.json + schedule.json and run the seeders.");_bootstrap();}
+    else alert("Failed: "+((d&&d.error)||"error"));
+  }).catch(function(e){alert("Failed: "+e.message);});
+}
+
 function _buildAdminTab(){
   var h=_buildAdminPasscodesCard();
+  h+=_buildAdminCompetitionsCard();
   h+='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:14px">';
   h+='<h3 class="section-title" style="margin:0">\u2699\uFE0F Match URL Admin</h3>';
@@ -913,11 +964,12 @@ function render(state){
   }
   var memberNames=Object.keys(members).sort();
   var html='<div class="wrap">';
-  html+='<h2 class="page-title">\uD83C\uDFCF IPL Fantasy 2026</h2>';
+  html+=_buildCompSwitcher();
+  html+='<h2 class="page-title">\uD83C\uDFCF '+esc((_competitions.filter(function(c){return c.slug===_activeComp;})[0]||{name:"IPL Fantasy 2026"}).name)+'</h2>';
   html+='<p class="subtitle">'+memberNames.length+' members \u00B7 '+matches.length+' matches \u00B7 Week '+_currentWeek+' \u00B7 \uD83D\uDCB0 '+BUDGET_TOTAL.toFixed(0)+' CR budget</p>';
   if(!_username){
     html+=_buildLoginCard(memberNames);
-    html+=_buildLeaderboardCard(_leaderboard);
+    html+=_buildChampionshipCard();html+=_buildLeaderboardCard(_leaderboard);
     html+=_buildMembersCard(memberNames);
   } else {
     var ini=_initials(_username);
@@ -938,7 +990,7 @@ function render(state){
     if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
     if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
-    else if(_activeTab==="leaderboard")  html+=_buildLeaderboardCard(_leaderboard);
+    else if(_activeTab==="leaderboard")  {html+=_buildChampionshipCard();html+=_buildLeaderboardCard(_leaderboard);}
     else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
     else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
     else if(_activeTab==="admin")        {html+=_buildAdminTab();html+=_buildDevTools();}
@@ -955,13 +1007,65 @@ function renderLeaderboard(lb){_leaderboard=lb;if(_state&&(_activeTab==="leaderb
 function setPlayers(pl){if(!pl)return;_players=pl;if(_state)render(_state);}
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
+var _competitions=[], _activeComp="", _championship=[];
+function _withComp(url){
+  var c=(window.IplComp&&IplComp.get&&IplComp.get())||_activeComp||"";
+  if(!c||url.indexOf("comp=")!==-1)return url;
+  return url+(url.indexOf("?")===-1?"?":"&")+"comp="+encodeURIComponent(c);
+}
+function _switchComp(slug){
+  if(!slug||slug===_activeComp)return;
+  if(window.IplComp)IplComp.set(slug);
+  _activeComp=slug;
+  _players=null;_leaderboard=null;_historyData=null;
+  _nwDraft={team:[],cap:null,vc:null};
+  _bootstrap();
+}
+function _buildCompSwitcher(){
+  if(!_competitions||_competitions.length<2)return '';
+  var h='<div class="comp-switcher" style="margin:0 0 12px;display:flex;align-items:center;gap:8px">';
+  h+='<label style="font-size:11px;color:var(--muted)">Competition</label>';
+  h+='<select onchange="_switchComp(this.value)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.35);border-radius:8px;padding:5px 9px;font-size:13px">';
+  _competitions.forEach(function(c){
+    var sel=(c.slug===_activeComp)?' selected':'';
+    var badge=(c.status==='completed')?' — done':(c.status==='active'?' — live':'');
+    h+='<option value="'+escAttr(c.slug)+'"'+sel+'>'+esc(c.name)+badge+'</option>';
+  });
+  h+='</select></div>';
+  return h;
+}
+function _buildChampionshipCard(){
+  if(!_championship||_championship.length===0)return '';
+  var h='<div class="card"><h3 class="section-title">🏆 Championship</h3>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Titles across all competitions — 1 point to each winner.</p>';
+  h+='<table class="lb-table"><thead><tr><th>#</th><th>Member</th><th>Titles</th></tr></thead><tbody>';
+  _championship.forEach(function(row,i){
+    var isMe=row.champion===_username;
+    h+='<tr'+(isMe?' class="me"':'')+'><td class="rank">'+(i+1)+'</td><td>'+esc(row.champion)+(isMe?' <span style="color:var(--gold);font-size:11px">(you)</span>':'')+'</td><td class="pts">'+row.titles+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  return h;
+}
+
 function _bootstrap(){
   var savedUser=getSavedUsername();
-  var stP=fetch("/api/state",{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
+  var compP=(window.IplApi&&window.IplApi.getCompetitions)?window.IplApi.getCompetitions().catch(function(){return null;}):Promise.resolve(null);
+  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
   var hP=(savedUser&&window.IplApi)?window.IplApi.getHistory(savedUser).catch(function(){return null;}):Promise.resolve(null);
   var plP=(!_players&&window.IplApi)?window.IplApi.getPlayers().catch(function(){return null;}):Promise.resolve(null);
-  var lbP=fetch("/api/leaderboard",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
-  var wkP=fetch("/api/current-week",{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  var lbP=fetch(_withComp("/api/leaderboard"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  var wkP=fetch(_withComp("/api/current-week"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  compP.then(function(c){
+    if(c&&c.ok){
+      _competitions=c.competitions||[];
+      _championship=c.championship||[];
+      var stored=(window.IplComp&&IplComp.get())||"";
+      var valid=_competitions.some(function(x){return x.slug===stored;});
+      _activeComp=valid?stored:(c.active||"");
+      if(_activeComp&&window.IplComp)IplComp.set(_activeComp);
+      if(_state)render(_state);
+    }
+  });
   stP.then(function(state){
     if(!_username){
       var savedTok=(window.IplAuth&&window.IplAuth.getToken)?window.IplAuth.getToken():null;

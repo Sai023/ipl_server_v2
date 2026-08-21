@@ -7,6 +7,14 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phase 3b-1).** The one-time history-seed
+> bootstrap (`_HISTORY_SEED`, `_auto_seed_history_if_needed`, the W1-W4
+> Sai/Moe tuples) has been **removed** — the migrated `ipl_2026` DB already
+> holds real selections and new competitions start empty at week 1.
+> `_auto_seed_players_if_needed`, `_auto_seed_if_needed`, and
+> `_auto_seed_members_if_needed` remain. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `init_db.py` runs **once per server boot**, before the web app accepts

@@ -33,8 +33,10 @@ name: IPL 2026 Monday Rollover
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 14 * * 1'   # Monday 14:00 UTC
+  # schedule: DISABLED at the multicomp cutover (2026-08). IPL 2026 is a
+  # completed competition at week 10, so /api/rollover is a no-op. Restore this
+  # cron for the next live competition (SA20).
+  #   - cron: '0 14 * * 1'   # Monday 14:00 UTC
 
 concurrency:
   group: ipl-sync
@@ -42,6 +44,9 @@ concurrency:
 
 jobs:
   rollover:
+    # DISABLED until the next live competition (SA20). IPL 2026 is completed at
+    # week 10, so rollover no-ops. Flip to `true` and restore the schedule above.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

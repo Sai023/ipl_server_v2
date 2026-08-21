@@ -37,13 +37,12 @@ on:
         required: false
         default: 'false'
         type: boolean
-  schedule:
-    # Run at 18:30 UTC (midnight IST) and 21:30 UTC (3am IST).
-    # Both fire AFTER the local server's daily 23:55 IST discovery
-    # (18:25 UTC), so we pick up the latest schedule.json if the user
-    # has pushed.
-    - cron: '30 18 * * *'
-    - cron: '30 21 * * *'
+  # schedule: DISABLED at the multicomp cutover (2026-08). The scraper is not
+  # competition-aware yet (Phase 3b-4, deferred to SA20) and IPL 2026 is a
+  # completed season, so there is nothing to scrape. Restore these crons when
+  # the per-competition scraper lands for SA20.
+  #   - cron: '30 18 * * *'
+  #   - cron: '30 21 * * *'
 
 concurrency:
   group: ipl-sync
@@ -51,6 +50,11 @@ concurrency:
 
 jobs:
   sync:
+    # DISABLED until SA20 (Phase 3b-4). scraper.py writes to data/matches/ and is
+    # not competition-aware; post-cutover the IPL archives live under
+    # data/ipl_2026/. Flip to `true` (and restore the schedule above) once the
+    # per-competition scraper lands.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

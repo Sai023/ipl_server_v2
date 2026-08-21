@@ -24,3 +24,6 @@ cloudflared*
 Thumbs.db
 .vscode/
 .idea/
+
+# migration backups (see migrate_to_competitions.py)
+fantasy.db.premigration-*

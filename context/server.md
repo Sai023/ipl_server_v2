@@ -7,6 +7,13 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phase 3a).** Boot is per-competition:
+> `_cold_start_hydrate` and `_rebuild_scores_and_points` loop competitions and
+> use `data/<slug>/matches/`. The rebuild wipes only **active** competitions,
+> so a completed season keeps its ephemeral data + JSON archive (viewable
+> without Cricbuzz); HOSTED still skips the rebuild entirely. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `server.py` is the **thin Flask launcher**. Its job is to start the

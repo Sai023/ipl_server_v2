@@ -118,6 +118,35 @@ bp = Blueprint("api", __name__)
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Competition resolution (multi-competition)
+# ════════════════════════════════════════════════════════════════════════════
+# Every read/write endpoint resolves a target competition from ?comp=<slug>,
+# defaulting to the active competition. The DAO defaults the same way, so
+# omitting ?comp= is always safe (single-competition back-compat).
+
+def _comp():
+    """Resolve this request's competition: ?comp=<slug> if it exists, else the
+    active competition. Always returns a valid slug string."""
+    slug = (request.args.get("comp") or "").strip()
+    if slug and db.get_competition(slug):
+        return slug
+    return db._active_slug()
+
+def _comp_cfg(slug):
+    """(budget_total, xi_size, max_weeks, deadline_hour, deadline_min) for a
+    competition, falling back to the legacy config constants if the row is
+    absent (e.g. an un-migrated DB)."""
+    c = db.get_competition(slug) or {}
+    return (
+        c.get("budget_total", BUDGET_TOTAL),
+        c.get("xi_size", XI_SIZE),
+        c.get("max_weeks", MAX_WEEKS),
+        c.get("deadline_hour", DEADLINE_HOUR),
+        c.get("deadline_min", DEADLINE_MIN),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # 1. SYSTEM
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -144,9 +173,12 @@ def api_version():
 @bp.route("/api/ping")
 def api_ping():
     try:
-        stats = db.ping_stats()
+        comp = _comp()
+        stats = db.ping_stats(competition_id=comp)
+        budget, xi, maxw, _dh, _dm = _comp_cfg(comp)
         stats.update({"ok": True, "public_url": _base.CURRENT_PUBLIC_URL,
-                      "budget": BUDGET_TOTAL, "xi_size": XI_SIZE, "max_weeks": MAX_WEEKS})
+                      "competition": comp,
+                      "budget": budget, "xi_size": xi, "max_weeks": maxw})
         return jsonify(stats)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
@@ -209,16 +241,41 @@ def api_test_push():
 @bp.route("/api/poll", methods=["GET"])
 def api_poll():
     try:
-        return jsonify({"state_etag": db.get_etags()["state"], "ok": True})
+        return jsonify({"state_etag": db.get_etags(competition_id=_comp())["state"], "ok": True})
     except Exception as e:
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 @bp.route("/api/current-week", methods=["GET"])
 def api_current_week():
     try:
-        return jsonify({"week_no": db.get_current_week(), "max_weeks": MAX_WEEKS, "ok": True})
+        comp = _comp()
+        _b, _x, maxw, _dh, _dm = _comp_cfg(comp)
+        return jsonify({"week_no": db.get_current_week(competition_id=comp),
+                        "max_weeks": maxw, "ok": True})
     except Exception as e:
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+
+@bp.route("/api/competitions", methods=["GET"])
+def api_competitions():
+    """List all competitions + the active slug + the championship tally.
+    Drives the header competition switcher and per-competition IplConfig."""
+    try:
+        comps = db.list_competitions()
+        return jsonify({
+            "ok": True,
+            "active": db._active_slug(),
+            "competitions": [
+                {"slug": c["slug"], "name": c["name"], "status": c["status"],
+                 "format": c["format"], "budget_total": c["budget_total"],
+                 "xi_size": c["xi_size"], "max_weeks": c["max_weeks"],
+                 "champion": c["champion"]}
+                for c in comps
+            ],
+            "championship": db.get_championship_tally(),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -376,6 +433,79 @@ def api_admin_members():
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
+@bp.route("/api/admin/competition", methods=["POST"])
+def api_admin_competition():
+    """Admin-only competition lifecycle: create / activate / reopen / close.
+
+    Body: {"action": "...", "slug": "...", ...}
+      create  : + name, week1_anchor_utc, budget_total, xi_size, max_weeks,
+                series_id, series_slug, year, valid_teams[]
+      activate: status -> 'active'  (becomes the default competition; picks open)
+      reopen  : status -> 'upcoming'
+      close   : status -> 'completed', champion = body.champion OR the
+                leaderboard #1 for this competition. On a tie for #1, returns
+                409 {tie:true, tied:[...]} so the UI can ask the admin to pick.
+    """
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        username, err = _require_admin()
+        if err: return err
+        d = request.get_json(force=True, silent=True) or {}
+        action = (d.get("action") or "").strip()
+        slug = (d.get("slug") or "").strip()
+        if not slug:
+            return jsonify({"ok": False, "error": "slug required", "code": 400}), 400
+
+        if action == "create":
+            if db.get_competition(slug):
+                return jsonify({"ok": False, "error": f"competition '{slug}' already exists", "code": 400}), 400
+            db.create_competition(
+                slug, (d.get("name") or slug).strip(),
+                status=d.get("status", "upcoming"),
+                format=d.get("format", "T20"),
+                budget_total=float(d.get("budget_total", 100.0)),
+                xi_size=int(d.get("xi_size", 11)),
+                max_weeks=int(d.get("max_weeks", 10)),
+                week1_anchor_utc=d.get("week1_anchor_utc") or "1970-01-01T00:00:00+00:00",
+                series_id=d.get("series_id"), series_slug=d.get("series_slug"),
+                year=d.get("year"), valid_teams=d.get("valid_teams", []),
+            )
+            _push_if_hosted(f"comp-create:{slug}")
+            return jsonify({"ok": True, "action": "create", "slug": slug})
+
+        comp = db.get_competition(slug)
+        if not comp:
+            return jsonify({"ok": False, "error": f"competition '{slug}' not found", "code": 404}), 404
+
+        if action in ("activate", "reopen"):
+            new_status = "active" if action == "activate" else "upcoming"
+            db.set_competition_status(slug, new_status)
+            _push_if_hosted(f"comp-{action}:{slug}")
+            return jsonify({"ok": True, "action": action, "slug": slug, "status": new_status})
+
+        if action == "close":
+            champion = (d.get("champion") or "").strip()
+            if not champion:
+                standings = db.get_leaderboard(competition_id=slug).get("standings", [])
+                if not standings:
+                    return jsonify({"ok": False, "error": "no standings yet; pass champion explicitly", "code": 400}), 400
+                top = standings[0]["total_pts"]
+                tied = [s["name"] for s in standings if s["total_pts"] == top]
+                if len(tied) > 1:
+                    return jsonify({"ok": False, "tie": True, "tied": tied,
+                                    "error": f"tie for #1 ({', '.join(tied)}) — pass champion explicitly", "code": 409}), 409
+                champion = standings[0]["name"]
+            db.set_champion(slug, champion)
+            _push_if_hosted(f"comp-close:{slug}:{champion}")
+            return jsonify({"ok": True, "action": "close", "slug": slug, "champion": champion, "status": "completed"})
+
+        return jsonify({"ok": False, "error": f"unknown action '{action}'", "code": 400}), 400
+    except Exception as e:
+        _log(f"POST /api/admin/competition: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 2. STATE
 # ════════════════════════════════════════════════════════════════════════════
@@ -383,7 +513,7 @@ def api_admin_members():
 @bp.route("/api/state", methods=["GET"])
 def api_get_state():
     try:
-        state = db.get_state(); etag = state.get("_saved", "")
+        state = db.get_state(competition_id=_comp()); etag = state.get("_saved", "")
         if request.headers.get("If-None-Match") == etag: return "", 304
         resp = jsonify(state); resp.headers["ETag"] = etag; return resp
     except Exception as e:
@@ -398,7 +528,7 @@ def api_get_state():
 @bp.route("/api/players", methods=["GET"])
 def api_players():
     try:
-        players = db.get_players()
+        players = db.get_players(competition_id=_comp())
         return jsonify({"players": players, "by_id": {p["id"]: p for p in players},
                         "by_name": {p["name"].lower(): p for p in players}, "ok": True})
     except Exception as e:
@@ -425,7 +555,7 @@ def api_leaderboard():
     try:
         wp = request.args.get("week", "").strip()
         wn = int(wp) if wp.isdigit() else None
-        return jsonify(db.get_leaderboard(week_no=wn))
+        return jsonify(db.get_leaderboard(week_no=wn, competition_id=_comp()))
     except Exception as e:
         return jsonify({"error": str(e), "code": 500}), 500
 
@@ -438,7 +568,7 @@ def api_leaderboard():
 def api_history(n):
     try:
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        return jsonify(db.get_history(n))
+        return jsonify(db.get_history(n, competition_id=_comp()))
     except Exception as e:
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
@@ -454,6 +584,7 @@ def api_save_next_week(n):
     if re_: return re_
     try:
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+        comp=_comp(); budget,xi,_mw,_dh,_dm=_comp_cfg(comp)
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
         team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")
@@ -461,7 +592,7 @@ def api_save_next_week(n):
         rlog=[]
         if team:
             con=_db_con()
-            team,rlog=resolve_id_list(con,team,display_name=n,week_no=db.get_current_week())
+            team,rlog=resolve_id_list(con,team,display_name=n,week_no=db.get_current_week(competition_id=comp))
             if cap and not _ID_RE.match(str(cap)):
                 m=resolve_player_id(con,cap)
                 if m: cap=m["id"]
@@ -469,16 +600,16 @@ def api_save_next_week(n):
                 m=resolve_player_id(con,vc)
                 if m: vc=m["id"]
             con.close()
-        if team and len(team)!=XI_SIZE:
-            return jsonify({"error":f"Need exactly {XI_SIZE} players (got {len(team)})","code":422}),422
+        if team and len(team)!=xi:
+            return jsonify({"error":f"Need exactly {xi} players (got {len(team)})","code":422}),422
         total_cost=0.0
         if team:
-            valid,total_cost=db.validate_budget(team,BUDGET_TOTAL)
+            valid,total_cost=db.validate_budget(team,budget,competition_id=comp)
             if not valid:
                 return jsonify({"error":f"Budget exceeded: {total_cost:.1f} CR",
-                                "total_cost":total_cost,"budget":BUDGET_TOTAL,"code":422}),422
-        result=db.save_next_week(n,team,cap,vc)
-        _push_if_hosted(f"save-next-week:{n}:w{result['week_no']}")
+                                "total_cost":total_cost,"budget":budget,"code":422}),422
+        result=db.save_next_week(n,team,cap,vc,competition_id=comp)
+        _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
         return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})
     except sqlite3.IntegrityError as e:
         return jsonify({"error":str(e),"code":400}),400
@@ -494,8 +625,9 @@ def api_member(n):
         if not n or len(n)>30: return jsonify({"error":"name 1-30 chars","code":400}),400
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"Invalid JSON","code":400}),400
-        db.upsert_member(n,d)
-        _push_if_hosted(f"member:{n}")
+        comp=_comp()
+        db.upsert_member(n,d,competition_id=comp)
+        _push_if_hosted(f"member:{comp}:{n}")
         return jsonify({"ok":True})
     except Exception as e:
         _log(f"PUT /api/member/{n}: {e}","error")
@@ -512,8 +644,9 @@ def api_recalculate_points():
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
-        n=db.recalculate_points(); wp=db.update_week_points(); pp=db.update_player_season_pts()
-        _push_if_hosted(f"recalc:rows={n}")
+        comp=_comp()
+        n=db.recalculate_points(competition_id=comp); wp=db.update_week_points(competition_id=comp); pp=db.update_player_season_pts(competition_id=comp)
+        _push_if_hosted(f"recalc:{comp}:rows={n}")
         return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,"player_pts_updated":pp,
                         "message":f"Recalculated {n} player-match rows, {wp} week_pts rows, {pp} player season_pts."})
     except Exception as e:
@@ -589,20 +722,21 @@ def api_clean_scores():
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
+        comp=_comp()
         delete_json=request.args.get("delete_json","").strip().lower() in ("1","true","yes")
         with db._write() as con:
-            con.execute("DELETE FROM player_match_points")
-            con.execute("DELETE FROM match_scores")
-            try: con.execute("DELETE FROM user_match_points")
+            con.execute("DELETE FROM player_match_points WHERE competition_id=?",(comp,))
+            con.execute("DELETE FROM match_scores WHERE competition_id=?",(comp,))
+            try: con.execute("DELETE FROM user_match_points WHERE competition_id=?",(comp,))
             except Exception: pass
-            con.execute("UPDATE user_selections SET week_pts=0")
-            try: con.execute("UPDATE players SET season_pts=0, points=0")
+            con.execute("UPDATE user_selections SET week_pts=0 WHERE competition_id=?",(comp,))
+            try: con.execute("UPDATE players SET season_pts=0, points=0 WHERE competition_id=?",(comp,))
             except Exception:
-                try: con.execute("UPDATE players SET season_pts=0")
+                try: con.execute("UPDATE players SET season_pts=0 WHERE competition_id=?",(comp,))
                 except Exception: pass
         deleted_files=0
         if delete_json:
-            matches_dir=DATA_DIR/"matches"
+            matches_dir=DATA_DIR/comp/"matches"
             if matches_dir.exists():
                 for f in matches_dir.glob("*.json"):
                     try: f.unlink(); deleted_files+=1
@@ -835,18 +969,20 @@ def api_match_centre():
     n = (request.args.get("user") or "").strip()
     if not n or len(n) > 30:
         return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
+    comp = _comp()
     try:
         with db._read() as con:
             match_rows = con.execute(
                 "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches ORDER BY week_no, id"
+                "FROM matches WHERE competition_id=? ORDER BY week_no, id", (comp,)
             ).fetchall()
             ump_rows = con.execute(
-                "SELECT match_id, pts FROM user_match_points WHERE display_name=?", (n,)
+                "SELECT match_id, pts FROM user_match_points "
+                "WHERE competition_id=? AND display_name=?", (comp, n)
             ).fetchall()
             wk_rows = con.execute(
                 "SELECT week_no, week_pts, points_per_match FROM user_selections "
-                "WHERE display_name=? ORDER BY week_no", (n,)
+                "WHERE competition_id=? AND display_name=? ORDER BY week_no", (comp, n)
             ).fetchall()
 
         ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
@@ -968,11 +1104,12 @@ def api_match_details(match_id):
     n = (request.args.get("user") or "").strip()
     if not n or len(n) > 30:
         return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
+    comp = _comp()
     try:
         with db._read() as con:
             mr = con.execute(
                 "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches WHERE id=?", (match_id,)
+                "FROM matches WHERE id=? AND competition_id=?", (match_id, comp)
             ).fetchone()
             if not mr:
                 return jsonify({"error": f"match '{match_id}' not found", "code": 404}), 404
@@ -983,8 +1120,8 @@ def api_match_details(match_id):
             # Historical XI: read from the week this match belongs to
             sel = con.execute(
                 "SELECT tw_team_json, tw_cap_id, tw_vc_id "
-                "FROM user_selections WHERE display_name=? AND week_no=?",
-                (n, wk)
+                "FROM user_selections WHERE competition_id=? AND display_name=? AND week_no=?",
+                (comp, n, wk)
             ).fetchone()
 
             if not sel:
@@ -1010,20 +1147,20 @@ def api_match_details(match_id):
                 ph = ",".join("?" * len(team_ids))
                 for r in con.execute(
                     f"SELECT player_id, base_pts FROM player_match_points "
-                    f"WHERE match_id=? AND player_id IN ({ph})",
-                    [match_id] + team_ids
+                    f"WHERE match_id=? AND competition_id=? AND player_id IN ({ph})",
+                    [match_id, comp] + team_ids
                 ).fetchall():
                     pmp_map[r["player_id"]] = r["base_pts"]
                 for r in con.execute(
-                    f"SELECT id, name, role, team FROM players WHERE id IN ({ph})",
-                    team_ids
+                    f"SELECT id, name, role, team FROM players WHERE competition_id=? AND id IN ({ph})",
+                    [comp] + team_ids
                 ).fetchall():
                     player_info[r["id"]] = dict(r)
 
             # Authoritative per-match total from user_match_points
             ump_row = con.execute(
                 "SELECT pts FROM user_match_points "
-                "WHERE display_name=? AND match_id=?", (n, match_id)
+                "WHERE competition_id=? AND display_name=? AND match_id=?", (comp, n, match_id)
             ).fetchone()
             user_total = ump_row["pts"] if ump_row else 0
 
@@ -1031,7 +1168,7 @@ def api_match_details(match_id):
             if not user_total:
                 ppm_sel = con.execute(
                     "SELECT points_per_match FROM user_selections "
-                    "WHERE display_name=? AND week_no=?", (n, wk)
+                    "WHERE competition_id=? AND display_name=? AND week_no=?", (comp, n, wk)
                 ).fetchone()
                 if ppm_sel:
                     blob = _jloads(ppm_sel["points_per_match"], {})
@@ -1126,26 +1263,27 @@ def api_rollover():
             return jsonify({"error": "invalid rollover token",
                             "ok": False, "code": 401}), 401
     force=request.args.get("force","").strip() in ("1","true","yes")
+    comp=_comp(); _b,_x,maxw,dh,dm=_comp_cfg(comp)
     try:
         now=datetime.now(timezone.utc)
         if not force:
-            lmd=last_monday_deadline(now,DEADLINE_HOUR,DEADLINE_MIN)
-            last_raw=db.get_meta("_last_rollover","")
+            lmd=last_monday_deadline(now,dh,dm)
+            last_raw=db.get_meta_comp("_last_rollover",comp,"")
             if already_rolled(last_raw,lmd):
                 return jsonify({"ok":True,"rolled":False,"new_week_no":None,
                                 "season_complete":False,"reason":"Already rolled for this deadline"})
-        current_week=db.get_current_week()
-        if current_week>=MAX_WEEKS:
+        current_week=db.get_current_week(competition_id=comp)
+        if current_week>=maxw:
             return jsonify({"ok":True,"rolled":False,"new_week_no":None,
-                            "season_complete":True,"reason":f"Season complete \u2014 {MAX_WEEKS} weeks reached"})
-        users=db.get_users_and_max_weeks()
+                            "season_complete":True,"reason":f"Season complete \u2014 {maxw} weeks reached"})
+        users=db.get_users_and_max_weeks(competition_id=comp)
         if not users:
             return jsonify({"ok":True,"rolled":False,"new_week_no":None,
                             "season_complete":False,"reason":"No members found"})
         new_week_no=int(users[0]["cur_wk"])+1; now_iso=now.isoformat()
         for u in users:
             uname=u["display_name"]; cur_wk=int(u["cur_wk"])
-            cur_row=db.get_selection_row(uname,cur_wk)
+            cur_row=db.get_selection_row(uname,cur_wk,competition_id=comp)
             if not cur_row: continue
             nw_team,nw_cap,nw_vc=pick_active_team(
                 cur_row["nw_team_json"],cur_row["nw_cap_id"],cur_row["nw_vc_id"],
@@ -1155,13 +1293,13 @@ def api_rollover():
                 resolved,_=resolve_id_list(con,_jloads(nw_team,[])); nw_team=_json.dumps(resolved)
             except Exception: pass
             finally: con.close()
-            db.insert_rollover_week(uname,cur_wk+1,nw_team,nw_cap,nw_vc)
-        if not force: db.set_last_rollover(now_iso)
-        db.set_meta("_saved",now_iso)
-        db.update_week_points()
-        _push_if_hosted(f"rollover:w{new_week_no}")
+            db.insert_rollover_week(uname,cur_wk+1,nw_team,nw_cap,nw_vc,competition_id=comp)
+        if not force: db.set_last_rollover(now_iso,competition_id=comp)
+        db.set_meta_comp("_saved",comp,now_iso)
+        db.update_week_points(competition_id=comp)
+        _push_if_hosted(f"rollover:{comp}:w{new_week_no}")
         return jsonify({"ok":True,"rolled":True,"new_week_no":new_week_no,
-                        "season_complete":new_week_no>=MAX_WEEKS})
+                        "season_complete":new_week_no>=maxw})
     except Exception as e:
         _log(f"POST /api/rollover: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
@@ -1172,7 +1310,7 @@ def api_matches_status():
         with db._read() as con:
             rows=con.execute(
                 "SELECT id,week_no,title,status,scorecard_url,teams_json,date_label "
-                "FROM matches ORDER BY id"
+                "FROM matches WHERE competition_id=? ORDER BY id", (_comp(),)
             ).fetchall()
         matches=[dict(r) for r in rows]
         # Flag duplicate Cricbuzz IDs so Admin Tab can warn the user
@@ -1204,9 +1342,10 @@ def api_update_match_url():
         if not m: return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
         cb_id=m.group(1); clean_url=f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
         con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
-        row=con.execute("SELECT id FROM matches WHERE id=?",(match_id,)).fetchone()
+        comp=_comp()
+        row=con.execute("SELECT id FROM matches WHERE id=? AND competition_id=?",(match_id,comp)).fetchone()
         if not row: con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
-        con.execute("UPDATE matches SET scorecard_url=? WHERE id=?",(clean_url,match_id))
+        con.execute("UPDATE matches SET scorecard_url=? WHERE id=? AND competition_id=?",(clean_url,match_id,comp))
         con.commit(); con.close()
         if _IS_HOSTED:
             # No Cricbuzz egress in cloud \u2014 push the URL change so the GitHub
@@ -1225,12 +1364,12 @@ def api_update_match_url():
                 mno_match = re.search(r'(\d+)\s*$', match_id)
                 if mno_match:
                     mns = mno_match.group(1).zfill(2)
-                    jp = DATA_DIR / "matches" / f"match_{mns}.json"
+                    jp = DATA_DIR / comp / "matches" / f"match_{mns}.json"
                     # Path RELATIVE to the repo root — git add needs it this
                     # way. Always pass it through to _push_if_hosted so the
                     # deletion is STAGED, even if the file didn't exist
                     # locally (the workflow's checkout might have it).
-                    json_rel_path = f"data/matches/match_{mns}.json"
+                    json_rel_path = f"data/{comp}/matches/match_{mns}.json"
                     if jp.exists():
                         jp.unlink()
                         _log(f"Deleted cached {jp.name} so workflow re-scrapes M{mns}")

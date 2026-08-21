@@ -7,6 +7,12 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phases 4-5).** `_fetchJson` attaches
+> `?comp=<slug>` (from the `IplComp` localStorage store) to every `/api/*`
+> call, mirroring the bearer-token attach. New `IplApi` methods:
+> `getCompetitions`, `adminCompetition`. `window.IplComp` is exposed. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `ipl_glue.js` is the **API client + lifecycle controller** for the

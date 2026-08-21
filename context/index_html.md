@@ -7,6 +7,14 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phases 4-5).** New: a header competition
+> `<select>` switcher (shown with >=2 competitions) wired to `_switchComp`; a
+> dynamic page title = active competition name; a 🏆 Championship tally card
+> above the leaderboard; and an Admin "Competitions" card (Activate /
+> Close & crown + create form). `_bootstrap` / `_doStateRefresh` thread
+> `?comp=` onto their raw fetches. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `index.html` is **the only HTML page** the user ever loads. It boots

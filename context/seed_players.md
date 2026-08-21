@@ -1,5 +1,12 @@
 # Seed_Players.py — The Roster Loader
 
+> **Multi-competition update (Phase 3b-2).** The roster no longer lives as a
+> Python list literal — it is read from `data/<slug>/players.json`. The seeder
+> takes `--comp <slug>` (default `ipl_2026`), writes `competition_id`, and
+> wipes/reseeds only that competition's rows. `data/ipl_2026/players.json` was
+> exported from the old literal. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `Seed_Players.py` is the **roster loader**. It wipes the `players`

@@ -7,6 +7,12 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update.** `BUDGET_TOTAL`, `XI_SIZE`, `MAX_WEEKS` are now
+> fallback defaults only — the live values are per-competition on the
+> `competitions` row, read by `routes._comp_cfg()`. `resolve_player_id` still
+> loads all players; per-competition scoping of the resolver is a follow-up.
+> See [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `base.py` is the **shared workshop** every other server-side script borrows

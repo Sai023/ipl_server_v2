@@ -7,6 +7,16 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phases 2, 5).** Every read/write endpoint now
+> resolves a competition via `_comp()` (`?comp=<slug>`, default = the active
+> competition) and passes it to the DAO. New endpoints: `GET /api/competitions`
+> (list + active slug + championship tally) and `POST /api/admin/competition`
+> (admin-gated create / activate / reopen / close & crown). The identity
+> endpoints (`/api/register|login|whoami|passcode/*|admin/members`) stay global.
+> Per-competition `budget / xi_size / max_weeks / deadline` come from the
+> `competitions` row via `_comp_cfg()`. See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `routes.py` is the **whole HTTP API** of the league — every URL the
@@ -31,6 +41,17 @@ exceptions are the **rollover handler** (which orchestrates the
 transaction) and the **audit-scores handler** (which re-computes
 points from raw stats using `logic.scoring_engine.calc_pts` and
 compares against the stored totals).
+
+## Multi-competition (rebuild)
+
+Every read/write endpoint resolves a target competition via `_comp()`
+(`?comp=<slug>`, defaulting to the active competition) and passes it to the
+DAO. New: `GET /api/competitions` (list + active slug + championship tally —
+drives the header switcher and per-competition `IplConfig`) and, in Phase 5,
+`POST /api/admin/competition` (create / activate / close & crown).
+Per-competition `budget / xi_size / max_weeks / deadline` come from the
+competition row via `_comp_cfg()`, with the `config.py` constants as fallback.
+See [multi_competition.md](multi_competition.md) for the full model.
 
 ## Where it sits in the flow
 

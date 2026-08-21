@@ -1,5 +1,13 @@
 # config.py — The League's Rulebook of Constants
 
+> **Multi-competition update.** `IPL_YEAR`, `DEADLINE_HOUR/MIN`, and the
+> `BUDGET_TOTAL / XI_SIZE / MAX_WEEKS` constants (`base.py`) are no longer the
+> authority — those values live **per competition** on the `competitions` row
+> (`budget_total`, `xi_size`, `max_weeks`, `week1_anchor_utc`,
+> `deadline_hour/min`, `series_id`, `year`). The constants here remain only as
+> fallbacks (`routes._comp_cfg`). See
+> [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `config.py` is the **single rulebook** the whole system reads from. It declares,

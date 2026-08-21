@@ -1,0 +1,1367 @@
+[
+  {
+    "id": "c01",
+    "name": "Ruturaj Gaikwad",
+    "team": "CSK",
+    "price": 10.0,
+    "role": "BAT"
+  },
+  {
+    "id": "c02",
+    "name": "Shivam Dube",
+    "team": "CSK",
+    "price": 10.5,
+    "role": "AR"
+  },
+  {
+    "id": "c03",
+    "name": "MS Dhoni",
+    "team": "CSK",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "c04",
+    "name": "Mukesh Choudhary",
+    "team": "CSK",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c05",
+    "name": "Anshul Kamboj",
+    "team": "CSK",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c06",
+    "name": "Khaleel Ahmed",
+    "team": "CSK",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c07",
+    "name": "Prashant Veer",
+    "team": "CSK",
+    "price": 7.0,
+    "role": "AR"
+  },
+  {
+    "id": "c08",
+    "name": "Kartik Sharma",
+    "team": "CSK",
+    "price": 7.0,
+    "role": "WK"
+  },
+  {
+    "id": "c09",
+    "name": "Sanju Samson",
+    "team": "CSK",
+    "price": 10.0,
+    "role": "WK"
+  },
+  {
+    "id": "c10",
+    "name": "Ayush Mhatre",
+    "team": "CSK",
+    "price": 8.0,
+    "role": "BAT"
+  },
+  {
+    "id": "c11",
+    "name": "Dewald Brevis",
+    "team": "CSK",
+    "price": 9.0,
+    "role": "BAT"
+  },
+  {
+    "id": "c12",
+    "name": "Noor Ahmad",
+    "team": "CSK",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c13",
+    "name": "Jamie Overton",
+    "team": "CSK",
+    "price": 1.5,
+    "role": "AR"
+  },
+  {
+    "id": "c14",
+    "name": "Spencer Johnson",
+    "team": "CSK",
+    "price": 1.5,
+    "role": "BOWL"
+  },
+  {
+    "id": "c15",
+    "name": "Sarfaraz Khan",
+    "team": "CSK",
+    "price": 1.0,
+    "role": "BAT"
+  },
+  {
+    "id": "c16",
+    "name": "Urvil Patel",
+    "team": "CSK",
+    "price": 1.0,
+    "role": "WK"
+  },
+  {
+    "id": "c17",
+    "name": "Ramakrishna Ghosh",
+    "team": "CSK",
+    "price": 1.0,
+    "role": "AR"
+  },
+  {
+    "id": "c18",
+    "name": "Shreyas Gopal",
+    "team": "CSK",
+    "price": 1.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c19",
+    "name": "Matt Henry",
+    "team": "CSK",
+    "price": 2.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c20",
+    "name": "Akeal Hosein",
+    "team": "CSK",
+    "price": 2.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c21",
+    "name": "Rahul Chahar",
+    "team": "CSK",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "c22",
+    "name": "Matthew Short",
+    "team": "CSK",
+    "price": 7.0,
+    "role": "AR"
+  },
+  {
+    "id": "d01",
+    "name": "KL Rahul",
+    "team": "DC",
+    "price": 14.0,
+    "role": "WK"
+  },
+  {
+    "id": "d02",
+    "name": "David Warner",
+    "team": "DC",
+    "price": 10.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d03",
+    "name": "Axar Patel",
+    "team": "DC",
+    "price": 12.0,
+    "role": "AR"
+  },
+  {
+    "id": "d04",
+    "name": "Kuldeep Yadav",
+    "team": "DC",
+    "price": 11.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "d07",
+    "name": "Prithvi Shaw",
+    "team": "DC",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d08",
+    "name": "Abishek Porel",
+    "team": "DC",
+    "price": 6.0,
+    "role": "WK"
+  },
+  {
+    "id": "d09",
+    "name": "Tristan Stubbs",
+    "team": "DC",
+    "price": 7.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d10",
+    "name": "Ishant Sharma",
+    "team": "DC",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "d12",
+    "name": "Jake Fraser-McGurk",
+    "team": "DC",
+    "price": 9.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d13",
+    "name": "Mukesh Kumar",
+    "team": "DC",
+    "price": 5.5,
+    "role": "BOWL"
+  },
+  {
+    "id": "d14",
+    "name": "Kumar Kushagra",
+    "team": "DC",
+    "price": 3.5,
+    "role": "WK"
+  },
+  {
+    "id": "d15",
+    "name": "Lalit Yadav",
+    "team": "DC",
+    "price": 3.5,
+    "role": "AR"
+  },
+  {
+    "id": "d16",
+    "name": "Shai Hope",
+    "team": "DC",
+    "price": 7.0,
+    "role": "WK"
+  },
+  {
+    "id": "d17",
+    "name": "Ricky Bhui",
+    "team": "DC",
+    "price": 3.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d18",
+    "name": "Sumit Kumar",
+    "team": "DC",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "d19",
+    "name": "Vipraj Nigam",
+    "team": "DC",
+    "price": 3.0,
+    "role": "AR"
+  },
+  {
+    "id": "d20",
+    "name": "Harry Brook",
+    "team": "DC",
+    "price": 12.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d22",
+    "name": "Lungi Ngidi",
+    "team": "DC",
+    "price": 6.5,
+    "role": "BOWL"
+  },
+  {
+    "id": "d23",
+    "name": "Pathum Nissanka",
+    "team": "DC",
+    "price": 6.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d24",
+    "name": "T Natarajan",
+    "team": "DC",
+    "price": 6.0,
+    "role": "BAT"
+  },
+  {
+    "id": "d25",
+    "name": "Sameer Rizvi",
+    "team": "DC",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g01",
+    "name": "Shubman Gill",
+    "team": "GT",
+    "price": 13.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g02",
+    "name": "Sai Sudharsan",
+    "team": "GT",
+    "price": 9.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g03",
+    "name": "Rashid Khan",
+    "team": "GT",
+    "price": 13.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g04",
+    "name": "Mohit Sharma",
+    "team": "GT",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g06",
+    "name": "Wriddhiman Saha",
+    "team": "GT",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "g07",
+    "name": "Rahul Tewatia",
+    "team": "GT",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "g08",
+    "name": "David Miller",
+    "team": "GT",
+    "price": 8.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g09",
+    "name": "Azmatullah Omarzai",
+    "team": "GT",
+    "price": 7.0,
+    "role": "AR"
+  },
+  {
+    "id": "g10",
+    "name": "Darshan Nalkande",
+    "team": "GT",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g11",
+    "name": "Jos Buttler",
+    "team": "GT",
+    "price": 11.0,
+    "role": "WK"
+  },
+  {
+    "id": "g12",
+    "name": "B Sai Kishore",
+    "team": "GT",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g14",
+    "name": "Kane Williamson",
+    "team": "GT",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g15",
+    "name": "Matthew Wade",
+    "team": "GT",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "g16",
+    "name": "Jayant Yadav",
+    "team": "GT",
+    "price": 3.5,
+    "role": "AR"
+  },
+  {
+    "id": "g17",
+    "name": "R Sai Kishore",
+    "team": "GT",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g18",
+    "name": "Umesh Yadav",
+    "team": "GT",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g19",
+    "name": "Abhinav Manohar",
+    "team": "GT",
+    "price": 4.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g20",
+    "name": "Josh Little",
+    "team": "GT",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "g21",
+    "name": "Shahrukh Khan",
+    "team": "GT",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "g22",
+    "name": "Kagiso Rabada",
+    "team": "GT",
+    "price": 12.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k01",
+    "name": "Sunil Narine",
+    "team": "KKR",
+    "price": 12.0,
+    "role": "AR"
+  },
+  {
+    "id": "k03",
+    "name": "Rinku Singh",
+    "team": "KKR",
+    "price": 10.0,
+    "role": "BAT"
+  },
+  {
+    "id": "k04",
+    "name": "Varun Chakaravarthy",
+    "team": "KKR",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k05",
+    "name": "Rahul Tripathi",
+    "team": "KKR",
+    "price": 8.0,
+    "role": "BAT"
+  },
+  {
+    "id": "k06",
+    "name": "Umran Malik",
+    "team": "KKR",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k07",
+    "name": "Rachin Ravindra",
+    "team": "PBKS",
+    "price": 9.0,
+    "role": "AR"
+  },
+  {
+    "id": "k08",
+    "name": "Rovman Powell",
+    "team": "KKR",
+    "price": 7.0,
+    "role": "BAT"
+  },
+  {
+    "id": "k09",
+    "name": "Harshit Rana",
+    "team": "KKR",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k10",
+    "name": "Ramandeep Singh",
+    "team": "KKR",
+    "price": 4.0,
+    "role": "AR"
+  },
+  {
+    "id": "k12",
+    "name": "Manish Pandey",
+    "team": "KKR",
+    "price": 4.0,
+    "role": "BAT"
+  },
+  {
+    "id": "k13",
+    "name": "Vaibhav Arora",
+    "team": "KKR",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k14",
+    "name": "Cameron Green",
+    "team": "KKR",
+    "price": 11.0,
+    "role": "AR"
+  },
+  {
+    "id": "k15",
+    "name": "Tim Seifert",
+    "team": "KKR",
+    "price": 7.0,
+    "role": "WK"
+  },
+  {
+    "id": "k17",
+    "name": "Angkrish Raghuvanshi",
+    "team": "KKR",
+    "price": 6.0,
+    "role": "WK"
+  },
+  {
+    "id": "k18",
+    "name": "Blessing Muzarabani",
+    "team": "KKR",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "k19",
+    "name": "Ajinkya Rahane",
+    "team": "KKR",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "k20",
+    "name": "Finn Allen",
+    "team": "KKR",
+    "price": 6.0,
+    "role": "WK"
+  },
+  {
+    "id": "k22",
+    "name": "Kartik Tyagi",
+    "team": "KKR",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l01",
+    "name": "Rishabh Pant",
+    "team": "LSG",
+    "price": 14.0,
+    "role": "WK"
+  },
+  {
+    "id": "l02",
+    "name": "Nicholas Pooran",
+    "team": "LSG",
+    "price": 11.0,
+    "role": "WK"
+  },
+  {
+    "id": "l03",
+    "name": "Mayank Yadav",
+    "team": "LSG",
+    "price": 8.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l04",
+    "name": "Mitchell Marsh",
+    "team": "LSG",
+    "price": 9.0,
+    "role": "AR"
+  },
+  {
+    "id": "l05",
+    "name": "Ayush Badoni",
+    "team": "LSG",
+    "price": 6.0,
+    "role": "BAT"
+  },
+  {
+    "id": "l06",
+    "name": "Mohsin Khan",
+    "team": "LSG",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l07",
+    "name": "Mohammed Shami",
+    "team": "LSG",
+    "price": 8.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l08",
+    "name": "Anrich Nortje",
+    "team": "LSG",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l09",
+    "name": "Wanindu Hasaranga",
+    "team": "LSG",
+    "price": 7.0,
+    "role": "AR"
+  },
+  {
+    "id": "l10",
+    "name": "Josh Inglis",
+    "team": "LSG",
+    "price": 6.0,
+    "role": "WK"
+  },
+  {
+    "id": "l11",
+    "name": "Aiden Markram",
+    "team": "LSG",
+    "price": 9.0,
+    "role": "BAT"
+  },
+  {
+    "id": "l12",
+    "name": "Shahbaz Ahmed",
+    "team": "LSG",
+    "price": 4.0,
+    "role": "AR"
+  },
+  {
+    "id": "l13",
+    "name": "Arshin Kulkarni",
+    "team": "LSG",
+    "price": 3.5,
+    "role": "BAT"
+  },
+  {
+    "id": "l14",
+    "name": "Manimaran Siddharth",
+    "team": "LSG",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l15",
+    "name": "Arjun Tendulkar",
+    "team": "LSG",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "l16",
+    "name": "Mukul Choudhary",
+    "team": "LSG",
+    "price": 3.0,
+    "role": "WK"
+  },
+  {
+    "id": "l17",
+    "name": "Abdul Samad",
+    "team": "LSG",
+    "price": 3.0,
+    "role": "BAT"
+  },
+  {
+    "id": "l18",
+    "name": "Digvesh Singh Rathi",
+    "team": "LSG",
+    "price": 8.0,
+    "role": "BAT"
+  },
+  {
+    "id": "l19",
+    "name": "Prince Yadav",
+    "team": "LSG",
+    "price": 4.0,
+    "role": "BAT"
+  },
+  {
+    "id": "m01",
+    "name": "Rohit Sharma",
+    "team": "MI",
+    "price": 14.0,
+    "role": "BAT"
+  },
+  {
+    "id": "m02",
+    "name": "Suryakumar Yadav",
+    "team": "MI",
+    "price": 14.0,
+    "role": "BAT"
+  },
+  {
+    "id": "m03",
+    "name": "Jasprit Bumrah",
+    "team": "MI",
+    "price": 15.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "m04",
+    "name": "Hardik Pandya",
+    "team": "MI",
+    "price": 14.0,
+    "role": "AR"
+  },
+  {
+    "id": "m07",
+    "name": "Tilak Varma",
+    "team": "MI",
+    "price": 10.0,
+    "role": "BAT"
+  },
+  {
+    "id": "m08",
+    "name": "Naman Dhir",
+    "team": "MI",
+    "price": 5.0,
+    "role": "AR"
+  },
+  {
+    "id": "m10",
+    "name": "Trent Boult",
+    "team": "MI",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "m11",
+    "name": "Ryan Rickelton",
+    "team": "MI",
+    "price": 9.0,
+    "role": "WK"
+  },
+  {
+    "id": "m12",
+    "name": "Deepak Chahar",
+    "team": "MI",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "m13",
+    "name": "Will Jacks",
+    "team": "MI",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "m14",
+    "name": "Quinton de Kock",
+    "team": "MI",
+    "price": 11.0,
+    "role": "WK"
+  },
+  {
+    "id": "m16",
+    "name": "Shardul Thakur",
+    "team": "MI",
+    "price": 4.0,
+    "role": "AR"
+  },
+  {
+    "id": "m17",
+    "name": "Sherfane Rutherford",
+    "team": "MI",
+    "price": 4.0,
+    "role": "BAT"
+  },
+  {
+    "id": "m18",
+    "name": "Mayank Markande",
+    "team": "MI",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "m19",
+    "name": "Robin Minz",
+    "team": "MI",
+    "price": 3.0,
+    "role": "WK"
+  },
+  {
+    "id": "m20",
+    "name": "AM Ghazanfar",
+    "team": "MI",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "m21",
+    "name": "Danish Malewar",
+    "team": "MI",
+    "price": 2.0,
+    "role": "BAT"
+  },
+  {
+    "id": "p01",
+    "name": "Shreyas Iyer",
+    "team": "PBKS",
+    "price": 12.0,
+    "role": "BAT"
+  },
+  {
+    "id": "p02",
+    "name": "Arshdeep Singh",
+    "team": "PBKS",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "p03",
+    "name": "Prabhsimran Singh",
+    "team": "PBKS",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "p04",
+    "name": "Harpreet Brar",
+    "team": "PBKS",
+    "price": 4.0,
+    "role": "AR"
+  },
+  {
+    "id": "p05",
+    "name": "Shashank Singh",
+    "team": "PBKS",
+    "price": 5.5,
+    "role": "BAT"
+  },
+  {
+    "id": "p06",
+    "name": "Vyshak Vijaykumar",
+    "team": "PBKS",
+    "price": 2.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "p07",
+    "name": "Marco Jansen",
+    "team": "PBKS",
+    "price": 9.0,
+    "role": "AR"
+  },
+  {
+    "id": "p08",
+    "name": "Marcus Stoinis",
+    "team": "PBKS",
+    "price": 11.0,
+    "role": "AR"
+  },
+  {
+    "id": "p09",
+    "name": "Lockie Ferguson",
+    "team": "PBKS",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "p10",
+    "name": "Yuzvendra Chahal",
+    "team": "PBKS",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "p11",
+    "name": "Azmatullah Omarzai",
+    "team": "PBKS",
+    "price": 4.0,
+    "role": "AR"
+  },
+  {
+    "id": "p12",
+    "name": "Nehal Wadhera",
+    "team": "PBKS",
+    "price": 6.0,
+    "role": "AR"
+  },
+  {
+    "id": "p13",
+    "name": "Priyansh Arya",
+    "team": "PBKS",
+    "price": 3.8,
+    "role": "BAT"
+  },
+  {
+    "id": "p14",
+    "name": "Cooper Connolly",
+    "team": "PBKS",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "p15",
+    "name": "Ben Dwarshuis",
+    "team": "PBKS",
+    "price": 4.4,
+    "role": "BOWL"
+  },
+  {
+    "id": "p16",
+    "name": "Xavier Bartlett",
+    "team": "PBKS",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "p17",
+    "name": "Musheer Khan",
+    "team": "PBKS",
+    "price": 1.0,
+    "role": "AR"
+  },
+  {
+    "id": "r01",
+    "name": "Virat Kohli",
+    "team": "RCB",
+    "price": 15.0,
+    "role": "BAT"
+  },
+  {
+    "id": "r02",
+    "name": "Rajat Patidar",
+    "team": "RCB",
+    "price": 11.0,
+    "role": "BAT"
+  },
+  {
+    "id": "r03",
+    "name": "Phil Salt",
+    "team": "RCB",
+    "price": 11.0,
+    "role": "WK"
+  },
+  {
+    "id": "r04",
+    "name": "Jitesh Sharma",
+    "team": "RCB",
+    "price": 10.0,
+    "role": "WK"
+  },
+  {
+    "id": "r05",
+    "name": "Bhuvneshwar Kumar",
+    "team": "RCB",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r06",
+    "name": "Josh Hazlewood",
+    "team": "RCB",
+    "price": 12.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r07",
+    "name": "Venkatesh Iyer",
+    "team": "RCB",
+    "price": 9.0,
+    "role": "AR"
+  },
+  {
+    "id": "r08",
+    "name": "Rasikh Salam",
+    "team": "RCB",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r09",
+    "name": "Krunal Pandya",
+    "team": "RCB",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "r10",
+    "name": "Mangesh Yadav",
+    "team": "RCB",
+    "price": 6.0,
+    "role": "AR"
+  },
+  {
+    "id": "r11",
+    "name": "Yash Dayal",
+    "team": "RCB",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r12",
+    "name": "Tim David",
+    "team": "RCB",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "r13",
+    "name": "Jacob Duffy",
+    "team": "RCB",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r14",
+    "name": "Devdutt Padikkal",
+    "team": "RCB",
+    "price": 5.0,
+    "role": "BAT"
+  },
+  {
+    "id": "r15",
+    "name": "Jacob Bethell",
+    "team": "RCB",
+    "price": 5.0,
+    "role": "AR"
+  },
+  {
+    "id": "r16",
+    "name": "Romario Shepherd",
+    "team": "RCB",
+    "price": 6.0,
+    "role": "AR"
+  },
+  {
+    "id": "r17",
+    "name": "Nuwan Thushara",
+    "team": "RCB",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r18",
+    "name": "Suyash Sharma",
+    "team": "RCB",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "r19",
+    "name": "Jordan Cox",
+    "team": "RCB",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "r20",
+    "name": "Swapnil Singh",
+    "team": "RCB",
+    "price": 3.0,
+    "role": "AR"
+  },
+  {
+    "id": "r21",
+    "name": "Abhinandan Singh",
+    "team": "RCB",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr01",
+    "name": "Riyan Parag",
+    "team": "RR",
+    "price": 9.0,
+    "role": "AR"
+  },
+  {
+    "id": "rr02",
+    "name": "Yashasvi Jaiswal",
+    "team": "RR",
+    "price": 14.0,
+    "role": "BAT"
+  },
+  {
+    "id": "rr03",
+    "name": "Adam Milne",
+    "team": "RR",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr04",
+    "name": "Shimron Hetmyer",
+    "team": "RR",
+    "price": 10.0,
+    "role": "BAT"
+  },
+  {
+    "id": "rr05",
+    "name": "Tushar Deshpande",
+    "team": "RR",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr06",
+    "name": "Dhruv Jurel",
+    "team": "RR",
+    "price": 7.0,
+    "role": "WK"
+  },
+  {
+    "id": "rr07",
+    "name": "Sandeep Sharma",
+    "team": "RR",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr08",
+    "name": "Jofra Archer",
+    "team": "RR",
+    "price": 10.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr09",
+    "name": "Ravi Bishnoi",
+    "team": "RR",
+    "price": 9.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr10",
+    "name": "Avesh Khan",
+    "team": "RR",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr11",
+    "name": "Vaibhav Sooryavanshi",
+    "team": "RR",
+    "price": 9.0,
+    "role": "BAT"
+  },
+  {
+    "id": "rr12",
+    "name": "Nandre Burger",
+    "team": "RR",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr13",
+    "name": "Tom Kohler-Cadmore",
+    "team": "RR",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "rr14",
+    "name": "Sam Curran",
+    "team": "RR",
+    "price": 2.0,
+    "role": "AR"
+  },
+  {
+    "id": "rr15",
+    "name": "Donovan Ferreira",
+    "team": "RR",
+    "price": 3.0,
+    "role": "AR"
+  },
+  {
+    "id": "rr16",
+    "name": "Kunal Rathore",
+    "team": "RR",
+    "price": 3.0,
+    "role": "BAT"
+  },
+  {
+    "id": "rr17",
+    "name": "Abid Mushtaq",
+    "team": "RR",
+    "price": 3.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "rr18",
+    "name": "Tanush Kotian",
+    "team": "RR",
+    "price": 3.0,
+    "role": "AR"
+  },
+  {
+    "id": "rr19",
+    "name": "Ravindra Jadeja",
+    "team": "RR",
+    "price": 10.0,
+    "role": "AR"
+  },
+  {
+    "id": "s01",
+    "name": "Heinrich Klaasen",
+    "team": "SRH",
+    "price": 13.0,
+    "role": "WK"
+  },
+  {
+    "id": "s02",
+    "name": "Pat Cummins",
+    "team": "SRH",
+    "price": 13.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s03",
+    "name": "Travis Head",
+    "team": "SRH",
+    "price": 13.0,
+    "role": "BAT"
+  },
+  {
+    "id": "s04",
+    "name": "Ishan Kishan",
+    "team": "SRH",
+    "price": 12.0,
+    "role": "WK"
+  },
+  {
+    "id": "s05",
+    "name": "Abhishek Sharma",
+    "team": "SRH",
+    "price": 12.0,
+    "role": "AR"
+  },
+  {
+    "id": "s06",
+    "name": "Liam Livingstone",
+    "team": "SRH",
+    "price": 10.0,
+    "role": "AR"
+  },
+  {
+    "id": "s07",
+    "name": "Harshal Patel",
+    "team": "SRH",
+    "price": 9.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s08",
+    "name": "Nitish Kumar Reddy",
+    "team": "SRH",
+    "price": 8.0,
+    "role": "AR"
+  },
+  {
+    "id": "s09",
+    "name": "Shivam Mavi",
+    "team": "SRH",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s10",
+    "name": "Dilshan Madushanka",
+    "team": "SRH",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s11",
+    "name": "David Payne",
+    "team": "SRH",
+    "price": 7.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s12",
+    "name": "Kamindu Mendis",
+    "team": "SRH",
+    "price": 6.0,
+    "role": "AR"
+  },
+  {
+    "id": "s13",
+    "name": "Jaydev Unadkat",
+    "team": "SRH",
+    "price": 5.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s14",
+    "name": "Harsh Dubey",
+    "team": "SRH",
+    "price": 5.0,
+    "role": "AR"
+  },
+  {
+    "id": "s15",
+    "name": "Eshan Malinga",
+    "team": "SRH",
+    "price": 6.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s16",
+    "name": "Salil Arora",
+    "team": "SRH",
+    "price": 4.0,
+    "role": "WK"
+  },
+  {
+    "id": "s17",
+    "name": "Aniket Verma",
+    "team": "SRH",
+    "price": 3.0,
+    "role": "BAT"
+  },
+  {
+    "id": "s18",
+    "name": "Smaran Ravichandran",
+    "team": "SRH",
+    "price": 3.0,
+    "role": "BAT"
+  },
+  {
+    "id": "s19",
+    "name": "Zeeshan Ansari",
+    "team": "SRH",
+    "price": 4.0,
+    "role": "BOWL"
+  },
+  {
+    "id": "s20",
+    "name": "Shivang Kumar",
+    "team": "SRH",
+    "price": 3.0,
+    "role": "AR"
+  },
+  {
+    "id": "s21",
+    "name": "Sakib Hussain",
+    "team": "SRH",
+    "price": 3.0,
+    "role": "BOWL"
+  }
+]

@@ -11,6 +11,14 @@ backend context file should map its work back to one of these capabilities.
 
 ---
 
+> **Multi-competition update (Phases 4-5).** New capabilities: **switch
+> competition** (header dropdown; all data re-scopes to the selection); view
+> the **🏆 Championship tally** (titles per member across competitions) on the
+> Leaderboard tab; and an Admin **"Competitions"** card to create / activate /
+> close & crown competitions. Every existing capability below is now scoped to
+> the selected competition via `?comp=`. See
+> [multi_competition.md](multi_competition.md).
+
 ## 1. Identity
 
 > **Phase 12 — Passcodes.** Identity now requires a 4-digit passcode. The

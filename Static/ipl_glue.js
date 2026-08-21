@@ -143,6 +143,15 @@
         headers["Authorization"] = "Bearer " + t;
       }
     }
+    // Multi-competition: attach ?comp=<slug> to /api/* calls so reads/writes
+    // target the selected competition. Harmless on endpoints that ignore it;
+    // empty store => server default (the active competition).
+    try {
+      var _cmp = (window.IplComp && IplComp.get && IplComp.get()) || "";
+      if (_cmp && url.indexOf("/api/") === 0 && url.indexOf("comp=") === -1) {
+        url += (url.indexOf("?") === -1 ? "?" : "&") + "comp=" + encodeURIComponent(_cmp);
+      }
+    } catch (e) {}
     return fetch(url, Object.assign({}, options, { headers: headers }))
       .then(function (res) {
         if (res.status === 304) return null;
@@ -170,6 +179,16 @@
     getToken:   function () { try { return localStorage.getItem(TOK_KEY) || null; } catch (e) { return null; } },
     setToken:   function (t) { try { if (t) localStorage.setItem(TOK_KEY, t); } catch (e) {} },
     clearToken: function ()  { try { localStorage.removeItem(TOK_KEY); } catch (e) {} },
+  };
+
+  // ── ACTIVE COMPETITION STORE (multi-competition) ───────────────────────────
+  // Which competition the UI is viewing. Persisted in localStorage and attached
+  // as ?comp=<slug> to every /api/* call by _fetchJson. Empty => server default.
+  var COMP_KEY = "ipl_active_comp";
+  var IplComp = {
+    get:   function ()  { try { return localStorage.getItem(COMP_KEY) || ""; } catch (e) { return ""; } },
+    set:   function (s) { try { if (s) localStorage.setItem(COMP_KEY, s); } catch (e) {} },
+    clear: function ()  { try { localStorage.removeItem(COMP_KEY); } catch (e) {} },
   };
 
   // ── ROLLOVER SCHEDULER ──────────────────────────────────────────────────
@@ -229,6 +248,7 @@
     },
 
     getPlayers:         function () { return _fetchJson("/api/players"); },
+    getCompetitions:    function () { return _fetchJson("/api/competitions"); },
     getCurrentWeek:     function () { return _fetchJson("/api/current-week"); },
     getHistory:         function (name) { return _fetchJson("/api/history/" + encodeURIComponent(name)); },
 
@@ -289,6 +309,7 @@
       }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
     },
     adminListMembers: function () { return _fetchJson("/api/admin/members"); },
+    adminCompetition: function (body) { return _fetchJson("/api/admin/competition", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); },
     adminResetPasscode: function (targetUsername) {
       return _fetchJson("/api/admin/passcode/reset", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -400,6 +421,7 @@
 
   window.IplApi               = IplApi;
   window.IplAuth              = IplAuth;
+  window.IplComp              = IplComp;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
   window.IplConfig            = IplConfig;
   window.IplRollover          = IplRollover;

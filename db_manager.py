@@ -60,17 +60,41 @@ _SCHEMA = """
 PRAGMA journal_mode  = WAL;
 PRAGMA foreign_keys  = ON;
 
+CREATE TABLE IF NOT EXISTS competitions (
+    slug             TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    format           TEXT NOT NULL DEFAULT 'T20' CHECK (format IN ('T20','ODI')),
+    status           TEXT NOT NULL DEFAULT 'upcoming'
+                       CHECK (status IN ('upcoming','active','completed')),
+    budget_total     REAL    NOT NULL DEFAULT 100.0,
+    xi_size          INTEGER NOT NULL DEFAULT 11,
+    max_weeks        INTEGER NOT NULL DEFAULT 10,
+    week1_anchor_utc TEXT    NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',
+    deadline_hour    INTEGER NOT NULL DEFAULT 14,
+    deadline_min     INTEGER NOT NULL DEFAULT 0,
+    series_id        TEXT,
+    series_slug      TEXT,
+    year             INTEGER,
+    valid_teams_json TEXT    NOT NULL DEFAULT '[]',
+    champion         TEXT,
+    closed_at        TEXT,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS players (
-    id         TEXT    PRIMARY KEY,
+    competition_id TEXT    NOT NULL DEFAULT 'ipl_2026',
+    id         TEXT    NOT NULL,
     name       TEXT    NOT NULL,
     team       TEXT    NOT NULL,
     price      REAL    NOT NULL DEFAULT 0 CHECK (price >= 0),
     role       TEXT    NOT NULL DEFAULT 'BAT' CHECK (role IN ('BAT','BOWL','AR','WK')),
     season_pts INTEGER NOT NULL DEFAULT 0,
-    points     INTEGER NOT NULL DEFAULT 0
+    points     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (competition_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS matches (
+    competition_id TEXT NOT NULL DEFAULT 'ipl_2026',
     id            TEXT PRIMARY KEY,
     week_no       INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
     title         TEXT NOT NULL DEFAULT '',
@@ -83,6 +107,7 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 
 CREATE TABLE IF NOT EXISTS user_selections (
+    competition_id  TEXT    NOT NULL DEFAULT 'ipl_2026',
     display_name    TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
     week_no         INTEGER NOT NULL DEFAULT 1 CHECK (week_no >= 1),
     tw_team_json    TEXT    NOT NULL DEFAULT '[]',
@@ -93,10 +118,11 @@ CREATE TABLE IF NOT EXISTS user_selections (
     nw_vc_id        TEXT,
     week_pts        INTEGER NOT NULL DEFAULT 0,
     points_per_match TEXT   NOT NULL DEFAULT '{}',
-    PRIMARY KEY (display_name, week_no)
+    PRIMARY KEY (competition_id, display_name, week_no)
 );
 
 CREATE TABLE IF NOT EXISTS match_scores (
+    competition_id TEXT    NOT NULL DEFAULT 'ipl_2026',
     match_id       TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     player_id      TEXT    NOT NULL,
     runs           INTEGER NOT NULL DEFAULT 0 CHECK (runs >= 0),
@@ -120,6 +146,7 @@ CREATE TABLE IF NOT EXISTS match_scores (
 );
 
 CREATE TABLE IF NOT EXISTS player_match_points (
+    competition_id TEXT    NOT NULL DEFAULT 'ipl_2026',
     match_id      TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     player_id     TEXT    NOT NULL,
     week_no       INTEGER NOT NULL,
@@ -131,6 +158,7 @@ CREATE TABLE IF NOT EXISTS player_match_points (
 );
 
 CREATE TABLE IF NOT EXISTS user_match_points (
+    competition_id TEXT    NOT NULL DEFAULT 'ipl_2026',
     display_name TEXT    NOT NULL CHECK (length(display_name) BETWEEN 1 AND 30),
     week_no      INTEGER NOT NULL,
     match_id     TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
@@ -172,6 +200,10 @@ CREATE INDEX IF NOT EXISTS idx_pmp_match_p ON player_match_points (match_id, pla
 CREATE INDEX IF NOT EXISTS idx_ump_name    ON user_match_points (display_name);
 CREATE INDEX IF NOT EXISTS idx_ump_week    ON user_match_points (week_no);
 CREATE INDEX IF NOT EXISTS idx_sess_user   ON sessions (username);
+CREATE INDEX IF NOT EXISTS idx_matches_comp ON matches (competition_id);
+CREATE INDEX IF NOT EXISTS idx_ms_comp      ON match_scores (competition_id);
+CREATE INDEX IF NOT EXISTS idx_pmp_comp     ON player_match_points (competition_id);
+CREATE INDEX IF NOT EXISTS idx_ump_comp     ON user_match_points (competition_id);
 """
 
 
@@ -204,7 +236,8 @@ user_totals AS (
     SELECT display_name,
            COALESCE(SUM(week_pts), 0) AS total_pts
     FROM   user_selections
-    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+    WHERE  competition_id = :comp
+      AND  (CAST(:week_no AS INTEGER) IS NULL
             OR week_no = CAST(:week_no AS INTEGER))
     GROUP  BY display_name
 ),
@@ -214,7 +247,8 @@ match_counts AS (
     SELECT display_name,
            COUNT(DISTINCT CASE WHEN pts > 0 THEN match_id END) AS matches_counted
     FROM   user_match_points
-    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+    WHERE  competition_id = :comp
+      AND  (CAST(:week_no AS INTEGER) IS NULL
             OR week_no = CAST(:week_no AS INTEGER))
     GROUP  BY display_name
 ),
@@ -227,7 +261,9 @@ scored_points AS (
     INNER JOIN player_match_points pmp
            ON  pmp.player_id = je.value
            AND pmp.week_no   = us.week_no
-    WHERE  (CAST(:week_no AS INTEGER) IS NULL
+           AND pmp.competition_id = us.competition_id
+    WHERE  us.competition_id = :comp
+      AND  (CAST(:week_no AS INTEGER) IS NULL
             OR us.week_no = CAST(:week_no AS INTEGER))
 ),
 mvp_data AS (
@@ -266,7 +302,7 @@ SELECT r.rank, r.display_name, r.total_pts, r.matches_counted,
        lb.league_avg, lb.top_score, lb.member_count
 FROM  ranked r
 CROSS JOIN league_benchmarks lb
-LEFT  JOIN players p ON p.id = r.mvp_player_id
+LEFT  JOIN players p ON p.id = r.mvp_player_id AND p.competition_id = :comp
 ORDER BY r.rank, r.display_name
 """
 
@@ -277,7 +313,7 @@ def _jloads(s, default):
     except: return default
 
 
-def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
+def _upsert_match(con: sqlite3.Connection, m: dict, competition_id: str = "ipl_2026") -> None:
     mid = m.get("id")
     if not mid: return
     raw_copy = {k: v for k, v in m.items() if k != "scores"}
@@ -292,21 +328,23 @@ def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
             title = f"{teams[0]} vs {teams[1]}, {title}"
     status = m.get("status", "upcoming")
     con.execute("""
-        INSERT INTO matches (id,week_no,title,teams_json,date_label,status,raw_json)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO matches (competition_id,id,week_no,title,teams_json,date_label,status,raw_json)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
+            competition_id=excluded.competition_id,
             week_no=excluded.week_no, title=excluded.title, teams_json=excluded.teams_json,
             date_label=excluded.date_label, status=excluded.status, raw_json=excluded.raw_json
-    """, (mid, wk, title, json.dumps(teams), date, status, json.dumps(raw_copy)))
+    """, (competition_id, mid, wk, title, json.dumps(teams), date, status, json.dumps(raw_copy)))
     for pid, sc in m.get("scores", {}).items():
         if not isinstance(sc, dict): continue
         con.execute("""
             INSERT INTO match_scores (
-                match_id,player_id,runs,balls,fours,sixes,got_out,duck,
+                competition_id,match_id,player_id,runs,balls,fours,sixes,got_out,duck,
                 overs,runs_conceded,wickets,maidens,lbw_bowled,
                 catches,stumpings,run_out_direct,run_out_assist,played,raw_score_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(match_id,player_id) DO UPDATE SET
+                competition_id=excluded.competition_id,
                 runs=excluded.runs, balls=excluded.balls, fours=excluded.fours,
                 sixes=excluded.sixes, got_out=excluded.got_out, duck=excluded.duck,
                 overs=excluded.overs, runs_conceded=excluded.runs_conceded,
@@ -316,7 +354,7 @@ def _upsert_match(con: sqlite3.Connection, m: dict) -> None:
                 run_out_assist=excluded.run_out_assist, played=excluded.played,
                 raw_score_json=excluded.raw_score_json
         """, (
-            mid, pid,
+            competition_id, mid, pid,
             max(0,int(sc.get("runs",0))), max(0,int(sc.get("balls",0))),
             max(0,int(sc.get("fours",0))), max(0,int(sc.get("sixes",0))),
             1 if sc.get("gotOut",sc.get("got_out",False)) else 0,
@@ -417,6 +455,34 @@ class DatabaseManager:
                 pass
         con.close()
 
+    # ── Competition resolution ────────────────────────────────────────────────
+    # The "active" competition is the default target when a caller does not
+    # name one (back-compat for routes/scripts written before competition_id).
+    # Normally exactly one competition has status='active'.
+    DEFAULT_COMP = "ipl_2026"
+
+    def _active_slug(self) -> str:
+        try:
+            with self._read() as con:
+                r = con.execute(
+                    "SELECT slug FROM competitions WHERE status='active' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                if r:
+                    return r["slug"]
+                r = con.execute(
+                    "SELECT slug FROM competitions ORDER BY created_at LIMIT 1"
+                ).fetchone()
+                if r:
+                    return r["slug"]
+        except Exception:
+            pass
+        return self.DEFAULT_COMP
+
+    def _cid(self, competition_id):
+        """Resolve an optional competition_id to the active competition."""
+        return competition_id or self._active_slug()
+
     # ── Meta ──────────────────────────────────────────────────────────────────
 
     def get_meta(self, key, default=""):
@@ -427,6 +493,20 @@ class DatabaseManager:
     def set_meta(self, key, value):
         with self._write() as con:
             con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, value))
+
+    def get_meta_comp(self, base_key, competition_id, default=""):
+        """Per-competition meta read with legacy global-key fallback.
+        Writes are namespaced '<base_key>:<slug>'; older single-competition
+        DBs stored the bare key, so fall back to it when the scoped key is
+        absent (true until the first namespaced write for that competition)."""
+        cid = self._cid(competition_id)
+        v = self.get_meta(f"{base_key}:{cid}", None)
+        if v is None:
+            v = self.get_meta(base_key, default)
+        return v
+
+    def set_meta_comp(self, base_key, competition_id, value):
+        self.set_meta(f"{base_key}:{self._cid(competition_id)}", value)
 
     def checkpoint(self) -> None:
         """
@@ -457,7 +537,7 @@ class DatabaseManager:
 
     # ── State ─────────────────────────────────────────────────────────────────
 
-    def get_state(self) -> dict:
+    def get_state(self, competition_id=None) -> dict:
         """
         Returns the full app state consumed by ipl_glue.js on load.
 
@@ -466,14 +546,17 @@ class DatabaseManager:
         scouting badges without an extra /api/players call.
         season_pts = raw base score (no cap/vc multiplier).
         """
+        cid = self._cid(competition_id)
         with self._read() as con:
             rows = con.execute("""
                 SELECT display_name, tw_team_json, tw_cap_id, tw_vc_id,
                        nw_team_json, nw_cap_id, nw_vc_id
                 FROM user_selections
-                WHERE week_no = (SELECT MAX(week_no) FROM user_selections u2
-                                 WHERE u2.display_name = user_selections.display_name)
-            """).fetchall()
+                WHERE competition_id = ?
+                  AND week_no = (SELECT MAX(week_no) FROM user_selections u2
+                                 WHERE u2.display_name = user_selections.display_name
+                                   AND u2.competition_id = user_selections.competition_id)
+            """, (cid,)).fetchall()
             members = {}
             for r in rows:
                 members[r["display_name"]] = {
@@ -482,7 +565,8 @@ class DatabaseManager:
                 }
             match_rows = con.execute(
                 "SELECT id,week_no,title,teams_json,date_label,status,raw_json "
-                "FROM matches ORDER BY week_no,id"
+                "FROM matches WHERE competition_id=? ORDER BY week_no,id",
+                (cid,),
             ).fetchall()
             matches = []
             for mr in match_rows:
@@ -493,8 +577,9 @@ class DatabaseManager:
                 for k, v in base.items():
                     if k not in entry: entry[k] = v
                 score_rows = con.execute(
-                    "SELECT player_id,raw_score_json FROM match_scores WHERE match_id=?",
-                    (mr["id"],),
+                    "SELECT player_id,raw_score_json FROM match_scores "
+                    "WHERE match_id=? AND competition_id=?",
+                    (mr["id"], cid),
                 ).fetchall()
                 if score_rows:
                     entry["scores"] = {sr["player_id"]: _jloads(sr["raw_score_json"],{}) for sr in score_rows}
@@ -503,7 +588,7 @@ class DatabaseManager:
             # Phase 8: scouting lookup — season_pts survives restarts
             # (not cleared by _rebuild_scores_and_points).
             player_pts_rows = con.execute(
-                "SELECT id, season_pts FROM players"
+                "SELECT id, season_pts FROM players WHERE competition_id=?", (cid,)
             ).fetchall()
             player_pts = {r["id"]: r["season_pts"] for r in player_pts_rows}
 
@@ -511,13 +596,15 @@ class DatabaseManager:
             "members":        members,
             "matches":        matches,
             "player_pts":     player_pts,
-            "_saved":         self.get_meta("_saved", "never"),
-            "_last_rollover": self.get_meta("_last_rollover", ""),
+            "_saved":         self.get_meta_comp("_saved", cid, "never"),
+            "_last_rollover": self.get_meta_comp("_last_rollover", cid, ""),
         }
 
-    def upsert_member(self, name: str, data: dict) -> None:
+    def upsert_member(self, name: str, data: dict, competition_id=None) -> None:
+        cid = self._cid(competition_id)
         with self._write() as con:
-            row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections").fetchone()
+            row = con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections "
+                              "WHERE competition_id=?", (cid,)).fetchone()
             current_week = row["wn"] if row else 1
             tw = data.get("this_week") or {}
             nw = data.get("next_week") or {}
@@ -525,40 +612,45 @@ class DatabaseManager:
                 tw = {"team": data.get("team",[]), "cap": data.get("cap"), "vc": data.get("vc")}
                 nw = dict(tw)
             con.execute("""
-                INSERT INTO user_selections (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
-                VALUES (?,?,?,?,?,?,?,?)
-                ON CONFLICT(display_name,week_no) DO UPDATE SET
+                INSERT INTO user_selections (competition_id,display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(competition_id,display_name,week_no) DO UPDATE SET
                     tw_team_json=excluded.tw_team_json, tw_cap_id=excluded.tw_cap_id, tw_vc_id=excluded.tw_vc_id,
                     nw_team_json=excluded.nw_team_json, nw_cap_id=excluded.nw_cap_id, nw_vc_id=excluded.nw_vc_id
-            """, (name, current_week,
+            """, (cid, name, current_week,
                   json.dumps(tw.get("team",[]) or []), tw.get("cap"), tw.get("vc"),
                   json.dumps(nw.get("team",[]) or []), nw.get("cap"), nw.get("vc")))
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
-                        (datetime.now(timezone.utc).isoformat(),))
+            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                        (f"_saved:{cid}", datetime.now(timezone.utc).isoformat()))
 
-    def upsert_match(self, m: dict) -> None:
+    def upsert_match(self, m: dict, competition_id=None) -> None:
+        cid = self._cid(competition_id)
         mid = m.get("id")
         with self._write() as con:
-            _upsert_match(con, m)
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)",
-                        (datetime.now(timezone.utc).isoformat(),))
+            _upsert_match(con, m, cid)
+            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                        (f"_saved:{cid}", datetime.now(timezone.utc).isoformat()))
         if mid and m.get("scores"):
-            self.recalculate_points(match_id=mid)
+            self.recalculate_points(match_id=mid, competition_id=cid)
 
     # ── Points Calculation ────────────────────────────────────────────────────
 
-    def recalculate_points(self, match_id=None) -> int:
+    def recalculate_points(self, match_id=None, competition_id=None) -> int:
+        cid = self._cid(competition_id)
         with self._read() as con:
             if match_id:
                 score_rows = con.execute(
                     "SELECT ms.match_id, ms.player_id, ms.raw_score_json, m.week_no "
-                    "FROM match_scores ms JOIN matches m ON m.id=ms.match_id WHERE ms.match_id=?",
-                    (match_id,),
+                    "FROM match_scores ms JOIN matches m ON m.id=ms.match_id "
+                    "WHERE ms.match_id=? AND ms.competition_id=?",
+                    (match_id, cid),
                 ).fetchall()
             else:
                 score_rows = con.execute(
                     "SELECT ms.match_id, ms.player_id, ms.raw_score_json, m.week_no "
-                    "FROM match_scores ms JOIN matches m ON m.id=ms.match_id"
+                    "FROM match_scores ms JOIN matches m ON m.id=ms.match_id "
+                    "WHERE ms.competition_id=?",
+                    (cid,),
                 ).fetchall()
         if not score_rows: return 0
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -568,46 +660,53 @@ class DatabaseManager:
                 sc       = _jloads(row["raw_score_json"], {})
                 base_pts = calc_pts(sc)
                 con.execute("""
-                    INSERT INTO player_match_points (match_id,player_id,week_no,base_pts,multiplier,final_pts,calculated_at)
-                    VALUES (?,?,?,?,1.0,?,?)
+                    INSERT INTO player_match_points (competition_id,match_id,player_id,week_no,base_pts,multiplier,final_pts,calculated_at)
+                    VALUES (?,?,?,?,?,1.0,?,?)
                     ON CONFLICT(match_id,player_id) DO UPDATE SET
+                        competition_id=excluded.competition_id,
                         week_no=excluded.week_no, base_pts=excluded.base_pts,
                         final_pts=excluded.final_pts, calculated_at=excluded.calculated_at
-                """, (row["match_id"], row["player_id"], row["week_no"],
+                """, (cid, row["match_id"], row["player_id"], row["week_no"],
                        base_pts, float(base_pts), now_iso))
                 rows_written += 1
         return rows_written
 
-    def update_player_season_pts(self) -> int:
+    def update_player_season_pts(self, competition_id=None) -> int:
         """Set players.season_pts = SUM(base_pts) from player_match_points."""
+        cid = self._cid(competition_id)
         with self._write() as con:
-            con.execute("UPDATE players SET season_pts = 0")
+            con.execute("UPDATE players SET season_pts = 0 WHERE competition_id=?", (cid,))
             con.execute("""
                 UPDATE players SET season_pts = (
                     SELECT COALESCE(SUM(pmp.base_pts), 0)
                     FROM player_match_points pmp
                     WHERE pmp.player_id = players.id
-                )
-            """)
+                      AND pmp.competition_id = players.competition_id
+                ) WHERE competition_id=?
+            """, (cid,))
         with self._read() as con:
-            row = con.execute("SELECT COUNT(*) FROM players WHERE season_pts > 0").fetchone()
+            row = con.execute("SELECT COUNT(*) FROM players WHERE season_pts > 0 AND competition_id=?",
+                              (cid,)).fetchone()
             return row[0] if row else 0
 
-    def update_week_points(self) -> int:
+    def update_week_points(self, competition_id=None) -> int:
         """Recompute week_pts + points_per_match + user_match_points for all rows."""
+        cid = self._cid(competition_id)
         with self._read() as con:
             sels = con.execute("""
                 SELECT display_name, week_no, tw_team_json, tw_cap_id, tw_vc_id
-                FROM user_selections
-            """).fetchall()
+                FROM user_selections WHERE competition_id=?
+            """, (cid,)).fetchall()
             pmp_map = {}
             for r in con.execute(
-                "SELECT player_id, match_id, base_pts FROM player_match_points"
+                "SELECT player_id, match_id, base_pts FROM player_match_points WHERE competition_id=?",
+                (cid,)
             ).fetchall():
                 pmp_map[(r["player_id"], r["match_id"])] = r["base_pts"]
             week_matches: dict = {}
             for r in con.execute(
-                "SELECT id, week_no FROM matches WHERE LOWER(status)='completed'"
+                "SELECT id, week_no FROM matches WHERE LOWER(status)='completed' AND competition_id=?",
+                (cid,)
             ).fetchall():
                 week_matches.setdefault(r["week_no"], []).append(r["id"])
 
@@ -633,73 +732,80 @@ class DatabaseManager:
         with self._write() as con:
             for name, wk, mid, pts in ump_rows:
                 con.execute("""
-                    INSERT INTO user_match_points (display_name, week_no, match_id, pts)
-                    VALUES (?,?,?,?)
+                    INSERT INTO user_match_points (competition_id, display_name, week_no, match_id, pts)
+                    VALUES (?,?,?,?,?)
                     ON CONFLICT(display_name, match_id) DO UPDATE SET
+                        competition_id=excluded.competition_id,
                         pts=excluded.pts, week_no=excluded.week_no
-                """, (name, wk, mid, pts))
+                """, (cid, name, wk, mid, pts))
             for (name, wk), pts in wk_totals.items():
                 ppm_json = json.dumps(ppm_blobs.get((name, wk), {}))
                 con.execute(
                     "UPDATE user_selections SET week_pts=?, points_per_match=? "
-                    "WHERE display_name=? AND week_no=?",
-                    (pts, ppm_json, name, wk)
+                    "WHERE competition_id=? AND display_name=? AND week_no=?",
+                    (pts, ppm_json, cid, name, wk)
                 )
                 updated += 1
         return updated
 
     # ── Rollover DAO ──────────────────────────────────────────────────────────
 
-    def get_users_and_max_weeks(self) -> list:
+    def get_users_and_max_weeks(self, competition_id=None) -> list:
+        cid = self._cid(competition_id)
         with self._read() as con:
             rows = con.execute(
                 "SELECT display_name, MAX(week_no) AS cur_wk "
-                "FROM user_selections GROUP BY display_name"
+                "FROM user_selections WHERE competition_id=? GROUP BY display_name",
+                (cid,)
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_selection_row(self, display_name: str, week_no: int) -> dict | None:
+    def get_selection_row(self, display_name: str, week_no: int, competition_id=None) -> dict | None:
+        cid = self._cid(competition_id)
         with self._read() as con:
             row = con.execute(
                 "SELECT tw_team_json, tw_cap_id, tw_vc_id, "
                 "nw_team_json, nw_cap_id, nw_vc_id "
-                "FROM user_selections WHERE display_name=? AND week_no=?",
-                (display_name, week_no),
+                "FROM user_selections WHERE competition_id=? AND display_name=? AND week_no=?",
+                (cid, display_name, week_no),
             ).fetchone()
         return dict(row) if row else None
 
     def insert_rollover_week(self, display_name: str, new_week_no: int,
-                              team_json: str, cap_id, vc_id) -> None:
+                              team_json: str, cap_id, vc_id, competition_id=None) -> None:
+        cid = self._cid(competition_id)
         with self._write() as con:
             con.execute("""
                 INSERT OR IGNORE INTO user_selections
-                    (display_name, week_no,
+                    (competition_id, display_name, week_no,
                      tw_team_json, tw_cap_id, tw_vc_id,
                      nw_team_json, nw_cap_id, nw_vc_id)
-                VALUES (?,?, ?,?,?, ?,?,?)
-            """, (display_name, new_week_no,
+                VALUES (?,?,?, ?,?,?, ?,?,?)
+            """, (cid, display_name, new_week_no,
                   team_json, cap_id, vc_id,
                   team_json, cap_id, vc_id))
 
-    def set_last_rollover(self, iso: str) -> None:
+    def set_last_rollover(self, iso: str, competition_id=None) -> None:
+        cid = self._cid(competition_id)
         with self._write() as con:
             con.execute(
-                "INSERT OR REPLACE INTO meta (key,value) VALUES ('_last_rollover',?)",
-                (iso,)
+                "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                (f"_last_rollover:{cid}", iso)
             )
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
-    def rebuild_scores_and_points(self, json_dir=None) -> dict:
+    def rebuild_scores_and_points(self, json_dir=None, competition_id=None) -> dict:
+        cid = self._cid(competition_id)
         if json_dir is None:
-            json_dir = Path(self._path).parent / "matches"
+            json_dir = Path(self._path).parent / cid / "matches"
         json_dir = Path(json_dir)
         with self._write() as con:
-            con.execute("DELETE FROM player_match_points")
-            con.execute("DELETE FROM match_scores")
-            con.execute("DELETE FROM user_match_points")
-            con.execute("UPDATE user_selections SET week_pts = 0, points_per_match = '{}'")
-            con.execute("UPDATE players SET season_pts = 0, points = 0")
+            con.execute("DELETE FROM player_match_points WHERE competition_id=?", (cid,))
+            con.execute("DELETE FROM match_scores WHERE competition_id=?", (cid,))
+            con.execute("DELETE FROM user_match_points WHERE competition_id=?", (cid,))
+            con.execute("UPDATE user_selections SET week_pts = 0, points_per_match = '{}' WHERE competition_id=?", (cid,))
+            con.execute("UPDATE players SET season_pts = 0, points = 0 WHERE competition_id=?", (cid,))
         files_ingested = 0
         if json_dir.exists():
             files = sorted(
@@ -711,16 +817,19 @@ class DatabaseManager:
                     try:
                         with open(fp) as fh: match_data = json.load(fh)
                         if "id" not in match_data: continue
-                        _upsert_match(con, match_data); files_ingested += 1
+                        _upsert_match(con, match_data, cid); files_ingested += 1
                     except Exception as e:
                         print(f"  [rebuild] skip {fp.name}: {e}")
-        pmp_rows      = self.recalculate_points()
-        week_pts_rows = self.update_week_points()
-        player_rows   = self.update_player_season_pts()
+        pmp_rows      = self.recalculate_points(competition_id=cid)
+        week_pts_rows = self.update_week_points(competition_id=cid)
+        player_rows   = self.update_player_season_pts(competition_id=cid)
         return {"files_ingested": files_ingested, "pmp_rows": pmp_rows,
                 "week_pts_rows": week_pts_rows, "player_pts_rows": player_rows}
 
-    def hydrate_from_json(self, json_dir="data/matches") -> int:
+    def hydrate_from_json(self, json_dir=None, competition_id=None) -> int:
+        cid = self._cid(competition_id)
+        if json_dir is None:
+            json_dir = Path(self._path).parent / cid / "matches"
         json_dir = Path(json_dir)
         if not json_dir.exists(): return 0
         files = sorted(
@@ -733,36 +842,43 @@ class DatabaseManager:
             for fp in files:
                 try:
                     with open(fp) as fh: match_data = json.load(fh)
-                    if "id" in match_data: _upsert_match(con, match_data); count += 1
+                    if "id" in match_data: _upsert_match(con, match_data, cid); count += 1
                 except Exception as e:
                     print(f"  [hydrate] skip {fp.name}: {e}")
         if count:
-            self.recalculate_points()
+            self.recalculate_points(competition_id=cid)
             print(f"  [hydrate] Ingested {count} matches from {json_dir}")
         return count
 
-    def ping_stats(self) -> dict:
+    def ping_stats(self, competition_id=None) -> dict:
+        cid = self._cid(competition_id)
         with self._read() as con:
             member_count = con.execute(
-                "SELECT COUNT(DISTINCT display_name) AS n FROM user_selections"
+                "SELECT COUNT(DISTINCT display_name) AS n FROM user_selections WHERE competition_id=?",
+                (cid,)
             ).fetchone()["n"]
             scored_count = con.execute(
-                "SELECT COUNT(DISTINCT match_id) AS n FROM match_scores WHERE played=1"
+                "SELECT COUNT(DISTINCT match_id) AS n FROM match_scores WHERE played=1 AND competition_id=?",
+                (cid,)
             ).fetchone()["n"]
         return {"members": member_count, "matches_scored": scored_count,
-                "saved": self.get_meta("_saved","never")}
+                "saved": self.get_meta_comp("_saved", cid, "never")}
 
-    def get_leaderboard(self, week_no=None) -> dict:
+    def get_leaderboard(self, week_no=None, competition_id=None) -> dict:
+        cid = self._cid(competition_id)
         with self._read() as con:
-            rows = con.execute(_LEADERBOARD_SQL, {"week_no": week_no}).fetchall()
+            rows = con.execute(_LEADERBOARD_SQL, {"week_no": week_no, "comp": cid}).fetchall()
             if week_no is None:
                 wk_rows = con.execute(
-                    "SELECT display_name, week_no, week_pts FROM user_selections ORDER BY week_no"
+                    "SELECT display_name, week_no, week_pts FROM user_selections "
+                    "WHERE competition_id=? ORDER BY week_no",
+                    (cid,)
                 ).fetchall()
             else:
                 wk_rows = con.execute(
-                    "SELECT display_name, week_no, week_pts FROM user_selections WHERE week_no=?",
-                    (week_no,)
+                    "SELECT display_name, week_no, week_pts FROM user_selections "
+                    "WHERE competition_id=? AND week_no=?",
+                    (cid, week_no)
                 ).fetchall()
             weekly = {}
             for wr in wk_rows:
@@ -790,32 +906,37 @@ class DatabaseManager:
                 "member_count": first["member_count"], "meta": meta,
                 "standings": standings, "rankings": standings}
 
-    def get_etags(self) -> dict:
-        return {"state": self.get_meta("_saved", "never")}
+    def get_etags(self, competition_id=None) -> dict:
+        return {"state": self.get_meta_comp("_saved", competition_id, "never")}
 
-    def get_current_week(self) -> int:
+    def get_current_week(self, competition_id=None) -> int:
+        cid = self._cid(competition_id)
         with self._read() as con:
             row = con.execute(
-                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
+                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections WHERE competition_id=?",
+                (cid,)
             ).fetchone()
             return int(row["wn"]) if row else 1
 
-    def get_players(self) -> list:
+    def get_players(self, competition_id=None) -> list:
+        cid = self._cid(competition_id)
         with self._read() as con:
             rows = con.execute(
                 "SELECT id,name,team,role,price,season_pts,points "
-                "FROM players ORDER BY season_pts DESC, name"
+                "FROM players WHERE competition_id=? ORDER BY season_pts DESC, name",
+                (cid,)
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_history(self, name: str) -> dict:
+    def get_history(self, name: str, competition_id=None) -> dict:
+        cid = self._cid(competition_id)
         with self._read() as con:
-            current_week = self.get_current_week()
+            current_week = self.get_current_week(cid)
             rows = con.execute("""
                 SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,
                        week_pts,points_per_match
-                FROM user_selections WHERE display_name=? ORDER BY week_no ASC
-            """, (name,)).fetchall()
+                FROM user_selections WHERE competition_id=? AND display_name=? ORDER BY week_no ASC
+            """, (cid, name)).fetchall()
         weeks = [
             {"week_no": r["week_no"], "is_current": r["week_no"]==current_week,
              "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
@@ -826,35 +947,107 @@ class DatabaseManager:
         ]
         return {"name": name, "current_week": current_week, "weeks": weeks, "ok": True}
 
-    def validate_budget(self, player_ids: list, budget: float = 100.0) -> tuple:
+    def validate_budget(self, player_ids: list, budget: float = 100.0, competition_id=None) -> tuple:
         if not player_ids: return True, 0.0
+        cid = self._cid(competition_id)
         with self._read() as con:
             ph   = ",".join("?" * len(player_ids))
-            rows = con.execute(f"SELECT id,price FROM players WHERE id IN ({ph})",
-                               player_ids).fetchall()
+            rows = con.execute(f"SELECT id,price FROM players WHERE competition_id=? AND id IN ({ph})",
+                               [cid, *player_ids]).fetchall()
         price_map = {r["id"]: r["price"] for r in rows}
         total = round(sum(price_map.get(pid, 0.0) for pid in player_ids), 1)
         return total <= budget, total
 
-    def save_next_week(self, name: str, team: list, cap, vc) -> dict:
+    def save_next_week(self, name: str, team: list, cap, vc, competition_id=None) -> dict:
+        cid = self._cid(competition_id)
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._write() as con:
             row = con.execute(
-                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections"
+                "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections WHERE competition_id=?",
+                (cid,)
             ).fetchone()
             current_week = int(row["wn"]) if row else 1
             con.execute("""
                 INSERT INTO user_selections
-                    (display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,
+                    (competition_id,display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,
                      nw_team_json,nw_cap_id,nw_vc_id)
-                VALUES (?,?,?,?,?,?,?,?)
-                ON CONFLICT(display_name,week_no) DO UPDATE SET
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(competition_id,display_name,week_no) DO UPDATE SET
                     nw_team_json=excluded.nw_team_json,
                     nw_cap_id=excluded.nw_cap_id,
                     nw_vc_id=excluded.nw_vc_id
-            """, (name, current_week, "[]", None, None, json.dumps(team), cap, vc))
-            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('_saved',?)", (now_iso,))
+            """, (cid, name, current_week, "[]", None, None, json.dumps(team), cap, vc))
+            con.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (f"_saved:{cid}", now_iso))
         return {"week_no": current_week}
+
+    # ── Competition DAO (multi-competition) ─────────────────────────────────
+
+    def list_competitions(self) -> list:
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT slug,name,format,status,budget_total,xi_size,max_weeks,"
+                "week1_anchor_utc,deadline_hour,deadline_min,series_id,series_slug,year,"
+                "valid_teams_json,champion,closed_at,created_at "
+                "FROM competitions ORDER BY created_at"
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["valid_teams"] = _jloads(d.pop("valid_teams_json"), [])
+                out.append(d)
+            return out
+
+    def get_competition(self, slug: str):
+        with self._read() as con:
+            r = con.execute("SELECT * FROM competitions WHERE slug=?", (slug,)).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            d["valid_teams"] = _jloads(d.get("valid_teams_json"), [])
+            return d
+
+    def create_competition(self, slug: str, name: str, **kw) -> None:
+        fields = {
+            "format":           kw.get("format", "T20"),
+            "status":           kw.get("status", "upcoming"),
+            "budget_total":     kw.get("budget_total", 100.0),
+            "xi_size":          kw.get("xi_size", 11),
+            "max_weeks":        kw.get("max_weeks", 10),
+            "week1_anchor_utc": kw.get("week1_anchor_utc", "1970-01-01T00:00:00+00:00"),
+            "deadline_hour":    kw.get("deadline_hour", 14),
+            "deadline_min":     kw.get("deadline_min", 0),
+            "series_id":        kw.get("series_id"),
+            "series_slug":      kw.get("series_slug"),
+            "year":             kw.get("year"),
+            "valid_teams_json": json.dumps(kw.get("valid_teams", [])),
+            "created_at":       datetime.now(timezone.utc).isoformat(),
+        }
+        cols = ["slug", "name", *fields.keys()]
+        vals = [slug, name, *fields.values()]
+        ph   = ",".join("?" * len(cols))
+        with self._write() as con:
+            con.execute(f"INSERT INTO competitions ({','.join(cols)}) VALUES ({ph})", vals)
+
+    def set_competition_status(self, slug: str, status: str) -> None:
+        with self._write() as con:
+            con.execute("UPDATE competitions SET status=? WHERE slug=?", (status, slug))
+
+    def set_champion(self, slug: str, champion: str) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            con.execute(
+                "UPDATE competitions SET champion=?, status='completed', closed_at=? WHERE slug=?",
+                (champion, now_iso, slug)
+            )
+
+    def get_championship_tally(self) -> list:
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT champion, COUNT(*) AS titles FROM competitions "
+                "WHERE status='completed' AND champion IS NOT NULL AND champion<>'' "
+                "GROUP BY champion ORDER BY titles DESC, champion"
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ── Passcode / Auth DAO (Phase: Passcodes) ─────────────────────────────
 

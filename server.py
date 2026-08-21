@@ -95,50 +95,39 @@ app.register_blueprint(bp)
 
 def _rebuild_scores_and_points():
     """
-    v13.2: Clears ONLY the ephemeral derived score tables and the JSON
-    match cache.  Does NOT touch week_pts or season_pts/points.
-
-    Why: week_pts (user_selections) and season_pts/points (players) are
-    the authoritative values written at scrape time.  They must survive
-    restarts so the leaderboard and scouting badges remain correct even
-    when the scraper hasn't re-run yet.
-
-    Tables NOT cleared (source of truth — survive restarts):
-      user_selections.week_pts       — leaderboard totals
-      user_selections.points_per_match — history tab detail
-      players.season_pts             — scouting badges
-      players.points                 — cap/vc-weighted display
-
-    Tables cleared (ephemeral derived — repopulated by scraper):
-      match_scores                   — raw Cricbuzz data
-      player_match_points            — base pts per player per match
-      user_match_points              — per-match team totals (matches_counted)
-      data/matches/*.json            — scraper cache files
+    Clears ONLY the ephemeral derived score tables + JSON cache for ACTIVE
+    competitions, then expects the scraper to repopulate. Never touches
+    week_pts (leaderboard) or season_pts/points (scouting badges) - those are
+    the source of truth and survive restarts. Completed competitions are left
+    intact so a finished season stays viewable without re-scraping.
     """
     try:
-        print("  [startup] Clearing ephemeral score tables "
-              "(match_scores, player_match_points, user_match_points)...")
-        with db._write() as con:
-            con.execute("DELETE FROM match_scores")
-            con.execute("DELETE FROM player_match_points")
-            try:
-                con.execute("DELETE FROM user_match_points")
-            except Exception:
-                pass
-            # ── DO NOT clear week_pts — it is the leaderboard source of truth.
-            # ── DO NOT clear season_pts/points — they power scouting badges.
-        matches_dir = DATA_DIR / "matches"
-        deleted = 0
-        if matches_dir.exists():
-            for f in matches_dir.glob("*.json"):
+        active = [c["slug"] for c in db.list_competitions() if c["status"] == "active"]
+        if not active:
+            print("  [startup] No active competition - leaving ephemeral data intact.")
+            return
+        for slug in active:
+            print("  [startup] Clearing ephemeral score tables for %s..." % slug)
+            with db._write() as con:
+                con.execute("DELETE FROM match_scores WHERE competition_id=?", (slug,))
+                con.execute("DELETE FROM player_match_points WHERE competition_id=?", (slug,))
                 try:
-                    f.unlink(); deleted += 1
-                except Exception as e2:
-                    print(f"  [startup] Could not delete {f.name}: {e2}")
-        print(f"  [startup] \u2713 Cleared ephemeral score data. "
-              f"Deleted {deleted} cached JSON files.")
+                    con.execute("DELETE FROM user_match_points WHERE competition_id=?", (slug,))
+                except Exception:
+                    pass
+                # DO NOT clear week_pts (leaderboard) or season_pts/points (badges).
+            matches_dir = DATA_DIR / slug / "matches"
+            deleted = 0
+            if matches_dir.exists():
+                for f in matches_dir.glob("*.json"):
+                    try:
+                        f.unlink(); deleted += 1
+                    except Exception as e2:
+                        print("  [startup] Could not delete %s: %s" % (f.name, e2))
+            print("  [startup] %s: cleared ephemeral data, deleted %d cached JSON files."
+                  % (slug, deleted))
         print("  [startup] week_pts and season_pts preserved (source of truth).")
-        print("  [startup] \u25ba Run: python scraper.py   to repopulate match scores.")
+        print("  [startup] Run: python scraper.py to repopulate match scores.")
     except Exception as e:
         print(f"  [startup] _rebuild_scores_and_points failed: {e}")
 
@@ -241,14 +230,17 @@ def _audit_monday_match_schedule():
 
 def _cold_start_hydrate():
     try:
-        with db._read() as con:
-            n = con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        if n == 0:
-            jd = DATA_DIR / "matches"
-            if jd.exists() and any(jd.glob("*.json")):
-                print("\n  [startup] Cold DB \u2014 hydrating from JSON archives...")
-                ingested = db.hydrate_from_json(jd)
-                print(f"  [startup] Hydrated: {ingested} matches.\n")
+        for c in db.list_competitions():
+            slug = c["slug"]
+            with db._read() as con:
+                n = con.execute("SELECT COUNT(*) FROM matches WHERE competition_id=?",
+                                (slug,)).fetchone()[0]
+            if n == 0:
+                jd = DATA_DIR / slug / "matches"
+                if jd.exists() and any(jd.glob("*.json")):
+                    print(f"\n  [startup] Cold DB ({slug}) \u2014 hydrating from JSON archives...")
+                    ingested = db.hydrate_from_json(jd, competition_id=slug)
+                    print(f"  [startup] Hydrated: {ingested} matches.\n")
     except Exception as e:
         print(f"  [startup] Hydration check failed: {e}")
 

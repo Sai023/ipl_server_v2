@@ -7,6 +7,14 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **Multi-competition update (Phase 3b-3).** Per-competition now: syncs
+> `data/<slug>/schedule.json` -> matches, mints `<slug>_m<NN>` ids, numbers
+> weeks from the competition row's `week1_anchor_utc` (UTC, which retires the
+> S9 IST/UTC mismatch), and auto-sets `competitions.max_weeks` from the
+> schedule. `--comp <slug>` (default `ipl_2026`); module-level `SCHEDULE_JSON` /
+> `SEASON_WEEK1_END` removed. The frozen `ipl_2026` keeps its legacy `ipl26_m*`
+> ids — do not re-seed it. See [multi_competition.md](multi_competition.md).
+
 ## What it does (business view)
 
 `Seed_Matches.py` is the **schedule synchroniser**. It bridges

@@ -50,19 +50,26 @@ aggregation — and even that just executes a pre-prepared statement.
 `db`. Every callsite uses `db.xxx()` — never instantiates a second
 `DatabaseManager`.
 
-## The nine tables (business view)
+## The ten tables (business view)
+
+> **Multi-competition (rebuild):** a `competitions` table was added and a
+> `competition_id` dimension threaded through the six game tables below — see
+> **[multi_competition.md](multi_competition.md)** for the full model.
+> Players/matches/selections/scores are now **per competition**; `members`
+> and `sessions` stay **global** (one login across all competitions).
 
 | Table | What it stores | Persistence | Owned by |
 |-------|----------------|-------------|----------|
-| `players` | The 220-row IPL roster: name, team, role, price, plus computed `season_pts` (raw) and `points` (cap/vc-weighted) | **Persistent** — survives restarts | `Seed_Players.py` writes initial rows; `scraper.py` can append dynamic `ext_*` players. |
+| `competitions` | One row per competition (`ipl_2026`, `sa20_2026`, …): name, format, status, budget/XI/max_weeks, week-1 anchor (UTC), Cricbuzz series, valid teams, and the crowned `champion` | **Persistent** | `migrate_to_competitions.py` seeds `ipl_2026`; admin "Close & crown" sets `champion`. |
+| `players` | Per-competition roster, PK `(competition_id, id)`: name, team, role, price, plus computed `season_pts` (raw) and `points` (cap/vc-weighted) | **Persistent** — survives restarts | `Seed_Players.py` writes initial rows; `scraper.py` can append dynamic `ext_*` players. |
 | `matches` | The 74-match schedule + status + Cricbuzz URL | **Persistent** | `Seed_Matches.py` initial rows; `scraper.py` updates status. |
-| `user_selections` | One row per `(member, week)`: this-week XI, next-week draft, **`week_pts`** (leaderboard input), and a `points_per_match` blob | **Persistent** — the leaderboard's source of truth | `init_db.py` seeds W1-W4; `routes.py` saves drafts and rollovers. |
+| `user_selections` | One row per `(competition, member, week)`: this-week XI, next-week draft, **`week_pts`** (leaderboard input), and a `points_per_match` blob | **Persistent** — the leaderboard's source of truth | `init_db.py` seeds W1-W4 (history-seed bootstrap retired in Phase 3); `routes.py` saves drafts and rollovers. |
 | `members` (Phase 12) | One row per user: `passcode_hash` (sha256 of `username:passcode`), `must_change` flag, `is_admin` flag, `created_at` | **Persistent** | `init_db._auto_seed_members_if_needed` backfills `1234`+`must_change=1` for everyone in `user_selections`; `/api/register`, `/api/passcode/change`, `/api/admin/passcode/reset` mutate. |
 | `sessions` (Phase 12) | Bearer tokens for `/api/passcode/*` + `/api/admin/*`: `token` (PK), `username`, `expires_at` (30 days out), `created_at` | **Persistent** — but pruned opportunistically: every `get_session()` first runs `DELETE WHERE expires_at < now` | `/api/login`, `/api/register`, `/api/passcode/change` insert; `/api/admin/passcode/reset` and self-change delete. |
 | `match_scores` | Raw per-player per-match stat lines from Cricbuzz | **Ephemeral** — wiped at every server startup, rebuilt by `scraper.py` | `scraper.py` only. |
 | `player_match_points` | The **calculated base points** for each player in each match, plus the cap/vc multiplier flag | **Ephemeral** | `recalculate_points()` rebuilds it from `match_scores`. |
 | `user_match_points` | One row per `(member, match)`: that member's total points for that match | **Ephemeral** | `update_week_points()` writes it. |
-| `meta` | A key/value store for timestamps (`_saved`, `_last_rollover`), the history-seed version, and the `_members_backfill_done` flag (Phase 12) | **Persistent** | Read/written by many methods. |
+| `meta` | A key/value store for timestamps — now **per-competition** (`_saved:<slug>`, `_last_rollover:<slug>`, legacy bare keys read as fallback) — plus the history-seed version and `_members_backfill_done` (Phase 12) | **Persistent** | Read/written by many methods. |
 
 **The ephemeral-vs-persistent rule is critical:** server startup wipes
 the three ephemeral tables and rebuilds them from `data/matches/*.json`,
@@ -194,7 +201,9 @@ its input.
 
 ## Inputs / Outputs
 
-The public surface is the methods on `DatabaseManager`. Grouped by purpose:
+The public surface is the methods on `DatabaseManager`. Grouped by purpose
+(every read/write now takes an optional `competition_id` that defaults to the
+active competition via `_active_slug`/`_cid`):
 
 | Group | Methods |
 |-------|---------|
@@ -205,6 +214,7 @@ The public surface is the methods on `DatabaseManager`. Grouped by purpose:
 | **Points pipeline** | `recalculate_points`, `update_week_points`, `update_player_season_pts`, `update_player_points` |
 | **Rollover DAO** | `get_users_and_max_weeks`, `get_selection_row`, `insert_rollover_week`, `set_last_rollover` |
 | **Bulk rebuild / hydrate** | `rebuild_scores_and_points`, `hydrate_from_json` |
+| **Competition (rebuild)** | `list_competitions`, `get_competition`, `create_competition`, `set_competition_status`, `set_champion`, `get_championship_tally`; resolvers `_active_slug` / `_cid`; per-competition meta via `get_meta_comp` / `set_meta_comp` |
 | **Dangerous** | `reset` |
 
 ## Called by / Calls into

@@ -55,20 +55,37 @@ from logic.cricbuzz_discovery import (
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_DIR           = Path(__file__).resolve().parent
 DB_PATH            = BASE_DIR / "data" / "fantasy.db"
-SCHEDULE_JSON      = BASE_DIR / "data" / "schedule.json"
 IST                = timezone(timedelta(hours=5, minutes=30))
 MATCH_DURATION_HRS = 4
-SEED_MATCHES_VER   = "4.0"
+SEED_MATCHES_VER   = "5.0"   # multi-competition: per-comp schedule + anchor + ids
 
-# Season starts Mar 28 2026 (Saturday). First rollover = Mar 30 14:00 IST.
-SEASON_WEEK1_END = datetime(2026, 3, 30, 14, 0, tzinfo=IST)
+# Fallback anchor if a competition row lacks week1_anchor_utc.
+SEASON_DEFAULT_ANCHOR = datetime(2026, 3, 30, 14, 0, tzinfo=timezone.utc)
+
+def _schedule_json(comp):
+    return BASE_DIR / "data" / comp / "schedule.json"
+
+def _comp_config(comp):
+    """Read (week1_anchor, series_id, year) for a competition from the DB.
+    week1_anchor is a tz-aware datetime parsed from competitions.week1_anchor_utc."""
+    conn = sqlite3.connect(str(DB_PATH), timeout=15)
+    try:
+        row = conn.execute(
+            "SELECT week1_anchor_utc, series_id, year FROM competitions WHERE slug=?",
+            (comp,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise SystemExit("Unknown competition %r (no competitions row)." % comp)
+    anchor = datetime.fromisoformat(row[0]) if row[0] else SEASON_DEFAULT_ANCHOR
+    return anchor, row[1], row[2]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WEEK CALCULATOR  (unchanged from v3.3 — exported for scraper.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _week_no_for_match(date_str: str, time_str: str) -> int:
+def _week_no_for_match(date_str: str, time_str: str, anchor: datetime) -> int:
     """
     Return the fantasy week number for a match, based on Monday 14:00 IST rollover.
     Week 1: before first rollover (Mar 30 14:00 IST)
@@ -78,9 +95,9 @@ def _week_no_for_match(date_str: str, time_str: str) -> int:
         h, m = map(int, time_str.split(":"))
         y, mo, d = map(int, date_str.split("-"))
         match_dt = datetime(y, mo, d, h, m, tzinfo=IST)
-        if match_dt < SEASON_WEEK1_END:
+        if match_dt < anchor:
             return 1
-        elapsed_days = (match_dt - SEASON_WEEK1_END).total_seconds() / 86400.0
+        elapsed_days = (match_dt - anchor).total_seconds() / 86400.0
         return 2 + int(elapsed_days // 7)
     except Exception:
         return 1
@@ -90,7 +107,7 @@ def _week_no_for_match(date_str: str, time_str: str) -> int:
 # SCHEDULE LOADER — backward-compat shim for IPL_2026_SCHEDULE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _load_schedule_tuples() -> list:
+def _load_schedule_tuples(schedule_json) -> list:
     """
     Read schedule.json and return list of
         (match_no, cricbuzz_id, title, date, time_ist)
@@ -99,9 +116,9 @@ def _load_schedule_tuples() -> list:
     Returns [] if schedule.json is missing — caller must check.
     """
     try:
-        data = load_schedule(SCHEDULE_JSON)
+        data = load_schedule(schedule_json)
     except FileNotFoundError:
-        print(f"  ⚠ schedule.json missing at {SCHEDULE_JSON}")
+        print(f"  ⚠ schedule.json missing at {schedule_json}")
         print(f"     Restore from repo, or run:  python -m logic.cricbuzz_discovery --debug")
         return []
     except Exception as e:
@@ -139,7 +156,7 @@ def _auto_count_completed(schedule: list) -> int:
 # DB SYNC — idempotent (only writes when something changed)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def seed_to_db(schedule: list, completed: int) -> None:
+def seed_to_db(schedule: list, completed: int, comp: str, anchor: datetime) -> None:
     """
     Sync schedule tuples → matches table.
 
@@ -166,8 +183,8 @@ def seed_to_db(schedule: list, completed: int) -> None:
             return ""
 
     for no, cid, title, date, time_ist in schedule:
-        iid = f"ipl26_m{no:02d}"
-        wk  = _week_no_for_match(date, time_ist)
+        iid = f"{comp}_m{no:02d}"
+        wk  = _week_no_for_match(date, time_ist, anchor)
         week_summary[wk] = week_summary.get(wk, 0) + 1
         st  = "completed" if no <= completed else "upcoming"
         url = (f"https://www.cricbuzz.com/live-cricket-scorecard/{cid}"
@@ -176,8 +193,8 @@ def seed_to_db(schedule: list, completed: int) -> None:
         else:   no_id  += 1
 
         row = conn.execute(
-            "SELECT scorecard_url, status, week_no FROM matches WHERE id=?",
-            (iid,)
+            "SELECT scorecard_url, status, week_no FROM matches WHERE id=? AND competition_id=?",
+            (iid, comp)
         ).fetchone()
 
         # Extract teams from schedule.json title e.g. "SRH vs RCB, 1st Match" -> ["SRH","RCB"]
@@ -187,9 +204,9 @@ def seed_to_db(schedule: list, completed: int) -> None:
 
         if row is None:
             conn.execute(
-                "INSERT INTO matches (id,week_no,title,status,scorecard_url,teams_json,date_label) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (iid, wk, title, st, url, teams_json, date_label)
+                "INSERT INTO matches (competition_id,id,week_no,title,status,scorecard_url,teams_json,date_label) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (comp, iid, wk, title, st, url, teams_json, date_label)
             )
             inserted += 1
         else:
@@ -200,16 +217,21 @@ def seed_to_db(schedule: list, completed: int) -> None:
             # (source of truth — keeps the matches table in sync even after the
             # scraper writes stale values via a wrong-scorecard scrape).
             conn.execute(
-                "UPDATE matches SET title=?, teams_json=?, date_label=? WHERE id=?",
-                (title, teams_json, date_label, iid)
+                "UPDATE matches SET title=?, teams_json=?, date_label=? WHERE id=? AND competition_id=?",
+                (title, teams_json, date_label, iid, comp)
             )
             if old_st != st or new_url != old_url or old_wk != wk:
                 conn.execute(
-                    "UPDATE matches SET status=?, scorecard_url=?, week_no=? WHERE id=?",
-                    (st, new_url, wk, iid)
+                    "UPDATE matches SET status=?, scorecard_url=?, week_no=? WHERE id=? AND competition_id=?",
+                    (st, new_url, wk, iid, comp)
                 )
                 updated += 1
 
+    # Derive this competition's week count from the schedule itself — match
+    # dates + the week-1 anchor already define each match's week, so max_weeks
+    # is never hand-set. Stored on the competition row for rollover/UI access.
+    max_wk = max(week_summary) if week_summary else 1
+    conn.execute("UPDATE competitions SET max_weeks=? WHERE slug=?", (max_wk, comp))
     conn.commit()
     conn.close()
 
@@ -261,74 +283,65 @@ def verify_scorecard_url(cricbuzz_id: str) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    p = argparse.ArgumentParser(
-        description=f"IPL 2026 match schedule sync (v{SEED_MATCHES_VER})"
-    )
-    p.add_argument("--completed", type=int, default=None,
-                   help="Override auto-detected completed count")
-    p.add_argument("--no-live",   action="store_true",
-                   help="Skip Cricbuzz discovery; sync DB from current schedule.json")
-    p.add_argument("--debug",     action="store_true")
-    p.add_argument("--verify",    metavar="CB_ID",
-                   help="Test that a Cricbuzz scorecard ID is valid (standalone)")
-    args = p.parse_args()
+    pa = argparse.ArgumentParser(
+        description="Match schedule sync (multi-competition) v%s" % SEED_MATCHES_VER)
+    pa.add_argument("--comp", default="ipl_2026", help="competition slug (default: ipl_2026)")
+    pa.add_argument("--completed", type=int, default=None,
+                    help="Override auto-detected completed count")
+    pa.add_argument("--no-live", action="store_true",
+                    help="Skip Cricbuzz discovery; sync DB from current schedule.json")
+    pa.add_argument("--debug", action="store_true")
+    pa.add_argument("--verify", metavar="CB_ID",
+                    help="Test that a Cricbuzz scorecard ID is valid (standalone)")
+    args = pa.parse_args()
 
     if args.verify:
         verify_scorecard_url(args.verify)
         return
 
-    print(f"\n--- IPL 2026 Match Sync v{SEED_MATCHES_VER} "
-          f"(discovery v{CRICBUZZ_DISCOVERY_VER}) ---")
-    (BASE_DIR / "data").mkdir(exist_ok=True)
+    comp = args.comp
+    anchor, series_id, year = _comp_config(comp)
+    schedule_json = _schedule_json(comp)
 
-    if not SCHEDULE_JSON.exists():
-        print(f"\n  ❌ {SCHEDULE_JSON} not found.")
-        print(f"     This is the new source of truth (replaces hardcoded list).")
-        print(f"     Restore from repo, or create one manually.")
+    print("")
+    print("--- Match Sync v%s (%s, discovery v%s) ---"
+          % (SEED_MATCHES_VER, comp, CRICBUZZ_DISCOVERY_VER))
+    schedule_json.parent.mkdir(parents=True, exist_ok=True)
+
+    if not schedule_json.exists():
+        print("  ERROR: %s not found." % schedule_json)
+        print("  Create a schedule.json for %r (or run discovery)." % comp)
         sys.exit(1)
 
-    # ── Step 1: live Cricbuzz discovery (default) ───────────────────────────
     if not args.no_live:
-        print(f"\n[1/3] Cricbuzz discovery → updating {SCHEDULE_JSON.name}...")
-        res = run_discovery(SCHEDULE_JSON, year=2026, debug=args.debug)
-        if res["ok"]:
-            print(f"  ✅ +{res['filled']} new IDs   "
-                  f"(had {res['already_had']}, "
-                  f"{res['unfilled_known']} unfilled, "
-                  f"{res['unfilled_playoff']} playoff TBD)")
-            if res["surplus"]:
-                print(f"  ℹ  {res['surplus']} surplus discoveries "
-                      f"(Cricbuzz returned IDs whose team-pair isn't scheduled)")
-            if res["series_id"]:
-                print(f"  📌 Resolved series_id: {res['series_id']}")
+        print("[1/3] Cricbuzz discovery -> updating %s..." % schedule_json.name)
+        res = run_discovery(schedule_json, year=year, debug=args.debug)
+        if res.get("ok"):
+            print("  +%s new IDs (had %s, %s unfilled)"
+                  % (res.get("filled"), res.get("already_had"), res.get("unfilled_known")))
         else:
-            print(f"  ⚠ Discovery failed: {res.get('error')}")
-            print(f"     Continuing with existing schedule.json contents.")
+            print("  ! discovery failed: %s (keeping existing schedule.json)" % res.get("error"))
     else:
-        print("\n[1/3] Skipping discovery (--no-live)")
+        print("[1/3] Skipping discovery (--no-live)")
 
-    # ── Step 2: load (possibly updated) schedule.json ───────────────────────
-    print(f"\n[2/3] Loading schedule from {SCHEDULE_JSON.name}...")
-    schedule = _load_schedule_tuples()
+    print("[2/3] Loading schedule from %s..." % schedule_json.name)
+    schedule = _load_schedule_tuples(schedule_json)
     if not schedule:
-        print(f"  ❌ Schedule is empty — aborting.")
+        print("  ERROR: schedule is empty - aborting.")
         sys.exit(1)
     confirmed = sum(1 for _, cid, *_ in schedule if cid)
-    print(f"  {len(schedule)} matches | {confirmed} confirmed IDs | "
-          f"{len(schedule) - confirmed} unfilled")
+    print("  %d matches | %d confirmed IDs | %d unfilled"
+          % (len(schedule), confirmed, len(schedule) - confirmed))
 
-    # ── Step 3: count completed + write to DB ───────────────────────────────
     if args.completed is not None:
         completed = args.completed
-        print(f"\n[3/3] Manual --completed {completed}")
+        print("[3/3] Manual --completed %d" % completed)
     else:
         completed = _auto_count_completed(schedule)
-        now_ist   = datetime.now(IST)
-        print(f"\n[3/3] Auto-detected {completed} completed "
-              f"(IST now: {now_ist.strftime('%Y-%m-%d %H:%M')})")
+        print("[3/3] Auto-detected %d completed (IST now: %s)"
+              % (completed, datetime.now(IST).strftime("%Y-%m-%d %H:%M")))
 
-    seed_to_db(schedule, completed)
-
+    seed_to_db(schedule, completed, comp, anchor)
 
 if __name__ == "__main__":
     main()
