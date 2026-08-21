@@ -207,6 +207,8 @@ def api_test_push():
         return jsonify({"ok": False, "code": 400,
                         "error": "test-push is only meaningful in HOSTED mode "
                                  "(set HOSTED=true)"}), 400
+    _u, err = _require_admin()
+    if err: return err
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         db.set_meta("_last_test_push", now_iso)
@@ -301,6 +303,15 @@ def _require_admin():
     m = db.get_member_auth(username)
     if not m or not m["is_admin"]:
         return None, (jsonify({"ok": False, "error": "admin only", "code": 403}), 403)
+    return username, None
+
+def _require_self(n):
+    """Token required AND the acting user must be `n` — a member may only modify
+    their own data. (No admin-edits-others; that would be a separate tool.)"""
+    username, err = _require_token()
+    if err: return None, err
+    if username != n:
+        return None, (jsonify({"ok": False, "error": "you can only modify your own team", "code": 403}), 403)
     return username, None
 
 
@@ -538,6 +549,8 @@ def api_players():
 def api_resolve_player():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
+    _u, err = _require_token()
+    if err: return err
     try:
         d = request.get_json(force=True, silent=True) or {}
         query = (d.get("query") or "").strip(); team = (d.get("team") or "").strip() or None
@@ -584,6 +597,8 @@ def api_save_next_week(n):
     if re_: return re_
     try:
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+        _self,err=_require_self(n)
+        if err: return err
         comp=_comp(); budget,xi,_mw,_dh,_dm=_comp_cfg(comp)
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
@@ -623,6 +638,8 @@ def api_member(n):
     if re_: return re_
     try:
         if not n or len(n)>30: return jsonify({"error":"name 1-30 chars","code":400}),400
+        _self,err=_require_self(n)
+        if err: return err
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"Invalid JSON","code":400}),400
         comp=_comp()
@@ -644,6 +661,8 @@ def api_recalculate_points():
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
+        _u,err=_require_admin()
+        if err: return err
         comp=_comp()
         n=db.recalculate_points(competition_id=comp); wp=db.update_week_points(competition_id=comp); pp=db.update_player_season_pts(competition_id=comp)
         _push_if_hosted(f"recalc:{comp}:rows={n}")
@@ -722,6 +741,8 @@ def api_clean_scores():
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
+        _u,err=_require_admin()
+        if err: return err
         comp=_comp()
         delete_json=request.args.get("delete_json","").strip().lower() in ("1","true","yes")
         with db._write() as con:
@@ -837,6 +858,8 @@ def api_audit_blobs():
 @bp.route("/api/snapshot", methods=["POST"])
 def api_snapshot():
     try:
+        _u, err = _require_admin()
+        if err: return err
         leaderboard = db.get_leaderboard()
         with db._read() as con:
             all_players = {r["id"]: r["name"] for r in con.execute(
@@ -1251,17 +1274,15 @@ def api_rollover():
     # keeps working without setup. The in-browser auto-rollover from
     # Static/ipl_glue.js also stays unauthenticated; the host's HOSTED+
     # ROLLOVER_TOKEN combo means cloud only — see workflow design.
+    # Rollover is privileged: allow the GitHub Actions workflow (which sends the
+    # ROLLOVER_TOKEN as a bearer) OR an authenticated admin session. Everyone
+    # else is rejected — the old same-origin-no-header bypass is removed (SEC-1).
     expected = os.environ.get("ROLLOVER_TOKEN", "").strip()
-    if expected:
-        auth = request.headers.get("Authorization", "")
-        sent = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        # Fall through if the request comes from the same-origin browser
-        # (no Authorization header) — that's the dev-tools button. The
-        # workflow always sends the header, so cron triggers must match.
-        # If a header is sent but wrong, reject hard.
-        if auth and sent != expected:
-            return jsonify({"error": "invalid rollover token",
-                            "ok": False, "code": 401}), 401
+    auth = request.headers.get("Authorization", "")
+    sent = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not (expected and sent == expected):
+        _u, err = _require_admin()
+        if err: return err
     force=request.args.get("force","").strip() in ("1","true","yes")
     comp=_comp(); _b,_x,maxw,dh,dm=_comp_cfg(comp)
     try:
@@ -1335,6 +1356,8 @@ def api_update_match_url():
     re_=_check_rate(_write_limiter)
     if re_: return re_
     try:
+        _u,err=_require_admin()
+        if err: return err
         d=request.get_json(force=True,silent=True) or {}
         match_id=(d.get("match_id") or "").strip(); url=(d.get("url") or "").strip()
         if not match_id or not url: return jsonify({"error":"match_id and url required","code":400}),400
@@ -1435,6 +1458,8 @@ def api_sync_now():
     """
     re_ = _check_rate(_write_limiter)
     if re_: return re_
+    _u, err = _require_token()
+    if err: return err
 
     # ── HOSTED mode (Phase 2 + post-deploy fix): pull, then trigger scrape ──
     # The cloud host cannot reach Cricbuzz. Refresh does TWO things:

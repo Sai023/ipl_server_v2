@@ -147,7 +147,7 @@ function _adminSaveUrl(matchId,inputId,statusId){
   if(btn)btn.disabled=true;
   if(statusEl){statusEl.textContent="Saving\u2026";statusEl.className="admin-save-status";}
   fetch("/api/update-match-url",{
-    method:"POST",headers:{"Content-Type":"application/json"},
+    method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+(localStorage.getItem("ipl_session_token")||"")},
     body:JSON.stringify({match_id:matchId,url:url})
   }).then(function(r){return r.json();})
   .then(function(d){
@@ -267,7 +267,7 @@ function _refreshData(){
   if(window.IplPolling)window.IplPolling.stop();
 
   // Step 1: Trigger background discovery + scrape
-  fetch("/api/sync-now",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+  fetch("/api/sync-now",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+(localStorage.getItem("ipl_session_token")||"")},body:"{}"})
     .then(function(r){return r.ok?r.json():null;})
     .catch(function(){return null;})
     .then(function(syncResp){

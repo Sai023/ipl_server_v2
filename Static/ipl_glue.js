@@ -136,10 +136,12 @@
   function _fetchJson(url, options) {
     options = options || {};
     var headers = Object.assign({ "Accept": "application/json" }, options.headers || {});
-    // Auto-attach bearer token on /api/passcode/*, /api/admin/*, /api/whoami calls.
+    // Attach the bearer token to every same-origin /api/* call when logged in.
+    // Reads ignore it; writes now require it (server-side SEC-1 auth). Same-origin
+    // only, so the token never leaks to a third party.
     if (!headers["Authorization"]) {
       var t = IplAuth.getToken();
-      if (t && (url.indexOf("/api/passcode") === 0 || url.indexOf("/api/admin") === 0 || url.indexOf("/api/whoami") === 0)) {
+      if (t && url.indexOf("/api/") === 0) {
         headers["Authorization"] = "Bearer " + t;
       }
     }
@@ -157,9 +159,9 @@
         if (res.status === 304) return null;
         if (!res.ok) {
           var err = new Error("HTTP " + res.status); err.status = res.status;
-          // 401 on a passcode/admin endpoint → token expired/revoked. Clear it
-          // so the next bootstrap drops to the login card instead of looping.
-          if (res.status === 401 && (url.indexOf("/api/passcode") === 0 || url.indexOf("/api/admin") === 0 || url.indexOf("/api/whoami") === 0)) {
+          // Any 401 from our API means the session is missing/expired/revoked.
+          // Clear the token so the next bootstrap drops to the login card.
+          if (res.status === 401 && url.indexOf("/api/") === 0) {
             IplAuth.clearToken();
           }
           return res.json().catch(function () { return {}; }).then(function (j) {
