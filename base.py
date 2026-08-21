@@ -244,7 +244,16 @@ def _security_headers(response):
     response.headers["X-Content-Type-Options"]="nosniff"
     response.headers["X-Frame-Options"]="DENY"
     response.headers["Referrer-Policy"]="same-origin"
-    if request.path.startswith("/api/"): response.headers["Cache-Control"]="no-store"
+    p = request.path
+    if p.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    elif p == "/" or p.endswith((".js", ".css", ".html")):
+        # App shell + assets must revalidate on every load so a deploy is
+        # picked up immediately. Without this, browsers and (especially) the
+        # Android WebView serve a stale cached UI after a deploy — e.g. the
+        # old pre-cutover frontend with no Championship card. Static files
+        # carry Last-Modified/ETag, so this is a cheap 304 when unchanged.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 
