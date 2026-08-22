@@ -453,6 +453,59 @@ def dispatch_workflow(workflow_filename: str, ref: str = "main",
         return False, f"dispatch error: {e}"
 
 
+def check_token(log=print) -> tuple[bool, str]:
+    """
+    INF-2: verify the GitHub PAT is valid and can see the repo.
+
+    A stale / expired fine-grained PAT silently breaks write-persistence
+    (commit_and_push) and scrape dispatch — the host keeps returning 200 to
+    users while nothing actually lands in git, so changes vanish on the next
+    Render redeploy. This surfaces the problem with one authenticated GET.
+
+    Returns (ok, message); never raises. On success the message notes the
+    token's scopes and, for a fine-grained PAT, its expiry date.
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        return False, "GITHUB_TOKEN not set — writes cannot persist in HOSTED mode"
+    slug = _repo_slug()
+    if not slug:
+        return False, "could not resolve repo slug (set GITHUB_REPOSITORY env)"
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{slug}", method="GET",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept":        "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent":    "ipl-fantasy-host/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if 200 <= resp.status < 300:
+                bits = [f"repo {slug} reachable"]
+                scopes = resp.headers.get("X-OAuth-Scopes")
+                if scopes is not None:
+                    bits.append(f"scopes=[{scopes}]")
+                exp = resp.headers.get("github-authentication-token-expiration")
+                if exp:
+                    bits.append(f"expires {exp}")
+                return True, "; ".join(bits)
+            return False, f"unexpected status {resp.status}"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "PAT invalid or expired (HTTP 401) — renew GITHUB_TOKEN or writes will be lost"
+        if e.code == 403:
+            return False, "PAT forbidden (HTTP 403) — check the token's repository permissions"
+        if e.code == 404:
+            return False, f"repo {slug} not visible to this PAT (HTTP 404) — wrong repo or access revoked"
+        return False, f"HTTP {e.code}"
+    except urllib.error.URLError as e:
+        return False, f"network error: {e.reason}"
+    except Exception as e:
+        return False, f"token check error: {e}"
+
+
 # DEPRECATED — kept only for git history grepping. No live callers since
 # the post-launch refactor of `commit_and_push` to use `http.extraHeader`
 # for push (same as fetch). URL-rewrite auth proved to fail silently in

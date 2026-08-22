@@ -439,6 +439,10 @@ if __name__ == "__main__":
             _log(f"Boot-time origin setup: {msg}")
             changed, msg = cloud_sync.pull_latest(log=_log)
             _log(f"Boot-time git pull: {msg}")
+            # INF-2: surface an expired/invalid PAT at boot — otherwise writes
+            # keep returning 200 while nothing persists to git (lost on redeploy).
+            pok, pmsg = cloud_sync.check_token(log=_log)
+            _log(f"Boot-time PAT health: {pmsg}", "info" if pok else "warn")
         except Exception as e:
             _log(f"Boot-time git setup failed (continuing with shipped data): {e}",
                  "warn")

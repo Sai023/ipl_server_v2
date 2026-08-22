@@ -41,12 +41,14 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.8.0"
 
 # Per-script version pins
-SERVER_VER       = "13.4"   # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
+SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
+                            # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.8.1"  # BIZ-2: server-side deadline lock (selections_locked).
+ROUTES_VER       = "1.8.2"  # INF-2: GET /api/admin/health (PAT + freshness).
+                            # BIZ-2: server-side deadline lock (selections_locked).
                             # SEC-1: token-gate all writes + admin-gate destructive ops;
                             #        BIZ-1: full server-side team validation (validate_selection).
                             # Phase 12 (Passcodes): /api/register, /api/login, /api/whoami,

@@ -444,6 +444,32 @@ def api_admin_members():
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
+@bp.route("/api/admin/health", methods=["GET"])
+def api_admin_health():
+    """INF-2: admin-only system health — PAT validity + data freshness. Lets an
+    admin catch a silently-expired GitHub token (which stops writes persisting)
+    before it bites, and see when data last changed."""
+    try:
+        username, err = _require_admin()
+        if err: return err
+        comp = _comp()
+        out = {"ok": True, "hosted": _IS_HOSTED, "competition": comp,
+               "last_saved": db.get_meta_comp("_saved", comp, "never"),
+               "last_rollover": db.get_meta_comp("_last_rollover", comp, "never"),
+               "scraping": "disabled until SA20 (Phase 3b-4)"}
+        if _IS_HOSTED:
+            pok, pmsg = cloud_sync.check_token(log=_log)
+            out["pat_ok"] = pok
+            out["pat_msg"] = pmsg
+        else:
+            out["pat_ok"] = None
+            out["pat_msg"] = "local mode — PAT only used in HOSTED"
+        return jsonify(out)
+    except Exception as e:
+        _log(f"GET /api/admin/health: {e}", "error")
+        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+
+
 @bp.route("/api/admin/competition", methods=["POST"])
 def api_admin_competition():
     """Admin-only competition lifecycle: create / activate / reopen / close.
