@@ -550,8 +550,25 @@ def api_admin_competition():
 @bp.route("/api/state", methods=["GET"])
 def api_get_state():
     try:
-        state = db.get_state(competition_id=_comp()); etag = state.get("_saved", "")
+        comp = _comp()
+        state = db.get_state(competition_id=comp); etag = state.get("_saved", "")
         if request.headers.get("If-None-Match") == etag: return "", 304
+        # UX-2: deadline info so the client can show a live countdown + lock state.
+        crow = db.get_competition(comp) or {}
+        dh = crow.get("deadline_hour", DEADLINE_HOUR); dm = crow.get("deadline_min", DEADLINE_MIN)
+        nl = None
+        if crow.get("status") != "completed":
+            now = datetime.now(timezone.utc)
+            try:
+                anchor = datetime.fromisoformat(crow.get("week1_anchor_utc") or "")
+                if anchor.tzinfo is None: anchor = anchor.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                anchor = None
+            if anchor and now < anchor:
+                nl = anchor.isoformat()  # pre-season: the draft locks at the week-1 anchor
+            else:
+                nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
+        state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", "")}
         resp = jsonify(state); resp.headers["ETag"] = etag; return resp
     except Exception as e:
         _log(f"GET /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500

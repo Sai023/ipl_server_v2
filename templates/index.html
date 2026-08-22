@@ -370,7 +370,8 @@ function _buildBudgetBar(){
   var roles={WK:0,BAT:0,AR:0,BOWL:0};
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
   var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001;
-  var saveTitle=!canSave?(count<XI_SIZE?"Select all "+XI_SIZE+" players first":"Over 100 CR budget"):"";
+  var _locked=_deadlineLocked();
+  var saveTitle=_locked?"Locked — the weekly deadline has passed":(!canSave?(count<XI_SIZE?"Select all "+XI_SIZE+" players first":"Over 100 CR budget"):"");
   var h='<div class="nw-budget-bar">';
   h+='<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>';
   h+='<div class="nw-budget-track"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>';
@@ -378,7 +379,7 @@ function _buildBudgetBar(){
   ['WK','BAT','AR','BOWL'].forEach(function(r){h+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
   h+='</div>';
   h+='<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>';
-  h+='<button id="nw-save-btn" class="btn btn-gold" onclick="_nwSave()"'+(!canSave?' disabled title="'+esc(saveTitle)+'"':'')+'>Save Draft</button>';
+  h+='<button id="nw-save-btn" class="btn btn-gold" onclick="_nwSave()"'+((!canSave||_locked)?' disabled title="'+esc(saveTitle)+'"':'')+'>Save Draft</button>';
   h+='</div>';
   h+='<span id="nw-save-msg" class="save-status" style="font-size:11px;display:block;text-align:right;min-height:14px;margin-bottom:4px"></span>';
   return h;
@@ -512,7 +513,7 @@ function _buildThisWeekCard(){
 }
 function _buildNextWeekCard(){
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+(_currentWeek+1)+' Draft &nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400">Locks Mon 14:00 UTC</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+(_currentWeek+1)+' Draft &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
   h+=_buildBudgetBar();
   h+=_buildNwSquad();
   if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
@@ -1022,17 +1023,43 @@ function _switchComp(slug){
   _nwDraft={team:[],cap:null,vc:null};
   _bootstrap();
 }
+// UX-2: weekly deadline countdown + lock state (server provides _state.deadline)
+function _deadlineLocked(){
+  var dl=_state&&_state.deadline; if(!dl)return false;
+  if(dl.status==='completed')return true;
+  if(!dl.next_lock_utc)return false;
+  return Date.now()>=new Date(dl.next_lock_utc).getTime();
+}
+function _deadlineText(){
+  var dl=_state&&_state.deadline; if(!dl)return '';
+  if(dl.status==='completed')return '🏁 Season complete';
+  if(!dl.next_lock_utc)return '';
+  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();
+  if(ms<=0)return '🔒 Locked — awaiting rollover';
+  var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
+  var t=d>0?(d+'d '+hh+'h '+mm+'m'):(hh>0?(hh+'h '+mm+'m '+ss+'s'):(mm+'m '+ss+'s'));
+  return '🔒 locks in '+t;
+}
+setInterval(function(){
+  var el=document.getElementById('nw-countdown'); if(!el)return;
+  el.textContent=_deadlineText();
+  if(_deadlineLocked()){var b=document.getElementById('nw-save-btn');if(b){b.disabled=true;b.title='Locked — the weekly deadline has passed';}}
+},1000);
 function _buildCompSwitcher(){
   if(!_competitions||_competitions.length<2)return '';
-  var h='<div class="comp-switcher" style="margin:0 0 12px;display:flex;align-items:center;gap:8px">';
-  h+='<label style="font-size:11px;color:var(--muted)">Competition</label>';
-  h+='<select onchange="_switchComp(this.value)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.35);border-radius:8px;padding:5px 9px;font-size:13px">';
+  var h='<div class="comp-switcher" style="margin:0 0 14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">';
+  h+='<span style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Competition</span>';
   _competitions.forEach(function(c){
-    var sel=(c.slug===_activeComp)?' selected':'';
-    var badge=(c.status==='completed')?' — done':(c.status==='active'?' — live':'');
-    h+='<option value="'+escAttr(c.slug)+'"'+sel+'>'+esc(c.name)+badge+'</option>';
+    var on=(c.slug===_activeComp);
+    var glyph=c.status==='completed'?'🏆':(c.status==='active'?'🟢':'🔜');
+    var sub=c.status==='completed'?(c.champion?('· '+esc(c.champion)):'· done'):(c.status==='active'?'· live':'· upcoming');
+    var st=on?'background:rgba(245,197,24,.16);border:1px solid var(--gold);color:var(--text)'
+             :'background:#0E1E35;border:1px solid var(--border);color:var(--muted)';
+    h+='<button type="button" onclick="_switchComp(\''+escAttr(c.slug)+'\')" aria-pressed="'+(on?'true':'false')+'" '+
+       'style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;'+st+'">'+
+       glyph+' '+esc(c.name)+' <span style="font-weight:400;font-size:11px;opacity:.75">'+sub+'</span></button>';
   });
-  h+='</select></div>';
+  h+='</div>';
   return h;
 }
 function _buildChampionshipCard(){
