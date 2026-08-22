@@ -111,7 +111,7 @@ from config import (
     CRICBUZZ_DISCOVERY_VER,
 )
 import tasks
-from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team
+from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team, selections_locked
 from logic.scoring_engine import debug_calc_pts as _debug_calc_pts
 
 bp = Blueprint("api", __name__)
@@ -599,7 +599,13 @@ def api_save_next_week(n):
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
         _self,err=_require_self(n)
         if err: return err
-        comp=_comp(); budget,xi,_mw,_dh,_dm=_comp_cfg(comp)
+        comp=_comp(); budget,xi,_mw,dh,dm=_comp_cfg(comp)
+        crow=db.get_competition(comp) or {}
+        locked,lreason=selections_locked(datetime.now(timezone.utc), crow.get("status",""),
+                                         crow.get("week1_anchor_utc",""), dh, dm,
+                                         db.get_meta_comp("_last_rollover",comp,""))
+        if locked:
+            return jsonify({"error":lreason,"locked":True,"code":423}),423
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
         team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")

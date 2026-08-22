@@ -140,3 +140,47 @@ def pick_active_team(
         cap     = tw_cap_id
         vc      = tw_vc_id
     return nw_team, cap, vc
+
+
+def selections_locked(
+    now: datetime,
+    status: str,
+    week1_anchor_iso: str,
+    deadline_hour: int,
+    deadline_min: int,
+    last_rollover_iso: str,
+) -> tuple:
+    """
+    Decide whether team selections are locked right now (BIZ-2).
+
+    Returns (locked: bool, reason: str); reason is "" when not locked.
+
+    Rules:
+      - A `completed` competition is always locked.
+      - Before the season's week-1 anchor, drafting is OPEN — members build their
+        week-1 XI ahead of the first match.
+      - Once the season is underway, selections lock as soon as a weekly Monday
+        deadline has passed that rollover has NOT yet processed, i.e.
+        `not already_rolled(last_rollover, last_monday_deadline(now))`. That is
+        the exact window where — without this check — a member could keep editing
+        the upcoming XI after the deadline because rollover fired late. Once
+        rollover runs, editing the new upcoming week reopens.
+
+    Pure function — stdlib only; mirrors the Monday-deadline model used by
+    last_monday_deadline() / already_rolled().
+    """
+    if (status or "").lower() == "completed":
+        return True, "This competition has ended — selections are locked."
+    try:
+        anchor = datetime.fromisoformat(week1_anchor_iso)
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False, ""  # no usable anchor → fail open (allow drafting)
+    if now < anchor:
+        return False, ""  # pre-season: week-1 drafting is open
+    lmd = last_monday_deadline(now, deadline_hour, deadline_min)
+    if not already_rolled(last_rollover_iso, lmd):
+        return True, ("The weekly deadline has passed — selections are locked "
+                      "until the next rollover.")
+    return False, ""
