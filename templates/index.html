@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#07111F" />
   <link rel="manifest" href="/manifest.json" />
-  <title>IPL Fantasy 2026</title>
+  <title>BCL Fantasy</title>
   <link rel="stylesheet" href="/static/style.css?v=1.0">
 </head>
 <body>
-<div id="app-loading"><div class="logo">🏏</div><h1>IPL Fantasy 2026</h1><div class="spinner"></div><p>Loading your league…</p></div>
+<div id="app-loading"><div class="logo">🏏</div><h1>BCL Fantasy</h1><div class="spinner"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
 <script>
@@ -965,8 +965,9 @@ function render(state){
   var memberNames=Object.keys(members).sort();
   var html='<div class="wrap">';
   html+=_buildCompSwitcher();
-  html+='<h2 class="page-title">\uD83C\uDFCF '+esc((_competitions.filter(function(c){return c.slug===_activeComp;})[0]||{name:"IPL Fantasy 2026"}).name)+'</h2>';
-  html+='<p class="subtitle">'+memberNames.length+' members \u00B7 '+matches.length+' matches \u00B7 Week '+_currentWeek+' \u00B7 \uD83D\uDCB0 '+BUDGET_TOTAL.toFixed(0)+' CR budget</p>';
+  var _cn=(_competitions.filter(function(c){return c.slug===_activeComp;})[0]||{name:""}).name;
+  html+='<h2 class="page-title">\uD83C\uDFCF BCL Fantasy</h2>';
+  html+='<p class="subtitle">'+(_cn?esc(_cn)+' \u00B7 ':'')+memberNames.length+' members \u00B7 '+matches.length+' matches \u00B7 Week '+_currentWeek+' \u00B7 \uD83D\uDCB0 '+BUDGET_TOTAL.toFixed(0)+' CR budget</p>';
   if(!_username){
     html+=_buildLoginCard(memberNames);
     html+=_buildChampionshipCard();html+=_buildLeaderboardCard(_leaderboard);

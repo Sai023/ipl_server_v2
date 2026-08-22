@@ -1575,8 +1575,8 @@ def serve_static(filename):
 
 @bp.route("/manifest.json")
 def manifest():
-    return jsonify({"name":"IPL Fantasy 2026","short_name":"IPL Fantasy",
-        "description":"Private IPL fantasy cricket league","start_url":"/","display":"standalone",
+    return jsonify({"name":"BCL Fantasy","short_name":"BCL Fantasy",
+        "description":"BCL Fantasy - private fantasy cricket across our leagues","start_url":"/","display":"standalone",
         "background_color":"#07111F","theme_color":"#07111F",
         "icons":[{"src":"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F3CF;</text></svg>",
                   "sizes":"any","type":"image/svg+xml"}]})
