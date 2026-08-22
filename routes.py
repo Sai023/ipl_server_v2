@@ -615,14 +615,9 @@ def api_save_next_week(n):
                 m=resolve_player_id(con,vc)
                 if m: vc=m["id"]
             con.close()
-        if team and len(team)!=xi:
-            return jsonify({"error":f"Need exactly {xi} players (got {len(team)})","code":422}),422
-        total_cost=0.0
-        if team:
-            valid,total_cost=db.validate_budget(team,budget,competition_id=comp)
-            if not valid:
-                return jsonify({"error":f"Budget exceeded: {total_cost:.1f} CR",
-                                "total_cost":total_cost,"budget":budget,"code":422}),422
+        ok,verr,total_cost=db.validate_selection(team,cap,vc,budget,xi,competition_id=comp)
+        if not ok:
+            return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422}),422
         result=db.save_next_week(n,team,cap,vc,competition_id=comp)
         _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
         return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})

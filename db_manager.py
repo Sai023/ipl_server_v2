@@ -958,6 +958,47 @@ class DatabaseManager:
         total = round(sum(price_map.get(pid, 0.0) for pid in player_ids), 1)
         return total <= budget, total
 
+    def validate_selection(self, team: list, cap, vc, budget: float, xi_size: int,
+                           competition_id=None) -> tuple:
+        """Full server-side validation of a proposed XI (BIZ-1).
+
+        Returns (ok: bool, error: str|None, total_cost: float). An empty team is
+        allowed (a cleared draft). Enforces, in one DB round-trip:
+          - exactly xi_size players,
+          - no duplicate players,
+          - every player is a real player IN this competition (rejects unknown /
+            foreign IDs that would otherwise price as 0.0 and bypass the budget),
+          - captain and vice-captain, when set, are in the XI and are distinct,
+          - total price <= budget.
+        """
+        if not team:
+            return True, None, 0.0
+        if len(team) != xi_size:
+            return False, f"Need exactly {xi_size} players (got {len(team)})", 0.0
+        if len(set(team)) != len(team):
+            return False, "Duplicate players are not allowed", 0.0
+        cid = self._cid(competition_id)
+        with self._read() as con:
+            ph   = ",".join("?" * len(team))
+            rows = con.execute(
+                f"SELECT id, price FROM players WHERE competition_id=? AND id IN ({ph})",
+                [cid, *team]
+            ).fetchall()
+        price_map = {r["id"]: r["price"] for r in rows}
+        missing = [pid for pid in team if pid not in price_map]
+        if missing:
+            return False, f"Unknown player(s) for this competition: {', '.join(missing[:5])}", 0.0
+        total = round(sum(price_map[pid] for pid in team), 1)
+        if total > budget:
+            return False, f"Budget exceeded: {total:.1f} CR (max {budget:.1f})", total
+        if cap and cap not in team:
+            return False, "Captain must be one of your selected players", total
+        if vc and vc not in team:
+            return False, "Vice-captain must be one of your selected players", total
+        if cap and vc and cap == vc:
+            return False, "Captain and vice-captain must be different players", total
+        return True, None, total
+
     def save_next_week(self, name: str, team: list, cap, vc, competition_id=None) -> dict:
         cid = self._cid(competition_id)
         now_iso = datetime.now(timezone.utc).isoformat()
