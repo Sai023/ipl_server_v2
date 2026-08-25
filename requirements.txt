@@ -1,6 +1,7 @@
 Flask>=3.0,<4.0
 requests>=2.31,<3.0
 APScheduler>=3.10,<4.0
+psycopg[binary,pool]>=3.2,<4.0   # INF-1: managed Postgres driver + connection pool
 
 # APScheduler powers tasks.start_daily_discovery_scheduler() — the in-process
 # daily cron that fires logic.cricbuzz_discovery + scraper.run_full_scrape

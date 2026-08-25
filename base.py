@@ -26,14 +26,15 @@ import json as _json
 import logging as _logging
 import re
 import secrets as _secrets
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import threading
 import time
 import unicodedata
 
 from flask import Flask, request, jsonify, render_template
 from db_manager import DatabaseManager
-from config import DB_PATH, BASE_DIR, DATA_DIR  # paths — single source of truth
+from config import DATABASE_URL, BASE_DIR, DATA_DIR  # paths + DB DSN — single source of truth
 from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated here
 
 # ── Paths / Game constants ──────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ def resolve_id_list(con, id_or_name_list, display_name=None, week_no=None):
             _log(f"[resolver] UNRESOLVED: '{s}'","warning")
     if needs_patch and display_name and week_no is not None:
         try:
-            con.execute("UPDATE user_selections SET nw_team_json=? WHERE display_name=? AND week_no=?",
+            con.execute("UPDATE user_selections SET nw_team_json=%s WHERE display_name=%s AND week_no=%s",
                         (_json.dumps(resolved),display_name,week_no))
         except Exception as e:
             _log(f"[resolver] Write-back failed: {e}","warning")
@@ -170,12 +171,10 @@ def _log(msg,level="info"): getattr(_logger,level,_logger.info)(msg)
 # ── DB connection factory ────────────────────────────────────────────────────────────────
 
 def _db_con():
-    con=sqlite3.connect(str(DB_PATH),timeout=30)
-    con.row_factory=sqlite3.Row
-    con.execute("PRAGMA journal_mode = WAL")
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute("PRAGMA busy_timeout = 30000")
-    return con
+    # Standalone psycopg connection for the player resolver (get + close pattern).
+    # autocommit so resolve_id_list's write-back commits without an explicit commit.
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row,
+                           prepare_threshold=None, autocommit=True)
 
 
 # ── Rate limiter ────────────────────────────────────────────────────────────────────
@@ -202,7 +201,7 @@ def _check_rate(lim):
 
 # ── Singletons ───────────────────────────────────────────────────────────────────────
 
-db  = DatabaseManager(DB_PATH)
+db  = DatabaseManager(DATABASE_URL)
 app = Flask(
     __name__,
     template_folder=str(BASE_DIR/"templates"),
@@ -218,16 +217,16 @@ app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
 # ── Flask error handlers + middleware ────────────────────────────────────────────────
 
-@app.errorhandler(sqlite3.IntegrityError)
+@app.errorhandler(psycopg.IntegrityError)
 def _handle_integrity(e):
     msg=str(e)
-    if "UNIQUE" in msg.upper(): return jsonify({"error":f"Duplicate record: {msg}","code":400}),400
-    if "CHECK" in msg.upper() or "FOREIGN KEY" in msg.upper(): return jsonify({"error":f"Constraint: {msg}","code":400}),400
+    if "unique" in msg.lower() or "duplicate" in msg.lower(): return jsonify({"error":f"Duplicate record: {msg}","code":400}),400
+    if "check" in msg.lower() or "foreign key" in msg.lower(): return jsonify({"error":f"Constraint: {msg}","code":400}),400
     return jsonify({"error":msg,"code":400}),400
 
-@app.errorhandler(sqlite3.OperationalError)
+@app.errorhandler(psycopg.OperationalError)
 def _handle_operational(e):
-    _log(f"SQLite error: {e}","error")
+    _log(f"Database error: {e}","error")
     return jsonify({"error":"Database error","detail":str(e),"code":500}),500
 
 @app.errorhandler(500)

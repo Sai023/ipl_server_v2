@@ -23,7 +23,7 @@ services:
     name: ipl-fantasy-2026
     runtime: python
     plan: free
-    region: oregon            # or singapore — match where most players live
+    region: frankfurt         # MUST match the Neon region (eu-central-1) — cross-region = slow
     branch: main
     autoDeploy: true          # any push to main redeploys
 
@@ -52,4 +52,7 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       - key: ROLLOVER_TOKEN
+        sync: false
+      # INF-1: Neon Postgres connection string (copy from the Neon dashboard).
+      - key: DATABASE_URL
         sync: false

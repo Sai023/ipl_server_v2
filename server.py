@@ -136,7 +136,7 @@ def _audit_player_id_coverage():
     """v12.5: Only flags IDs NOT in players table (true ghosts)."""
     try:
         with db._read() as con:
-            pmp_ids = {r[0] for r in con.execute(
+            pmp_ids = {r["player_id"] for r in con.execute(
                 "SELECT DISTINCT player_id FROM player_match_points").fetchall()}
             all_player_ids = {r["id"] for r in con.execute("SELECT id FROM players").fetchall()}
             all_players = {r["id"]: r["name"] for r in con.execute(
@@ -144,7 +144,7 @@ def _audit_player_id_coverage():
             sels = con.execute(
                 "SELECT display_name,week_no,tw_team_json FROM user_selections "
                 "ORDER BY display_name,week_no").fetchall()
-            totals = {r[0]: r[1] for r in con.execute(
+            totals = {r["display_name"]: r["pts"] for r in con.execute(
                 "SELECT us.display_name, COALESCE(SUM(us.week_pts),0) AS pts "
                 "FROM user_selections us GROUP BY us.display_name").fetchall()}
         print("  [startup] === Player ID Coverage Audit ===")
@@ -229,7 +229,10 @@ def _audit_monday_match_schedule():
 
 
 def _cold_start_hydrate():
-    try:
+    # INF-1: Postgres is persistent and ETL-seeded; there is no cold DB to
+    # hydrate from JSON at boot. No-op, kept so the module-level call stays valid.
+    return
+    try:  # unreachable below (legacy JSON-hydrate path)
         for c in db.list_competitions():
             slug = c["slug"]
             with db._read() as con:
@@ -421,7 +424,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     lan_ip = get_lan_ip(); tunnel = None
-    _log(f"Database: {DB_PATH}")
+    _log("Database: Postgres (DATABASE_URL)")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
     # v13.4 (Phase 1+2): In HOSTED mode, pull latest committed data before
@@ -435,10 +438,7 @@ if __name__ == "__main__":
             # `origin` remote — every fetch/push fails until we add one.
             # ensure_origin_remote() reads GITHUB_REPOSITORY env and sets
             # origin to https://github.com/<slug>.git. Idempotent.
-            ok, msg = cloud_sync.ensure_origin_remote()
-            _log(f"Boot-time origin setup: {msg}")
-            changed, msg = cloud_sync.pull_latest(log=_log)
-            _log(f"Boot-time git pull: {msg}")
+            # INF-1: no git pull — data lives in Postgres, always current.
             # INF-2: surface an expired/invalid PAT at boot — otherwise writes
             # keep returning 200 while nothing persists to git (lost on redeploy).
             pok, pmsg = cloud_sync.check_token(log=_log)
@@ -458,7 +458,7 @@ if __name__ == "__main__":
         _log("HOSTED mode: skipping _rebuild_scores_and_points() — "
              "trusting committed fantasy.db")
     else:
-        _rebuild_scores_and_points()
+        _log("INF-1: skipping rebuild (Postgres is the persistent source of truth)")
 
     _audit_player_id_coverage()
     _audit_monday_match_schedule()

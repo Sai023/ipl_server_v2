@@ -34,7 +34,7 @@ Dependency: base.py → routes.py  (routes never imports from server)
 import json as _json
 import os
 import re
-import sqlite3
+import psycopg
 from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, jsonify, render_template, send_from_directory
@@ -70,6 +70,7 @@ def _push_if_hosted(reason: str, extra_paths: list | None = None) -> None:
     Failures are logged but do not surface to the caller as a 500. The
     local DB has the change; the next successful push will catch it up.
     """
+    return  # INF-1: no-op — Postgres persists writes directly; there is no git DB sync.
     if not _IS_HOSTED:
         return
     try:
@@ -670,7 +671,7 @@ def api_save_next_week(n):
         result=db.save_next_week(n,team,cap,vc,competition_id=comp)
         _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
         return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})
-    except sqlite3.IntegrityError as e:
+    except psycopg.IntegrityError as e:
         return jsonify({"error":str(e),"code":400}),400
     except Exception as e:
         _log(f"POST /api/save-next-week/{n}: {e}","error")
@@ -732,26 +733,25 @@ def api_audit_scores(n):
     try:
         if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
         with db._read() as con:
-            con.row_factory=sqlite3.Row
             sels=con.execute(
                 "SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,week_pts "
-                "FROM user_selections WHERE display_name=? ORDER BY week_no",(n,)).fetchall()
+                "FROM user_selections WHERE display_name=%s ORDER BY week_no",(n,)).fetchall()
             if not sels:
                 return jsonify({"ok":True,"name":n,"weeks":[],"total_stored":0,"total_computed":0})
             weeks_out=[]
             for sel in sels:
                 wn=sel["week_no"]; ids=_json.loads(sel["tw_team_json"] or "[]")
                 cap=sel["tw_cap_id"]; vc=sel["tw_vc_id"]; stored=sel["week_pts"]
-                week_matches=con.execute("SELECT id,title,status FROM matches WHERE week_no=? ORDER BY id",(wn,)).fetchall()
+                week_matches=con.execute("SELECT id,title,status FROM matches WHERE week_no=%s ORDER BY id",(wn,)).fetchall()
                 player_details=[]; computed_total=0
                 for pid in ids:
-                    pr=con.execute("SELECT name,team,role FROM players WHERE id=?",(pid,)).fetchone()
+                    pr=con.execute("SELECT name,team,role FROM players WHERE id=%s",(pid,)).fetchone()
                     p_name=pr["name"] if pr else pid; match_entries=[]
                     mult_for_player=1.0
                     for wm in week_matches:
                         ms=con.execute(
                             "SELECT raw_score_json FROM match_scores "
-                            "WHERE match_id=? AND player_id=?",(wm["id"],pid)).fetchone()
+                            "WHERE match_id=%s AND player_id=%s",(wm["id"],pid)).fetchone()
                         if ms:
                             sc=_json.loads(ms["raw_score_json"] or "{}")
                             trace=_debug_calc_pts(sc, player_id=pid, cap_id=cap, vc_id=vc)
@@ -790,14 +790,14 @@ def api_clean_scores():
         comp=_comp()
         delete_json=request.args.get("delete_json","").strip().lower() in ("1","true","yes")
         with db._write() as con:
-            con.execute("DELETE FROM player_match_points WHERE competition_id=?",(comp,))
-            con.execute("DELETE FROM match_scores WHERE competition_id=?",(comp,))
-            try: con.execute("DELETE FROM user_match_points WHERE competition_id=?",(comp,))
+            con.execute("DELETE FROM player_match_points WHERE competition_id=%s",(comp,))
+            con.execute("DELETE FROM match_scores WHERE competition_id=%s",(comp,))
+            try: con.execute("DELETE FROM user_match_points WHERE competition_id=%s",(comp,))
             except Exception: pass
-            con.execute("UPDATE user_selections SET week_pts=0 WHERE competition_id=?",(comp,))
-            try: con.execute("UPDATE players SET season_pts=0, points=0 WHERE competition_id=?",(comp,))
+            con.execute("UPDATE user_selections SET week_pts=0 WHERE competition_id=%s",(comp,))
+            try: con.execute("UPDATE players SET season_pts=0, points=0 WHERE competition_id=%s",(comp,))
             except Exception:
-                try: con.execute("UPDATE players SET season_pts=0 WHERE competition_id=?",(comp,))
+                try: con.execute("UPDATE players SET season_pts=0 WHERE competition_id=%s",(comp,))
                 except Exception: pass
         deleted_files=0
         if delete_json:
@@ -1041,15 +1041,15 @@ def api_match_centre():
         with db._read() as con:
             match_rows = con.execute(
                 "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches WHERE competition_id=? ORDER BY week_no, id", (comp,)
+                "FROM matches WHERE competition_id=%s ORDER BY week_no, id", (comp,)
             ).fetchall()
             ump_rows = con.execute(
                 "SELECT match_id, pts FROM user_match_points "
-                "WHERE competition_id=? AND display_name=?", (comp, n)
+                "WHERE competition_id=%s AND display_name=%s", (comp, n)
             ).fetchall()
             wk_rows = con.execute(
                 "SELECT week_no, week_pts, points_per_match FROM user_selections "
-                "WHERE competition_id=? AND display_name=? ORDER BY week_no", (comp, n)
+                "WHERE competition_id=%s AND display_name=%s ORDER BY week_no", (comp, n)
             ).fetchall()
 
         ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
@@ -1176,7 +1176,7 @@ def api_match_details(match_id):
         with db._read() as con:
             mr = con.execute(
                 "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches WHERE id=? AND competition_id=?", (match_id, comp)
+                "FROM matches WHERE id=%s AND competition_id=%s", (match_id, comp)
             ).fetchone()
             if not mr:
                 return jsonify({"error": f"match '{match_id}' not found", "code": 404}), 404
@@ -1187,7 +1187,7 @@ def api_match_details(match_id):
             # Historical XI: read from the week this match belongs to
             sel = con.execute(
                 "SELECT tw_team_json, tw_cap_id, tw_vc_id "
-                "FROM user_selections WHERE competition_id=? AND display_name=? AND week_no=?",
+                "FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s",
                 (comp, n, wk)
             ).fetchone()
 
@@ -1211,15 +1211,15 @@ def api_match_details(match_id):
             pmp_map: dict = {}
             player_info: dict = {}
             if team_ids:
-                ph = ",".join("?" * len(team_ids))
+                ph = ",".join(["%s"] * len(team_ids))
                 for r in con.execute(
                     f"SELECT player_id, base_pts FROM player_match_points "
-                    f"WHERE match_id=? AND competition_id=? AND player_id IN ({ph})",
+                    f"WHERE match_id=%s AND competition_id=%s AND player_id IN ({ph})",
                     [match_id, comp] + team_ids
                 ).fetchall():
                     pmp_map[r["player_id"]] = r["base_pts"]
                 for r in con.execute(
-                    f"SELECT id, name, role, team FROM players WHERE competition_id=? AND id IN ({ph})",
+                    f"SELECT id, name, role, team FROM players WHERE competition_id=%s AND id IN ({ph})",
                     [comp] + team_ids
                 ).fetchall():
                     player_info[r["id"]] = dict(r)
@@ -1227,7 +1227,7 @@ def api_match_details(match_id):
             # Authoritative per-match total from user_match_points
             ump_row = con.execute(
                 "SELECT pts FROM user_match_points "
-                "WHERE competition_id=? AND display_name=? AND match_id=?", (comp, n, match_id)
+                "WHERE competition_id=%s AND display_name=%s AND match_id=%s", (comp, n, match_id)
             ).fetchone()
             user_total = ump_row["pts"] if ump_row else 0
 
@@ -1235,7 +1235,7 @@ def api_match_details(match_id):
             if not user_total:
                 ppm_sel = con.execute(
                     "SELECT points_per_match FROM user_selections "
-                    "WHERE competition_id=? AND display_name=? AND week_no=?", (comp, n, wk)
+                    "WHERE competition_id=%s AND display_name=%s AND week_no=%s", (comp, n, wk)
                 ).fetchone()
                 if ppm_sel:
                     blob = _jloads(ppm_sel["points_per_match"], {})
@@ -1375,7 +1375,7 @@ def api_matches_status():
         with db._read() as con:
             rows=con.execute(
                 "SELECT id,week_no,title,status,scorecard_url,teams_json,date_label "
-                "FROM matches WHERE competition_id=? ORDER BY id", (_comp(),)
+                "FROM matches WHERE competition_id=%s ORDER BY id", (_comp(),)
             ).fetchall()
         matches=[dict(r) for r in rows]
         # Flag duplicate Cricbuzz IDs so Admin Tab can warn the user
@@ -1408,12 +1408,12 @@ def api_update_match_url():
         m=re.search(r'(\d{5,})',url)
         if not m: return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
         cb_id=m.group(1); clean_url=f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
         comp=_comp()
-        row=con.execute("SELECT id FROM matches WHERE id=? AND competition_id=?",(match_id,comp)).fetchone()
-        if not row: con.close(); return jsonify({"error":f"match '{match_id}' not found","code":404}),404
-        con.execute("UPDATE matches SET scorecard_url=? WHERE id=? AND competition_id=?",(clean_url,match_id,comp))
-        con.commit(); con.close()
+        with db._read() as con:
+            row=con.execute("SELECT id FROM matches WHERE id=%s AND competition_id=%s",(match_id,comp)).fetchone()
+        if not row: return jsonify({"error":f"match '{match_id}' not found","code":404}),404
+        with db._write() as con:
+            con.execute("UPDATE matches SET scorecard_url=%s WHERE id=%s AND competition_id=%s",(clean_url,match_id,comp))
         if _IS_HOSTED:
             # No Cricbuzz egress in cloud \u2014 push the URL change so the GitHub
             # Actions runner sees the new URL on checkout, then dispatch the
@@ -1516,18 +1516,7 @@ def api_sync_now():
     # 60-90s", clicks Refresh again later to pull the new commit.
     if _IS_HOSTED:
         try:
-            changed, msg = cloud_sync.pull_latest(log=_log)
-            if changed:
-                # Reconnect any cached DB handle so the next request reads
-                # the freshly-pulled fantasy.db, not the file the connection
-                # was opened against. Best-effort — SQLite reopens per
-                # request anyway, but explicit is safer.
-                try:
-                    if hasattr(db, "reload_from_disk"):
-                        db.reload_from_disk()
-                except Exception as e:
-                    _log(f"DB reload after pull failed (will retry next request): {e}",
-                         "warn")
+            # INF-1: no git pull — data lives in Postgres and is always current.
 
             # Best-effort dispatch. If the PAT lacks actions:write the
             # request fails 403; we surface that in the response so the
@@ -1544,16 +1533,14 @@ def api_sync_now():
             )
             return jsonify({
                 "ok":         True,
-                "mode":       "pull_and_dispatch",
-                "pulled":     changed,
-                "pull_msg":   msg,
+                "mode":       "dispatch",
                 "dispatched": dispatched,
                 "dispatch_msg": dmsg,
-                "message":    ("Pulled latest + triggered cloud scrape. "
-                               "Click Refresh again in 60-90s to see new scores.")
+                "message":    ("Triggered a cloud scrape. Click Refresh in 60-90s "
+                               "to see new scores.")
                               if dispatched
-                              else (f"Pulled latest. Scrape NOT triggered: {dmsg}. "
-                                    f"Check PAT has actions:write scope."),
+                              else (f"Scrape NOT triggered: {dmsg}. "
+                                    f"Check the PAT has actions:write scope."),
             })
         except Exception as e:
             _log(f"POST /api/sync-now (HOSTED): {e}", "error")

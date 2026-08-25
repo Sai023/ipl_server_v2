@@ -1,26 +1,35 @@
 """
-IPL Fantasy 2026 — Database Initialiser                     init_db v1.0.0
+IPL Fantasy 2026 — Database Initialiser                     init_db v2.0.0
 ===========================================================================
-Startup seeder for players, matches, and history. The schema itself is
+Startup bootstrap for the members/passcode layer. The schema itself is
 owned by db_manager.py — DatabaseManager._init_schema() is the
-authoritative definition. This file only does the "is the DB empty?
-then run the seed scripts" check on boot.
+authoritative definition.
+
+INF-1 (Postgres cutover)
+------------------------
+The persistent data now lives in managed Postgres (DATABASE_URL), not a
+SQLite file committed to git. Consequences for this module:
+
+  * The players/matches "seed if empty" checks now query Postgres. On the
+    live deploy the tables are populated by the one-time ETL, so these are
+    no-ops. If Postgres is somehow empty we *warn* — we no longer shell out
+    to the SQLite Seed_*.py scripts (those wrote to the old local file and
+    are kept only as manual/SA20 tooling until they are ported).
+  * The members/passcode backfill is idempotent and now runs against
+    Postgres, so the "ensure Sai stays admin" safety-net keeps working.
 
 What lives here
 ---------------
-_auto_seed_*    — the three startup seed functions.
+_auto_seed_*    — the startup checks.
 run_all_sync()  — single public entry point called by server.py on startup.
 """
 
 import hashlib as _hashlib
-import json as _json
-import sqlite3
-import subprocess
-import sys
+import psycopg
+from psycopg.rows import dict_row
 from datetime import datetime, timezone
-from pathlib import Path
 
-from config import DATA_DIR, DB_PATH
+from config import DATA_DIR, DATABASE_URL
 
 # Passcode backfill constants — kept here (not imported from base) so init_db
 # can run before the Flask app is constructed (base.py creates the app at
@@ -31,52 +40,46 @@ _DEFAULT_ADMIN     = "Sai"     # seeded as is_admin=1 if present
 
 DATA_DIR.mkdir(exist_ok=True)
 
-# ── BASE_DIR is kept local: seed subprocess calls use cwd=str(BASE_DIR) ──────────
-BASE_DIR = Path(__file__).resolve().parent
 
-# ── DB connection helper — local copy for seed functions ──────────────────────
-# server.py retains its own _db_con() for route handlers; this one is used only
-# by _auto_seed_members_if_needed() which runs at startup before Flask is live.
-# DB_PATH is now sourced from config.py — guaranteed same path as scraper.py.
+# ── DB connection helper — Postgres (INF-1) ──────────────────────────────────
+# Runs at startup before Flask is live, so it opens its own short-lived
+# connection rather than borrowing base.py's pool.
 
 def _db_con():
-    con = sqlite3.connect(str(DB_PATH), timeout=30)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode = WAL")
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute("PRAGMA busy_timeout = 30000")
-    return con
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-# ── Auto-seed functions — relocated verbatim from server.py ───────────────────
-# No logic changes. Strict-scope Phase 1/2 relocation only.
-
-def _auto_seed_if_needed():
-    seed=BASE_DIR/"Seed_Matches.py"
-    if not seed.exists(): seed=BASE_DIR/"seed_matches.py"
-    if not seed.exists(): return
-    try:
-        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
-        n=con.execute("SELECT COUNT(*) FROM matches").fetchone()[0]; con.close()
-    except: return
-    if n>0: return
-    print("\n  [startup] No match data \u2014 running seed script ...")
-    try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
-    except Exception as e: print(f"  [startup] Could not run: {e}\n")
-
+# ── Data presence checks (Postgres) ──────────────────────────────────────────
+# Post-INF-1 the source of truth is Postgres, seeded by the ETL. These no
+# longer subprocess-launch the SQLite Seed_*.py scripts; they only warn if
+# the expected data is missing so an empty-DB deploy is loud, not silent.
 
 def _auto_seed_players_if_needed():
-    seed=BASE_DIR/"Seed_Players.py"
-    if not seed.exists(): seed=BASE_DIR/"seed_players.py"
-    if not seed.exists(): return
     try:
-        con=sqlite3.connect(str(DB_PATH),timeout=30); con.execute("PRAGMA busy_timeout=30000")
-        n=con.execute("SELECT COUNT(*) FROM players").fetchone()[0]; con.close()
-    except: return
-    if n>0: return
-    print("\n  [startup] No player data \u2014 running Seed_Players.py ...")
-    try: subprocess.run([sys.executable,str(seed)],cwd=str(BASE_DIR),timeout=60); print("  [startup] Done.\n")
-    except Exception as e: print(f"  [startup] Could not run: {e}\n")
+        con = _db_con()
+        n = con.execute("SELECT COUNT(*) AS n FROM players").fetchone()["n"]
+        con.close()
+    except Exception as e:
+        print(f"  [startup] Could not check players table: {e}")
+        return
+    if n > 0:
+        return
+    print("  [startup] WARNING: Postgres has no players — run the ETL/seed "
+          "before serving.")
+
+
+def _auto_seed_if_needed():
+    try:
+        con = _db_con()
+        n = con.execute("SELECT COUNT(*) AS n FROM matches").fetchone()["n"]
+        con.close()
+    except Exception as e:
+        print(f"  [startup] Could not check matches table: {e}")
+        return
+    if n > 0:
+        return
+    print("  [startup] WARNING: Postgres has no matches — run the ETL/seed "
+          "before serving.")
 
 
 # ── Members / passcode backfill ───────────────────────────────────────────────
@@ -99,7 +102,7 @@ def _auto_seed_members_if_needed():
             # Even if backfill already ran, make sure Sai is_admin remains true.
             # Cheap insurance against a manual DB edit dropping the flag.
             con.execute(
-                "UPDATE members SET is_admin=1 WHERE username=? AND is_admin=0",
+                "UPDATE members SET is_admin=1 WHERE username=%s AND is_admin=0",
                 (_DEFAULT_ADMIN,)
             )
             con.commit(); con.close()
@@ -113,27 +116,27 @@ def _auto_seed_members_if_needed():
         now_iso = datetime.now(timezone.utc).isoformat()
         for uname in usernames:
             existing = con.execute(
-                "SELECT 1 FROM members WHERE username=?", (uname,)
+                "SELECT 1 FROM members WHERE username=%s", (uname,)
             ).fetchone()
             if existing:
                 continue
             is_admin = 1 if uname == _DEFAULT_ADMIN else 0
             con.execute("""
                 INSERT INTO members (username, passcode_hash, must_change, is_admin, created_at)
-                VALUES (?, ?, 1, ?, ?)
+                VALUES (%s, %s, 1, %s, %s)
             """, (uname, _hash_passcode_local(_DEFAULT_PASSCODE, uname), is_admin, now_iso))
             seeded.append(uname)
 
         # Make sure Sai is admin even if seeded with is_admin=0 earlier.
         con.execute(
-            "UPDATE members SET is_admin=1 WHERE username=? AND is_admin=0",
+            "UPDATE members SET is_admin=1 WHERE username=%s AND is_admin=0",
             (_DEFAULT_ADMIN,)
         )
 
-        con.execute(
-            "INSERT OR REPLACE INTO meta (key,value) VALUES ('_members_backfill_done',?)",
-            (_BACKFILL_VERSION,)
-        )
+        con.execute("""
+            INSERT INTO meta (key,value) VALUES ('_members_backfill_done',%s)
+            ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value
+        """, (_BACKFILL_VERSION,))
         con.commit(); con.close()
         if seeded:
             print(f"  [startup] Seeded passcode '{_DEFAULT_PASSCODE}' "
@@ -148,9 +151,9 @@ def _auto_seed_members_if_needed():
 
 def run_all_sync():
     """
-    Single startup call for server.py. Runs the seed checks in order:
-    players → matches → members. Each function opens its own
-    connection and is idempotent.
+    Single startup call for server.py. Runs the checks in order:
+    players → matches → members. Each opens its own connection and is
+    idempotent against Postgres.
     """
     _auto_seed_players_if_needed()
     _auto_seed_if_needed()

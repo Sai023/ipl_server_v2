@@ -23,12 +23,17 @@ Rule: This file must have ZERO imports from other project modules.
       Only stdlib (pathlib) is permitted.
 """
 
+import os
 from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH  = DATA_DIR / "fantasy.db"
+DB_PATH  = DATA_DIR / "fantasy.db"   # legacy (pre-INF-1); no longer the data source
+
+# ── Database (INF-1): managed Postgres via DATABASE_URL ───────────────────────
+# Set in the environment — Render env var in prod, exported locally for dev.
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # ── Season ────────────────────────────────────────────────────────────────────
 IPL_YEAR = 2026
