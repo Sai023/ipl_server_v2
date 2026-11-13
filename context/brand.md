@@ -31,3 +31,8 @@ BACKGROUND layer where cropping is harmless. Layers: `ic_launcher_foreground` (g
 splash/error screens). Copy them into `app/src/main/res/drawable/`; the two `mipmap-anydpi-v26/ic_launcher*.xml` files reference the
 foreground, background and monochrome drawables. Bump `versionCode` in `app/build.gradle.kts` for every release you want phones to treat
 as an update, then `./gradlew assembleRelease --no-daemon` (signed with `keystore/fantasy-release.jks` — keep it).
+
+**Shipped 2026-11-14 as the APK v1.2** (`C:\Users\Sahil\Downloads\BCLFantasy-1.2.apk`). The Android project (outside this repo) also got a native splash that matches the web
+loader (`ic_splash_logo` tile + "BCL FANTASY" wordmark) and `res/values-v31/themes.xml` with `windowSplashScreenBackground` = navy, because Android 12+ draws its own
+startup splash first and it was white. Verified on an API 34 virtual phone: launcher icon (circle mask), startup splash, in-app splash. The themed-icon (monochrome)
+layer was only previewed with `tools/preview_android_icon.js`, not seen on a device.
