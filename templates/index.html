@@ -8,6 +8,7 @@
   <title>BCL Fantasy</title>
   <link rel="stylesheet" href="/static/style.css?v=1.0">
   <link rel="stylesheet" href="/static/ui.css?v=1.0">
+  <link rel="stylesheet" href="/static/screens.css?v=1.0">
 </head>
 <body>
 <div id="app-loading"><div class="logo">🏏</div><h1>BCL Fantasy</h1><div class="spinner"></div><p>Loading your league…</p></div>
@@ -67,7 +68,8 @@ function _avClass(team){
   switch(team.toLowerCase()){
     case"rcb":return"av-rcb";case"srh":return"av-srh";case"mi":return"av-mi";case"kkr":return"av-kkr";
     case"csk":return"av-csk";case"rr":return"av-rr";case"dc":return"av-dc";case"pbks":return"av-pbks";
-    case"lsg":return"av-lsg";case"gt":return"av-gt";default:return"";
+    case"lsg":return"av-lsg";case"gt":return"av-gt";
+    case"dsg":return"av-dsg";case"jsk":return"av-jsk";case"mict":return"av-mict";case"pr":return"av-pr";case"pc":return"av-pc";case"sec":return"av-sec";default:return"";
   }
 }
 function _roleBadge(role){
@@ -113,6 +115,8 @@ function switchTab(tab){
   _activeTab=tab;
   if(tab==="admin")_loadAdminMatches();
   if(_state)render(_state);
+  window.scrollTo(0,0);
+  var m=document.getElementById("main");if(m)m.focus({preventScroll:true});
 }
 
 // ─── HISTORY ────────────────────────────────────────────────────────────────
@@ -263,49 +267,16 @@ function _doStateRefresh(onDone){
   });
 }
 function _refreshData(){
-  var btn=document.getElementById("refresh-btn"),msg=document.getElementById("refresh-status");
-  if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">\u27F3</span> Syncing\u2026';}
-  if(msg){msg.textContent="\u23F3 Discovering new matches & scraping data\u2026";msg.className="refresh-status";}
+  var btn=document.getElementById("refresh-btn");
+  if(btn){btn.disabled=true;btn.classList.add("spinning");}
   if(window.IplPolling)window.IplPolling.stop();
-
-  // Step 1: Trigger background discovery + scrape
-  fetch("/api/sync-now",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+(localStorage.getItem("ipl_session_token")||"")},body:"{}"})
-    .then(function(r){return r.ok?r.json():null;})
-    .catch(function(){return null;})
-    .then(function(syncResp){
-      var syncOk=syncResp&&syncResp.ok;
-      if(msg){
-        msg.textContent=syncOk
-          ? "\u23F3 Scraping in background (~60s) \u2014 refreshing data now\u2026"
-          : "\u26A0 Sync unavailable \u2014 refreshing cached data\u2026";
-        msg.className="refresh-status";
-      }
-
-      // Step 2: Immediate state refresh (picks up existing data)
-      _doStateRefresh(function(ok){
-        var ts=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
-        if(btn){btn.disabled=false;btn.innerHTML="\u27F3 Refresh";}
-        if(ok){
-          if(msg){msg.textContent=syncOk?"\u2713 "+ts+" \u2014 scraping continues in background":"\u2713 Updated "+ts;msg.className="refresh-status ok";}
-        } else {
-          if(msg){msg.textContent="\u2717 Could not reach server";msg.className="refresh-status err";}
-        }
-        if(window.IplPolling)window.IplPolling.start();
-
-        // Step 3: Auto-refresh state again after 75s to pick up scraped data
-        if(syncOk){
-          setTimeout(function(){
-            _doStateRefresh(function(ok2){
-              if(ok2){
-                var ts2=new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
-                var m2=document.getElementById("refresh-status");
-                if(m2){m2.textContent="\u2713 Sync complete "+ts2;m2.className="refresh-status ok";}
-              }
-            });
-          }, 75000);
-        }
-      });
-    });
+  _doStateRefresh(function(ok){
+    var b=document.getElementById("refresh-btn");
+    if(b){b.disabled=false;b.classList.remove("spinning");}
+    if(ok)Ui.success("Updated "+new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),{duration:2500});
+    else Ui.error("Could not reach the server. Showing the last data we had.");
+    if(window.IplPolling)window.IplPolling.start();
+  });
 }
 function _simulateRollover(){
   var btn=document.getElementById("rollover-btn"),res=document.getElementById("rollover-result");
@@ -455,7 +426,7 @@ function _buildPitchView(teamArr,capId,vcId){
   teamArr.forEach(function(id){var p=resolvePlayer(id),r=(p.role||"BAT").toUpperCase();if(!groups[r])r="BAT";groups[r].push({id:id,player:p});});
   var cost=_teamCost(teamArr),rem=Math.round((BUDGET_TOTAL-cost)*10)/10,pct=Math.min(100,(cost/BUDGET_TOTAL)*100);
   var capP=capId?resolvePlayer(capId):null,vcP=vcId?resolvePlayer(vcId):null;
-  var h='<div class="pitch-topbar"><div class="pitch-budget"><div><div class="pitch-budget-label">Budget Remaining</div><div class="pitch-budget-amt">\u20B9'+rem.toFixed(1)+'cr</div><div class="pitch-track"><div class="pitch-fill" style="width:'+pct+'%"></div></div></div></div><div class="pitch-count">'+teamArr.length+' / '+XI_SIZE+'</div></div>';
+  var h='<div class="pitch-topbar"><div class="pitch-budget"><div><div class="pitch-budget-label">Budget Remaining</div><div class="pitch-budget-amt">'+rem.toFixed(1)+' CR</div><div class="pitch-track"><div class="pitch-fill" style="width:'+pct+'%"></div></div></div></div><div class="pitch-count">'+teamArr.length+' / '+XI_SIZE+'</div></div>';
   h+='<div class="pitch-pills"><span class="pitch-pill pill-wk">WK: '+groups.WK.length+'</span><span class="pitch-pill pill-bat">BAT: '+groups.BAT.length+'</span><span class="pitch-pill pill-ar">AR: '+groups.AR.length+'</span><span class="pitch-pill pill-bowl">BOWL: '+groups.BOWL.length+'</span>'+(teamArr.length===XI_SIZE?'<span class="pitch-pill pill-valid">\u2705 Valid</span>':'<span class="pitch-pill pill-invalid">\u26A0 '+teamArr.length+' players</span>')+'</div>';
   if(capP||vcP){h+='<div class="pitch-cvc">';if(capP)h+='<span class="cvc-c">C:</span> <strong>'+esc(capP.name)+'</strong> <span style="color:var(--muted)">(2\xd7)</span>';if(capP&&vcP)h+=' &nbsp;\u00B7&nbsp; ';if(vcP)h+='<span class="cvc-vc">VC:</span> <strong>'+esc(vcP.name)+'</strong> <span style="color:var(--muted)">(1.5\xd7)</span>';h+='</div>';}
   h+='<div class="pitch-ground">';
@@ -473,7 +444,7 @@ function _buildPitchView(teamArr,capId,vcId){
 
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
-  var h='<div class="card"><h3 class="section-title">Who are you?</h3>';
+  var h='<div class="card login-hero"><div class="brand-mark" aria-hidden="true">\uD83C\uDFCF</div><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
@@ -520,7 +491,7 @@ function _buildNextWeekCard(){
   h+=_buildNwSquad();
   if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
   h+='</div>';
-  return h+_buildPicker();
+  return '<div class="nw-layout"><div class="nw-left">'+h+'</div><div class="nw-right">'+_buildPicker()+'</div></div>';
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
@@ -538,26 +509,18 @@ function _buildMembersCard(memberNames){
   });
   return h+'</div>';
 }
-function _buildLeaderboardCard(lb){
-  var h='<div class="card">';
-  if(!lb||!lb.rankings||lb.rankings.length===0){
-    h+='<h3 class="section-title">\uD83C\uDFC6 Leaderboard</h3><p class="empty">No scores yet \u2014 check back after the first match.</p></div>';
-    return h;
-  }
-  h+='<h3 class="section-title">\uD83C\uDFC6 Leaderboard'+(lb.week_no?' \u2014 Week '+lb.week_no:'')+'</h3>';
-  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Avg: <strong style="color:var(--text)">'+lb.league_avg+'</strong> &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">'+lb.top_score+'</strong> &nbsp;\u00B7&nbsp; '+lb.member_count+' members</p>';
-  h+='<table class="lb-table"><thead><tr><th>#</th><th>Name</th><th>Pts</th><th>MVP</th></tr></thead><tbody>';
-  lb.rankings.forEach(function(row){
-    var isMe=row.name===_username;
-    h+='<tr'+(isMe?' class="me"':'')+'>'+
-      '<td class="rank">'+row.rank+'</td>'+
-      '<td>'+esc(row.name)+(isMe?' <span style="color:var(--gold);font-size:11px">(you)</span>':'')+'</td>'+
-      '<td class="pts">'+(row.total_pts||0)+'</td>'+
-      '<td class="mvp">'+(row.mvp&&row.mvp.player_name?esc(row.mvp.player_name)+' ('+row.mvp.pts+')':'\u2014')+'</td></tr>';
+function _buildPodium(rows){
+  if(!rows||rows.length<2)return"";
+  var top=rows.slice(0,3),order=top.length>=3?[top[1],top[0],top[2]]:[top[1],top[0]];
+  var medal={1:"🥇 1ST",2:"🥈 2ND",3:"🥉 3RD"};
+  var h='<div class="podium" style="grid-template-columns:'+(top.length>=3?"1fr 1.12fr 1fr":"1fr 1.12fr")+'" role="list" aria-label="Top '+top.length+'">';
+  order.forEach(function(r){
+    var cls=(r.rank===1?"p1":r.rank===2?"p2":"p3")+(r.name===_username?" me":"");
+    h+='<div class="pod '+cls+'" role="listitem"><div class="pod-av" aria-hidden="true">'+esc(_initials(r.name))+'</div><div class="pod-name">'+esc(r.name)+(r.name===_username?" (you)":"")+'</div><div class="pod-pts">'+(r.total_pts||0)+'</div><div class="pod-rank">'+(medal[r.rank]||("#"+r.rank))+'</div></div>';
   });
-  h+='</tbody></table></div>';
-  return h;
+  return h+'</div>';
 }
+function _buildLeaderboardCard(lb){return"";}   // replaced by ipl_glue.js (per-week columns + podium)
 function _buildDevTools(){
   var h='<div class="card devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 14:00 UTC rollover. Promotes every member\'s Next Week draft into a new locked This Week row. Use only if the scheduled rollover did not fire.</p>';
   h+='<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">\u25B6 Simulate Monday 14:00 UTC Rollover</button>';
@@ -1102,6 +1065,59 @@ function _doSwap(removeId,addId){
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
+var _TAB_DEFS=[
+  {id:"match-centre",label:"Match Centre",short:"Matches",icon:"matches"},
+  {id:"team",label:"This Week",short:"My team",icon:"team"},
+  {id:"next",label:"Next Week",short:"Pick",icon:"pick"},
+  {id:"leaderboard",label:"Leaderboard",short:"Table",icon:"table"},
+  {id:"members",label:"Members",short:"Members",icon:"members"}
+];
+function _tabList(){var t=_TAB_DEFS.slice();if(_isAdmin)t.push({id:"admin",label:"Admin",short:"Admin",icon:"admin"});return t;}
+function _activeCompObj(){return _competitions.filter(function(c){return c.slug===_activeComp;})[0]||{};}
+function _statusChip(c){
+  if(!c||!c.status)return "";
+  if(c.status==="active")return '<span class="chip live">● Live</span>';
+  if(c.status==="upcoming")return '<span class="chip soon">Starts soon</span>';
+  return '<span class="chip done">🏁 Finished'+(c.champion?' · '+esc(c.champion):'')+'</span>';
+}
+function _buildAppBar(){
+  var c=_activeCompObj(),sub=(c.name?esc(c.name)+' · ':'')+'Week '+_currentWeek;
+  var h='<a class="skip-link" href="#main">Skip to content</a><header class="app-bar"><div class="app-bar-in">';
+  h+='<div class="brand"><div class="brand-mark" aria-hidden="true">🏏</div><div style="min-width:0"><h1 class="brand-name">BCL Fantasy</h1><div class="brand-sub">'+sub+'</div></div></div>';
+  if(_username){
+    h+='<div class="app-bar-actions"><button type="button" class="icon-btn" id="refresh-btn" onclick="_refreshData()" aria-label="Refresh data" title="Refresh">'+Ui.icon("refresh")+'</button>';
+    h+='<button type="button" class="avatar-btn" onclick="_openUserMenu()" aria-haspopup="dialog" aria-label="Account menu for '+esc(_username)+'">'+esc(_initials(_username))+'</button></div>';
+  }
+  h+='</div>';
+  if(_username){
+    h+='<nav class="nav-tabs" aria-label="Main">';
+    _tabList().forEach(function(t){h+='<button type="button" class="nav-tab" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,18)+'<span>'+esc(t.label)+'</span></button>';});
+    h+='</nav>';
+  }
+  return h+'</header>';
+}
+function _buildBottomNav(){
+  var h='<nav class="bottom-nav" aria-label="Main">';
+  _TAB_DEFS.slice(0,4).forEach(function(t){h+='<button type="button" class="bn-item" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,22)+'<span>'+esc(t.short)+'</span></button>';});
+  var moreOn=(_activeTab==="members"||_activeTab==="admin");
+  h+='<button type="button" class="bn-item" onclick="_openMoreMenu()" aria-haspopup="dialog"'+(moreOn?' aria-current="page"':'')+'>'+Ui.icon("more",22)+'<span>More</span></button>';
+  return h+'</nav>';
+}
+function _userMenuItems(){
+  return [
+    {icon:"book",label:"Scoring rules",onClick:_showRulesModal},
+    {icon:"key",label:"Reset passcode",onClick:function(){_showResetPasscodeModal(false);}},
+    {divider:true},
+    {icon:"logout",label:"Switch user",danger:true,onClick:logout}
+  ];
+}
+function _openUserMenu(){Ui.sheet({title:_username+(_isAdmin?" · Admin":""),items:_userMenuItems()});}
+function _openMoreMenu(){
+  var items=[{icon:"members",label:"Members",onClick:function(){switchTab("members");}}];
+  if(_isAdmin)items.push({icon:"admin",label:"Admin",onClick:function(){switchTab("admin");}});
+  items.push({divider:true});
+  Ui.sheet({title:"More",items:items.concat(_userMenuItems())});
+}
 function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
   hideLoading();hideErrorBanner();
@@ -1114,40 +1130,26 @@ function render(state){
     }
   }
   var memberNames=Object.keys(members).sort();
-  var html='<div class="wrap">';
+  if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
+  var html=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1">';
   html+=_buildCompSwitcher();
-  var _cn=(_competitions.filter(function(c){return c.slug===_activeComp;})[0]||{name:""}).name;
-  html+='<h2 class="page-title">\uD83C\uDFCF BCL Fantasy</h2>';
-  html+='<p class="subtitle">'+(_cn?esc(_cn)+' \u00B7 ':'')+memberNames.length+' members \u00B7 '+matches.length+' matches \u00B7 Week '+_currentWeek+' \u00B7 \uD83D\uDCB0 '+BUDGET_TOTAL.toFixed(0)+' CR budget</p>';
+  html+='<div class="page-strip">'+_statusChip(_activeCompObj())+'<span class="chip"><b>'+memberNames.length+'</b> members</span><span class="chip"><b>'+matches.length+'</b> matches</span><span class="chip"><b>'+BUDGET_TOTAL.toFixed(0)+'</b> CR budget</span></div>';
   if(!_username){
-    html+=_buildLoginCard(memberNames);
-    html+=_buildChampionshipCard();html+=_buildLeaderboardCard(_leaderboard);
+    html+='<h2 class="ui-sr-only">Sign in</h2>'+_buildLoginCard(memberNames);
+    html+=_lbGrid();
     html+=_buildMembersCard(memberNames);
   } else {
-    var ini=_initials(_username);
-    html+='<div class="card"><div class="user-header-bar"><div class="user-header-left"><div class="user-avatar-large">'+esc(ini)+'</div><div><p class="label">Logged in as</p><p class="name">'+esc(_username)+(_isAdmin?' &nbsp;<span style="font-size:9px;background:var(--gold);color:#07111F;padding:1px 6px;border-radius:6px;font-weight:700;vertical-align:middle">ADMIN</span>':'')+'</p></div></div><div class="user-header-btns"><button class="btn btn-ghost btn-sm" onclick="_showResetPasscodeModal(false)" title="Reset Passcode">\uD83D\uDD11 Reset Passcode</button><button class="btn-refresh" id="refresh-btn" onclick="_refreshData()" title="Refresh">\u27F3 Refresh</button><button class="btn btn-ghost btn-sm" onclick="logout()">Switch user</button></div></div><div id="refresh-status" class="refresh-status" style="margin-top:4px;text-align:right"></div></div>';
-    html+='<div class="tabs">';
-    var _tabs=[
-      {id:"match-centre",label:"Match Centre \uD83C\uDFAF"},
-      {id:"team",label:"This Week \uD83D\uDD12"},
-      {id:"next",label:"Next Week \u270F\uFE0F"},
-      {id:"leaderboard",label:"Leaderboard"},
-      {id:"members",label:"Members"},
-    ];
-    if(_isAdmin)_tabs.push({id:"admin",label:"Admin \u2699\uFE0F"});
-    _tabs.forEach(function(t){
-      html+='<button class="tab-btn'+(_activeTab===t.id?' active':'')+'" onclick="switchTab(\''+t.id+'\')">'+t.label+'</button>';
-    });
-    html+='</div>';
-    if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
+    var _lbl=_tabList().filter(function(t){return t.id===_activeTab;})[0];
+    html+='<h2 class="ui-sr-only">'+esc(_lbl?_lbl.label:"")+'</h2>';
     if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
-    else if(_activeTab==="leaderboard")  {html+=_buildChampionshipCard();html+=_buildLeaderboardCard(_leaderboard);}
+    else if(_activeTab==="leaderboard")  html+=_lbGrid();
     else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
     else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
     else if(_activeTab==="admin")        {html+=_buildAdminTab();html+=_buildDevTools();}
   }
-  html+='</div>';
+  html+='</main>';
+  if(_username)html+=_buildBottomNav();
   $app.innerHTML=html;
   if(_activeTab==="next"&&_preserveSearchFocus){
     var inp=document.getElementById("picker-search-input");
@@ -1212,6 +1214,7 @@ function _buildCompSwitcher(){
   h+='</div>';
   return h;
 }
+function _lbGrid(){var ch=_buildChampionshipCard();return '<div class="lb-grid'+(ch?'':' lb-solo')+'">'+_buildLeaderboardCard(_leaderboard)+ch+'</div>';}
 function _buildChampionshipCard(){
   if(!_championship||_championship.length===0)return '';
   var h='<div class="card"><h3 class="section-title">🏆 Championship</h3>';

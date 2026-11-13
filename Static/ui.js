@@ -124,6 +124,56 @@
   Ui.prompt = function (o) { return openDialog(Object.assign({}, o, { input: true })); };
   Ui.notice = function (o) { return openDialog(Object.assign({ cancelText: false }, o)).then(function () {}); };
 
+  /* ---------- icons (inline SVG, inherit colour) ---------- */
+  var ICON_PATHS = {
+    matches: '<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/><path d="m9 15 2 2 4-4"/>',
+    team: '<path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/>',
+    pick: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    table: '<path d="M8 21h8M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/>',
+    members: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 20a6.5 6.5 0 0 0-3-5.4"/>',
+    admin: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+    more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+    refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14Z"/><path d="M20 17v4H6.5A2.5 2.5 0 0 1 4 19.5"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+  };
+  Ui.icon = function (name, size) {
+    var n = size || 20;
+    return '<svg class="ui-icon" width="' + n + '" height="' + n + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (ICON_PATHS[name] || "") + "</svg>";
+  };
+
+  /* ---------- sheet / menu: bottom sheet on phones, dropdown card on desktop ---------- */
+  Ui.sheet = function (o) {
+    var prev = document.activeElement;
+    var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd";
+    var html = '<div class="ui-sheet" role="dialog" aria-modal="true" aria-label="' + esc(o.title || "Menu") + '">' +
+      '<div class="ui-sheet-grip" aria-hidden="true"></div>' + (o.title ? '<h2 class="ui-sheet-title">' + esc(o.title) + "</h2>" : "") + '<div class="ui-sheet-list">';
+    (o.items || []).forEach(function (it, i) {
+      if (it.divider) { html += '<div class="ui-sheet-div"></div>'; return; }
+      html += '<button type="button" class="ui-sheet-item' + (it.danger ? " danger" : "") + '" data-i="' + i + '">' + (it.icon ? Ui.icon(it.icon, 20) : "") + '<span class="t">' + esc(it.label) + "</span>" + (it.hint ? '<span class="h">' + esc(it.hint) + "</span>" : "") + "</button>";
+    });
+    bd.innerHTML = html + "</div></div>";
+    document.body.appendChild(bd);
+    function close() { document.removeEventListener("keydown", onKey, true); if (bd.parentNode) bd.parentNode.removeChild(bd); try { if (prev && prev.focus) prev.focus(); } catch (e) {} }
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+      else if (e.key === "Tab") {
+        var f = bd.querySelectorAll("button"); if (!f.length) return;
+        if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+        else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+      }
+    }
+    document.addEventListener("keydown", onKey, true);
+    bd.addEventListener("mousedown", function (e) { if (e.target === bd) close(); });
+    bd.querySelectorAll(".ui-sheet-item").forEach(function (b) {
+      b.onclick = function () { var it = o.items[+b.getAttribute("data-i")]; close(); if (it && it.onClick) it.onClick(); };
+    });
+    var first = bd.querySelector(".ui-sheet-item"); if (first) first.focus();
+    return close;
+  };
+
   /* ---------- status cards ---------- */
   Ui.stateHtml = function (kind, o) {
     o = o || {};

@@ -443,9 +443,11 @@ _buildLeaderboardCard = function (lb) {
   var h = '<div class="card">';
   if (!lb || !lb.rankings || lb.rankings.length === 0) {
     return h + '<h3 class="section-title">\uD83C\uDFC6 Leaderboard</h3>'
-             + '<p class="empty">No scores yet \u2014 check back after the first match.</p></div>';
+             + (window.Ui ? Ui.stateHtml('empty', { title: 'No scores yet', message: 'Points appear here after the first match is scored.' })
+                          : '<p class="empty">No scores yet \u2014 check back after the first match.</p>') + '</div>';
   }
   h += '<h3 class="section-title">\uD83C\uDFC6 Leaderboard' + (lb.week_no ? " \u2014 Week " + lb.week_no : "") + "</h3>";
+  if (typeof _buildPodium === 'function') h += _buildPodium(lb.rankings);
   h += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">'
      + 'Avg: <strong style="color:var(--text)">' + lb.league_avg + '</strong>'
      + ' &nbsp;\u00B7&nbsp; Top: <strong style="color:var(--gold)">' + lb.top_score + '</strong>'
@@ -462,7 +464,7 @@ _buildLeaderboardCard = function (lb) {
   // Wrap in lb-scroll so the table can swipe horizontally on narrow screens
   // without squishing the per-week columns. Sticky #/Name columns + a
   // right-edge fade hint at hidden content. See .lb-scroll in style.css.
-  h += '<div class="lb-scroll"><table class="lb-table lb-table-wide"><thead><tr><th>#</th><th>Name</th>';
+  h += '<div class="lb-scroll"><table class="lb-table lb-table-wide"><caption class="ui-sr-only">League standings by week</caption><thead><tr><th scope="col">#</th><th scope="col">Name</th>';
   allWeeks.forEach(function (wk) { h += '<th style="text-align:right;font-size:11px">W' + wk + '</th>'; });
   h += '<th style="text-align:right" title="Cap \xd72 + VC \xd71.5 applied">Total\u00A0\u2605</th><th>MVP</th></tr></thead><tbody>';
   lb.rankings.forEach(function (row) {
@@ -496,6 +498,7 @@ _buildLeaderboardCard = function (lb) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function _injectMCStyles() {
+  return;   // styles now live in Static/screens.css (the rules below are kept only as the historical source)
   if (document.getElementById('ipl-mc-styles')) return;
   var s = document.createElement('style');
   s.id = 'ipl-mc-styles';

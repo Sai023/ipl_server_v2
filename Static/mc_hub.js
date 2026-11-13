@@ -44,6 +44,7 @@
    *   @media ≤480px — smaller font/padding for tighter screens
    */
   function _injectTabStyles() {
+    return;   // tab bar is restyled in Static/screens.css (nav-tabs / bottom-nav)
     if (document.getElementById('ipl-tab-styles')) return;
     var s = document.createElement('style');
     s.id  = 'ipl-tab-styles';
@@ -137,19 +138,21 @@
     h += _statBox(s.matches_played|| 0, 'Matches',     false);
     h += _statBox(s.avg_per_match || 0, 'Avg / Match', false);
     var bestLbl = s.best_match
-      ? _esc(s.best_match.replace(/ vs .*/, '') || 'Best')
-      : 'Best';
+      ? 'Best: ' + _esc(s.best_match.replace(/ vs .*/, '') || 'match')
+      : 'Best match';
     h += _statBox(s.best_pts || 0, bestLbl, true);
     h += '</div>';
 
     var weeks = d.weeks || [];
     if (!weeks.length) {
-      h += '<p class="empty" style="text-align:center;padding:24px 0">No matches yet.</p>';
+      h += (window.Ui ? Ui.stateHtml('empty', {title: 'No matches yet', message: 'Fixtures will appear here as soon as they are added.'}) : '<p class="empty">No matches yet.</p>');
     }
+    h += '<div class="mc-weeks">';
     weeks.forEach(function (wk) {
       var played = wk.matches_played || 0;
       var total  = wk.total_matches  || (wk.matches || []).length;
 
+      h += '<section class="mc-week">';
       h += '<div class="mc-week-hdr">';
       h += '<span class="mc-week-lbl">WEEK ' + wk.week_no + '</span>';
       h += '<span class="mc-week-pts">' + (wk.week_pts || 0) + ' pts'
@@ -193,7 +196,9 @@
         h += '</div>';
         h += '</div>';
       });
+      h += '</section>';
     });
+    h += '</div>';
 
     h += '</div>';
     return h;
