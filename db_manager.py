@@ -863,6 +863,138 @@ class DatabaseManager:
                 "UPDATE competitions SET champion=%s, status='completed', closed_at=%s WHERE slug=%s",
                 (champion, now_iso, slug))
 
+    # ── Competition data import (admin) ───────────────────────────────────
+    # Competition-row columns an import may fill in (anything else is refused).
+    # week1_anchor_utc may only be filled in while it is still the never-set 1970 default.
+    _IMPORT_COMP_FIELDS = ("valid_teams_json", "series_id", "series_slug", "year", "week1_anchor_utc")
+
+    def import_competition_data(self, slug, *, players=None, matches=None,
+                                comp_updates=None, dry_run=True) -> dict:
+        """Admin onboarding: upsert a competition's roster and/or fixtures in ONE
+        transaction. `players` = [(id,name,team,price,role)], `matches` = row dicts
+        from logic.competition_import.parse_schedule(), `comp_updates` = {column:
+        value} limited to _IMPORT_COMP_FIELDS.
+
+        Never deletes. Existing players are updated in place (season_pts/points
+        untouched); players missing from the file are only reported. Existing
+        matches are updated only while 'upcoming' (live/completed ones are locked
+        so scored data is never disturbed) and a real Cricbuzz scorecard URL is
+        never replaced by the /00000 placeholder. competitions.max_weeks is
+        re-derived from the match weeks, and the state ETag (`_saved:<slug>`) is
+        bumped so open browsers refresh.
+
+        dry_run=True runs exactly the same statements and then ROLLS BACK, so the
+        returned report is precisely what a real import would do. Raises
+        LookupError (unknown competition) / ValueError (blocked) with a
+        user-readable message."""
+        rep = {"players": None, "matches": None, "competition": {}}
+        with self._pool.connection() as con:
+            comp = con.execute(
+                "SELECT slug,status,max_weeks,valid_teams_json,series_id,series_slug,year,week1_anchor_utc "
+                "FROM competitions WHERE slug=%s FOR UPDATE", (slug,)).fetchone()
+            if not comp:
+                raise LookupError(f"competition '{slug}' not found")
+            if comp["status"] == "completed":
+                raise ValueError("this competition is completed and read-only - reopen it before importing")
+            rep["status"] = comp["status"]
+
+            if players is not None:
+                have = {r["id"]: r for r in con.execute(
+                    "SELECT id,name,team,price,role FROM players WHERE competition_id=%s", (slug,)).fetchall()}
+                ins, upd, same, changes = [], [], 0, []
+                for pid, name, team, price, role in players:
+                    old = have.get(pid)
+                    if old is None:
+                        ins.append((slug, pid, name, team, price, role))
+                        continue
+                    ch = {}
+                    for field, new in (("name", name), ("team", team), ("price", price), ("role", role)):
+                        if (abs(float(old[field]) - float(new)) > 1e-9) if field == "price" else (old[field] != new):
+                            ch[field] = [old[field], new]
+                    if ch:
+                        upd.append((name, team, price, role, slug, pid))
+                        changes.append({"id": pid, "name": name, "changes": ch})
+                    else:
+                        same += 1
+                with con.cursor() as cur:
+                    if ins:
+                        cur.executemany(
+                            "INSERT INTO players (competition_id,id,name,team,price,role) "
+                            "VALUES (%s,%s,%s,%s,%s,%s)", ins)
+                    if upd:
+                        cur.executemany(
+                            "UPDATE players SET name=%s,team=%s,price=%s,role=%s "
+                            "WHERE competition_id=%s AND id=%s", upd)
+                rep["players"] = {
+                    "inserted": len(ins), "updated": len(upd), "unchanged": same,
+                    "not_in_file": sorted(set(have) - {p[0] for p in players}),
+                    "changes": changes[:50]}
+
+            if matches is not None:
+                ids = [m["id"] for m in matches]
+                clash = [r["id"] for r in con.execute(
+                    "SELECT id FROM matches WHERE id = ANY(%s) AND competition_id <> %s",
+                    (ids, slug)).fetchall()]
+                if clash:
+                    raise ValueError("match id(s) already used by another competition: " + ", ".join(clash[:5]))
+                have = {r["id"]: r for r in con.execute(
+                    "SELECT id,week_no,title,teams_json,date_label,status,scorecard_url "
+                    "FROM matches WHERE competition_id=%s", (slug,)).fetchall()}
+                ins, upd, same, locked = [], [], 0, 0
+                for m in matches:
+                    old = have.get(m["id"])
+                    if old is None:
+                        ins.append((slug, m["id"], m["week_no"], m["title"], "upcoming",
+                                    m["scorecard_url"], m["teams_json"], m["date_label"]))
+                    elif old["status"] != "upcoming":
+                        locked += 1
+                    else:
+                        url = m["scorecard_url"] if m["cricbuzz_id"] else old["scorecard_url"]
+                        new = (m["week_no"], m["title"], m["teams_json"], m["date_label"], url)
+                        cur_v = (old["week_no"], old["title"], old["teams_json"], old["date_label"], old["scorecard_url"])
+                        if new != cur_v:
+                            upd.append((*new, slug, m["id"]))
+                        else:
+                            same += 1
+                with con.cursor() as cur:
+                    if ins:
+                        cur.executemany(
+                            "INSERT INTO matches (competition_id,id,week_no,title,status,scorecard_url,"
+                            "teams_json,date_label) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", ins)
+                    if upd:
+                        cur.executemany(
+                            "UPDATE matches SET week_no=%s,title=%s,teams_json=%s,date_label=%s,scorecard_url=%s "
+                            "WHERE competition_id=%s AND id=%s", upd)
+                rep["matches"] = {
+                    "inserted": len(ins), "updated": len(upd), "unchanged": same, "locked": locked,
+                    "not_in_file": len(set(have) - set(ids))}
+                # max_weeks is derived from the schedule itself (never hand-set).
+                mw = con.execute("SELECT COALESCE(MAX(week_no),1) AS w FROM matches WHERE competition_id=%s",
+                                 (slug,)).fetchone()["w"]
+                if mw != comp["max_weeks"]:
+                    con.execute("UPDATE competitions SET max_weeks=%s WHERE slug=%s", (mw, slug))
+                    rep["competition"]["max_weeks"] = [comp["max_weeks"], mw]
+
+            for col, val in (comp_updates or {}).items():
+                if col not in self._IMPORT_COMP_FIELDS:
+                    raise ValueError(f"import may not change competition field '{col}'")
+                if col == "week1_anchor_utc" and not str(comp[col] or "1970").startswith("1970"):
+                    raise ValueError("the week-1 date is already set and cannot be changed by an import")
+                if comp[col] != val:
+                    con.execute(f"UPDATE competitions SET {col}=%s WHERE slug=%s", (val, slug))
+                    rep["competition"][col] = [comp[col], val]
+
+            rep["selections_with_teams"] = con.execute(
+                "SELECT COUNT(*) AS n FROM user_selections WHERE competition_id=%s "
+                "AND (tw_team_json<>'[]' OR nw_team_json<>'[]')", (slug,)).fetchone()["n"]
+            if dry_run:
+                con.rollback()
+            else:
+                con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) "
+                            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                            (f"_saved:{slug}", datetime.now(timezone.utc).isoformat()))
+        return rep
+
     def get_championship_tally(self) -> list:
         with self._read() as con:
             rows = con.execute(

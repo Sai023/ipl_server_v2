@@ -1,5 +1,12 @@
 # Seed_Players.py — The Roster Loader
 
+> **Superseded for onboarding (INF-1 + admin import).** `Seed_Players.py` writes to
+> SQLite (`data/fantasy.db`), which has not been the live database since the INF-1
+> cutover to Postgres, so it can no longer load a competition's roster. Use
+> Admin → Competitions → **Import data** instead
+> ([competition_import.md](competition_import.md)). The script is kept only until the
+> scraper no longer depends on its siblings.
+
 > **Multi-competition update (Phase 3b-2).** The roster no longer lives as a
 > Python list literal — it is read from `data/<slug>/players.json`. The seeder
 > takes `--comp <slug>` (default `ipl_2026`), writes `competition_id`, and

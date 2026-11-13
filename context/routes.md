@@ -11,7 +11,7 @@
 > resolves a competition via `_comp()` (`?comp=<slug>`, default = the active
 > competition) and passes it to the DAO. New endpoints: `GET /api/competitions`
 > (list + active slug + championship tally) and `POST /api/admin/competition`
-> (admin-gated create / activate / reopen / close & crown). The identity
+> (admin-gated create / import data / activate / reopen / close & crown). The identity
 > endpoints (`/api/register|login|whoami|passcode/*|admin/members`) stay global.
 > Per-competition `budget / xi_size / max_weeks / deadline` come from the
 > `competitions` row via `_comp_cfg()`. See
@@ -48,7 +48,7 @@ Every read/write endpoint resolves a target competition via `_comp()`
 (`?comp=<slug>`, defaulting to the active competition) and passes it to the
 DAO. New: `GET /api/competitions` (list + active slug + championship tally —
 drives the header switcher and per-competition `IplConfig`) and, in Phase 5,
-`POST /api/admin/competition` (create / activate / close & crown).
+`POST /api/admin/competition` (create / import data / activate / close & crown).
 Per-competition `budget / xi_size / max_weeks / deadline` come from the
 competition row via `_comp_cfg()`, with the `config.py` constants as fallback.
 See [multi_competition.md](multi_competition.md) for the full model.
@@ -129,6 +129,7 @@ Phase 7.
 | 7 | Admin | `/api/matches-status` | GET | All match rows + a `duplicate_url` flag computed server-side. Drives the Admin tab. (§8.1) |
 | 7 | Admin | `/api/update-match-url` | POST | Save a Cricbuzz URL + fire a background scrape. (§8.2) |
 | 7 | Admin | `/api/sync-now` | POST | Manual trigger for the daily discovery+scrape pipeline. (§9.1) |
+| 7 | Admin | `/api/admin/competition` | POST | Competition lifecycle (admin token): `create`, **`import`**, `activate`, `reopen`, `close` (crown). `import` uploads a roster and/or fixture list — body `{action:"import", slug, players?, schedule?, week1_anchor_utc?, dry_run}`; **`dry_run` defaults to true** (the DAO runs the same statements and rolls back), `false` saves. Validates via [competition_import.md](competition_import.md), upserts in one transaction (never deletes), returns a change report. 400 `{errors[], warnings[], needs_anchor}` on validation failure, 409 if the competition is completed, 413 over the app-wide 1 MB body cap. (§8.7) |
 | 8 | Static | `/` | GET | Renders `index.html`. |
 | 8 | Static | `/static/<path>` | GET | Serves files from `STATIC_DIR`. |
 | 8 | Static | `/manifest.json` | GET | PWA manifest with inline SVG icon. |

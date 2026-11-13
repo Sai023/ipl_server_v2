@@ -11,7 +11,7 @@
 > `<select>` switcher (shown with >=2 competitions) wired to `_switchComp`; a
 > dynamic page title = active competition name; a 🏆 Championship tally card
 > above the leaderboard; and an Admin "Competitions" card (Activate /
-> Close & crown + create form). `_bootstrap` / `_doStateRefresh` thread
+> Close & crown + create form + **Import data** panel). `_bootstrap` / `_doStateRefresh` thread
 > `?comp=` onto their raw fetches. See
 > [multi_competition.md](multi_competition.md).
 
@@ -159,6 +159,18 @@ Three new modal builders + one global flag drive the entire auth UX:
 | `_showPasscodePromptModal(name)` | Slides up after a member chip click. Auto-submits on the 4th digit (`input` listener strips non-digits then calls `_submitPasscode`). On success → `_establishSession`; if `must_change` → immediately opens forced reset. |
 | `_showResetPasscodeModal(forced)` | Two flows in one modal: `forced=true` hides the × and the cancel button; `forced=false` keeps both. Calls `IplApi.changePasscode(new)` which rotates the token. |
 | `_buildAdminPasscodesCard()` | Top of the Admin tab. Renders each member as a row with a status pill (⚠ Default / 🔒 Custom) and a "Reset to 1234" button. Button disabled on the admin's own row (they use the header self-reset). |
+
+Admin → Competitions → **Import data** (competition import; see
+[competition_import.md](competition_import.md), [user_capabilities.md §8.7](user_capabilities.md)):
+
+| Function | Purpose |
+|----------|---------|
+| `_imp` / `_impReset(slug)` | Panel state (slug, parsed files and their names, last report, busy / done flags, week-1 date). Kept in a variable, **not** in the DOM, because `render()` rebuilds the whole page and a background refresh must not lose a half-filled import. |
+| `_impOpen(slug)` | Shows / hides the panel for a competition (the table button toggles "Import data" / "Hide import"). |
+| `_impPick(kind, input)` | Reads the chosen file with `FileReader`, parses the JSON (a parse error is shown in the panel, no request sent) and immediately runs a dry-run check. |
+| `_impCall(dry)` | `IplApi.adminCompetition({action:"import", slug, players?, schedule?, dry_run, week1_anchor_utc?})`. A 400 arrives as a thrown error whose `serverData` carries `errors[]`, `warnings[]` and `needs_anchor`. A successful real import clears `_players` and calls `_bootstrap()`. |
+| `_impRun()` | "Import now": confirms with the counts, then `_impCall(false)`. Disabled unless the last check passed. |
+| `_buildImportPanel()` / `_buildImportReport(r)` | Render the file pickers, the optional week-1 date picker (shown only when the server answers `needs_anchor`) and the green / amber / red report. |
 
 Globals added:
 - `_isAdmin` (default `false`) — set by `_establishSession` from

@@ -43,10 +43,13 @@ repeatable flow. **Nothing here is SA20-specific; SA20 is just the first one
 through it.**
 
 1. **Create** the competition (Admin → Competitions, or a migration row).
-2. **Seed its data, well before match 1** — add `data/<slug>/players.json` +
-   `schedule.json`, then run `Seed_Players --comp <slug>` and
-   `Seed_Matches --comp <slug> --no-live`. `max_weeks` and each match's week
-   fall out of the schedule + `week1_anchor_utc` (no hand-set week count).
+2. **Load its data, well before match 1** — Admin → Competitions → **Import
+   data**: upload `players.json` + `schedule.json` (checked first, then saved in
+   one transaction — see [competition_import.md](competition_import.md)).
+   `max_weeks` and each match's week fall out of the schedule +
+   `week1_anchor_utc` (no hand-set week count). *(The legacy route —
+   `data/<slug>/` files + `Seed_Players --comp` / `Seed_Matches --comp --no-live` —
+   is SQLite-only and dormant since INF-1.)*
 3. **Activate** it — it becomes the default competition. (Members can already
    build a week-1 XI as soon as the players are seeded, even before activation:
    `save-next-week` works for `upcoming` competitions and the switcher lists
@@ -58,7 +61,7 @@ through it.**
 6. **Close & crown** at the end — the winner earns 1 championship point.
 
 So onboarding IPL 2027 or a T20 World Cup later is the same six steps as SA20 —
-mostly dropping in two data files and clicking Activate.
+mostly uploading two data files in the Admin tab and clicking Activate.
 
 ## Schema (target shape)
 
@@ -167,13 +170,26 @@ fallback (true until the first namespaced write for that competition).
   offline Node render of the card + `node --check`. *Per-file docs pending the
   consolidation pass.*
 - **[TODO] Phase 6 (data-only)** — onboard `sa20_2026` **well before match 1**
-  so members can pick: create it (Admin → Competitions, or a migration), add
-  `data/sa20_2026/players.json` + `schedule.json`, run
-  `Seed_Players --comp sa20_2026` + `Seed_Matches --comp sa20_2026 --no-live`,
+  so members can pick: create it (Admin → Competitions, or a migration), then
+  **Import data** (`players.json` + `schedule.json` — Phase 6a below),
   then **Activate** it (becomes default; picks open). The first rollover at its
   `week1_anchor_utc` locks the week-1 selections. Cutover: point the live deploy
   at `multi-comp`; IPL26 stays viewable as a `completed` competition.
   *Refresh `README.md` + the ipl-fantasy-sync skill.*
+
+- **[DONE] Phase 6a — admin import** (2026-11) — onboarding without scripts, git
+  commits or deploys (the SQLite seeders stopped reaching the live data at the INF-1
+  cutover). Admin → Competitions → **Import data** uploads `players.json` /
+  `schedule.json`; `POST /api/admin/competition {action:"import"}` validates them
+  (`logic/competition_import.py`) and `db.import_competition_data` upserts in one
+  transaction. **Dry-run by default** — the same statements run and are rolled back,
+  so the preview equals the result. Never deletes; live/completed matches are locked;
+  fills `valid_teams_json`, series fields and `max_weeks` (and the week-1 date, only
+  if it was never set) from the files. Week numbers reproduce the legacy seeder
+  exactly (all 74 IPL 2026 matches verified against production). Supersedes
+  `Seed_Players` / `Seed_Matches` for onboarding; live scraping (3b-4) is still TODO.
+  Tests: `tests/test_competition_import.py` (pure logic); the DAO and endpoint were
+  verified against a real Postgres in a throwaway schema.
 
 > **Onboarding/selection invariant:** `save-next-week` works regardless of
 > status and the switcher lists `upcoming` competitions, so members can build

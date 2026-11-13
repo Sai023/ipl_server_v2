@@ -1,5 +1,14 @@
 # Seed_Matches.py — The Schedule Synchroniser
 
+> **Superseded for onboarding (INF-1 + admin import).** `Seed_Matches.py` writes to
+> SQLite, which has not been the live database since the INF-1 cutover to Postgres.
+> Loading a competition's fixtures is now done in Admin → Competitions →
+> **Import data** ([competition_import.md](competition_import.md)), which reproduces
+> this module's week-number, title, teams and date-label rules exactly (checked
+> against all 74 IPL 2026 matches). The Cricbuzz-ID discovery half of the pipeline
+> (`logic/cricbuzz_discovery.py`) is unchanged and still pending its competition-aware
+> port (multi_competition.md, Phase 3b-4).
+
 > **Post-cleanup note (2026-05-15).** This document is the snapshot that
 > drove the cleanup. The Dead Code Audit / Open Questions below describe
 > what was **found**. The items listed there have been actioned across

@@ -61,7 +61,7 @@ along the dependency chain:
 |-------|-------|-------|
 | 0 | User capabilities & docs audit | `user_capabilities.md`, `docs_audit.md` |
 | 1 | Foundation | `config.md`, `base.md`, `logic_package.md`, **`cloud_sync.md`** (Phase 11) |
-| 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md` |
+| 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md`, **`competition_import.md`** (admin roster + fixture import) |
 | 3 | Data Layer | `db_manager.md`, `init_db.md` |
 | 4 | Ingestion | `scraper.md`, `tasks.md`, `seed_players.md`, `seed_matches.md` |
 | 5 | API & Server | `routes.md`, `server.md` |

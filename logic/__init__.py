@@ -21,4 +21,8 @@ cricbuzz_discovery — run_discovery(), resolve_series_id(),
                      fetch_series_matches(), merge_discoveries(),
                      load_schedule(), save_schedule(). Uses `requests`
                      (third-party) — only logic submodule that does I/O.
+competition_import — parse_players(), parse_schedule(), cross_check(),
+                     parse_anchor(), week_no_for_match(). Validates an
+                     uploaded roster / fixture list and builds the rows the
+                     admin import writes (see context/competition_import.md).
 """

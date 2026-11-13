@@ -61,7 +61,7 @@ aggregation — and even that just executes a pre-prepared statement.
 | Table | What it stores | Persistence | Owned by |
 |-------|----------------|-------------|----------|
 | `competitions` | One row per competition (`ipl_2026`, `sa20_2026`, …): name, format, status, budget/XI/max_weeks, week-1 anchor (UTC), Cricbuzz series, valid teams, and the crowned `champion` | **Persistent** | `migrate_to_competitions.py` seeds `ipl_2026`; admin "Close & crown" sets `champion`. |
-| `players` | Per-competition roster, PK `(competition_id, id)`: name, team, role, price, plus computed `season_pts` (raw) and `points` (cap/vc-weighted) | **Persistent** — survives restarts | `Seed_Players.py` writes initial rows; `scraper.py` can append dynamic `ext_*` players. |
+| `players` | Per-competition roster, PK `(competition_id, id)`: name, team, role, price, plus computed `season_pts` (raw) and `points` (cap/vc-weighted) | **Persistent** — survives restarts | The admin import (`import_competition_data`) writes the roster (legacy: `Seed_Players.py`, SQLite-only and dormant since INF-1); `scraper.py` can append dynamic `ext_*` players. |
 | `matches` | The 74-match schedule + status + Cricbuzz URL | **Persistent** | `Seed_Matches.py` initial rows; `scraper.py` updates status. |
 | `user_selections` | One row per `(competition, member, week)`: this-week XI, next-week draft, **`week_pts`** (leaderboard input), and a `points_per_match` blob | **Persistent** — the leaderboard's source of truth | `init_db.py` seeds W1-W4 (history-seed bootstrap retired in Phase 3); `routes.py` saves drafts and rollovers. |
 | `members` (Phase 12) | One row per user: `passcode_hash` (sha256 of `username:passcode`), `must_change` flag, `is_admin` flag, `created_at` | **Persistent** | `init_db._auto_seed_members_if_needed` backfills `1234`+`must_change=1` for everyone in `user_selections`; `/api/register`, `/api/passcode/change`, `/api/admin/passcode/reset` mutate. |
@@ -214,7 +214,7 @@ active competition via `_active_slug`/`_cid`):
 | **Points pipeline** | `recalculate_points`, `update_week_points`, `update_player_season_pts`, `update_player_points` |
 | **Rollover DAO** | `get_users_and_max_weeks`, `get_selection_row`, `insert_rollover_week`, `set_last_rollover` |
 | **Bulk rebuild / hydrate** | `rebuild_scores_and_points`, `hydrate_from_json` |
-| **Competition (rebuild)** | `list_competitions`, `get_competition`, `create_competition`, `set_competition_status`, `set_champion`, `get_championship_tally`; resolvers `_active_slug` / `_cid`; per-competition meta via `get_meta_comp` / `set_meta_comp` |
+| **Competition (rebuild)** | `list_competitions`, `get_competition`, `create_competition`, `set_competition_status`, `set_champion`, `get_championship_tally`, **`import_competition_data`** (admin roster + fixtures upsert in one transaction; `dry_run=True` rolls back so the report equals what a real import does); resolvers `_active_slug` / `_cid`; per-competition meta via `get_meta_comp` / `set_meta_comp` |
 | **Dangerous** | `reset` |
 
 ## Called by / Calls into

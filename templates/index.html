@@ -612,16 +612,18 @@ function _buildAdminCompetitionsCard(){
   var h='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">🏆 Competitions</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_bootstrap()">⟳ Refresh</button></div>';
-  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Create a competition, then add its <code>data/&lt;slug&gt;/players.json</code> + <code>schedule.json</code> and seed. Activate it so members can pick before match 1; close &amp; crown when it ends.</p>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Create a competition (set the Monday lock date before match 1), then <strong>Import data</strong> to load its players and fixtures from your <code>players.json</code> / <code>schedule.json</code> files. Activate it so members can pick before match 1; close &amp; crown when it ends.</p>';
   h+='<table class="lb-table"><thead><tr><th>Competition</th><th>Status</th><th>Action</th></tr></thead><tbody>';
   (_competitions||[]).forEach(function(c){
-    var act;
-    if(c.status==="upcoming") act='<button class="btn btn-teal btn-sm" onclick="_adminCompAction(\'activate\',\''+escAttr(c.slug)+'\')">Activate</button>';
-    else if(c.status==="active") act='<button class="btn btn-sm" style="background:var(--gold);color:#07111F;font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
+    var act,imp='';
+    if(c.status==="upcoming"||c.status==="active") imp='<button class="btn btn-ghost btn-sm" onclick="_impOpen(\''+escAttr(c.slug)+'\')">'+(_imp.slug===c.slug?'Hide import':'Import data')+'</button> ';
+    if(c.status==="upcoming") act=imp+'<button class="btn btn-teal btn-sm" onclick="_adminCompAction(\'activate\',\''+escAttr(c.slug)+'\')">Activate</button>';
+    else if(c.status==="active") act=imp+'<button class="btn btn-sm" style="background:var(--gold);color:#07111F;font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
     else act='🏆 '+esc(c.champion||"—");
     h+='<tr><td>'+esc(c.name)+'<br><span style="font-size:10px;color:var(--muted)">'+esc(c.slug)+'</span></td><td>'+esc(c.status)+'</td><td>'+act+'</td></tr>';
   });
   h+='</tbody></table>';
+  if(_imp.slug)h+=_buildImportPanel();
   var ist='background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
   h+='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">';
   h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
@@ -653,9 +655,126 @@ function _adminCreateComp(){
   var body={action:"create",slug:slug,name:name};
   if(anchor)body.week1_anchor_utc=anchor+"T14:00:00+00:00";
   window.IplApi.adminCompetition(body).then(function(d){
-    if(d&&d.ok){alert("Created "+slug+".\nNext: add data/"+slug+"/players.json + schedule.json and run the seeders.");_bootstrap();}
+    if(d&&d.ok){alert("Created "+slug+".\nNext: click Import data on it to load its players and schedule.");_bootstrap();}
     else alert("Failed: "+((d&&d.error)||"error"));
   }).catch(function(e){alert("Failed: "+e.message);});
+}
+
+// ─── ADMIN: IMPORT COMPETITION DATA ──────────────────────────────────────────
+// Upload a players.json and/or schedule.json for a competition. Every upload is
+// checked first (dry run: the server reports exactly what would change and writes
+// nothing); "Import now" repeats it with dry_run:false. State lives in _imp, not in the
+// DOM, because render() rebuilds the whole page (a background refresh must not lose it).
+var _imp={slug:null,players:null,playersName:"",schedule:null,scheduleName:"",report:null,busy:false,msg:"",done:false,anchor:"",needsAnchor:false};
+function _impReset(slug){_imp={slug:slug,players:null,playersName:"",schedule:null,scheduleName:"",report:null,busy:false,msg:"",done:false,anchor:"",needsAnchor:false};}
+function _impRedraw(){if(_state)render(_state);}
+function _impOpen(slug){_impReset(_imp.slug===slug?null:slug);_impRedraw();}
+function _impPick(kind,input){
+  var f=input&&input.files&&input.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    var obj;
+    try{obj=JSON.parse(rd.result);}
+    catch(e){_imp[kind]=null;_imp[kind+"Name"]="";_imp.report=null;_imp.msg=f.name+" is not valid JSON ("+e.message+")";_impRedraw();return;}
+    _imp[kind]=obj;_imp[kind+"Name"]=f.name;_imp.msg="";_imp.report=null;_imp.done=false;
+    _impCall(true);
+  };
+  rd.onerror=function(){_imp.msg="Could not read "+f.name;_impRedraw();};
+  rd.readAsText(f);
+}
+function _impCall(dry){
+  if(_imp.players===null&&_imp.schedule===null){_imp.msg="Choose a players.json and/or schedule.json file first.";_impRedraw();return Promise.resolve();}
+  var body={action:"import",slug:_imp.slug,dry_run:dry};
+  if(_imp.players!==null)body.players=_imp.players;
+  if(_imp.schedule!==null)body.schedule=_imp.schedule;
+  if(_imp.anchor)body.week1_anchor_utc=_imp.anchor+"T14:00:00+00:00";   // only accepted while the competition has no week-1 date
+  _imp.busy=true;_imp.msg="";_impRedraw();
+  return window.IplApi.adminCompetition(body).then(function(d){
+    _imp.busy=false;_imp.report=d;_imp.done=!dry&&!!(d&&d.ok);if(d&&d.ok)_imp.needsAnchor=false;
+    if(_imp.done){_players=null;_bootstrap();}else _impRedraw();
+  }).catch(function(e){
+    _imp.busy=false;
+    var sd=e&&e.serverData;
+    if(sd&&sd.needs_anchor)_imp.needsAnchor=true;
+    _imp.report=(sd&&(sd.errors||sd.error))?{ok:false,errors:sd.errors||[sd.error],warnings:sd.warnings||[]}:null;
+    if(!_imp.report)_imp.msg="Import failed: "+((e&&e.serverMessage)||(e&&e.message)||"unknown error");
+    _impRedraw();
+  });
+}
+function _impRun(){
+  var r=_imp.report;if(!r||!r.ok||!r.dry_run||_imp.busy)return;
+  var bits=[];
+  if(r.players)bits.push((r.players.inserted||0)+" new and "+(r.players.updated||0)+" updated players");
+  if(r.matches)bits.push((r.matches.inserted||0)+" new and "+(r.matches.updated||0)+" updated matches");
+  if(!confirm("Import into "+_imp.slug+"?\n\n"+bits.join("\n")+"\n\nNothing is deleted, and importing the same files again changes nothing."))return;
+  _impCall(false);
+}
+function _impList(items,color){
+  var h='<ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:'+color+'">';
+  items.forEach(function(x){h+='<li style="margin-bottom:2px">'+esc(x)+'</li>';});
+  return h+'</ul>';
+}
+function _buildImportReport(r){
+  var h='';
+  if(!r.ok){
+    h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.35)"><strong style="color:#F87171;font-size:12px">Not imported — fix these first:</strong>'+_impList(r.errors||[r.error||"error"],"var(--text)")+'</div>';
+  } else {
+    var ok='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.30);font-size:12px;color:var(--text)">';
+    ok+='<strong style="color:#22C55E">'+(r.dry_run?'Check passed — nothing is saved yet.':'✓ Imported.')+'</strong>';
+    var p=r.players;
+    if(p){
+      ok+='<div style="margin-top:8px"><strong>Players</strong> · '+p.total+' in the file: '+(p.inserted||0)+' new, '+(p.updated||0)+' updated, '+(p.unchanged||0)+' unchanged';
+      ok+='<br><span style="color:var(--muted)">'+Object.keys(p.by_team||{}).map(function(t){return esc(t)+' '+p.by_team[t];}).join(' · ')+'</span>';
+      if(p.price)ok+='<br><span style="color:var(--muted)">Prices '+p.price.min+'–'+p.price.max+' CR (average '+p.price.mean+'); the 11 priciest cost '+p.top_xi_cost+' CR</span>';
+      (p.changes||[]).slice(0,10).forEach(function(c){
+        ok+='<br><span style="color:var(--gold)">✎ '+esc(c.name)+': '+Object.keys(c.changes).map(function(k){return esc(k)+' '+esc(c.changes[k][0])+' → '+esc(c.changes[k][1]);}).join(', ')+'</span>';
+      });
+      ok+='</div>';
+    }
+    var m=r.matches;
+    if(m){
+      ok+='<div style="margin-top:8px"><strong>Matches</strong> · '+m.total+' in the file: '+(m.inserted||0)+' new, '+(m.updated||0)+' updated, '+(m.unchanged||0)+' unchanged'+(m.locked?', '+m.locked+' locked (already played)':'');
+      ok+='<br><span style="color:var(--muted)">'+Object.keys(m.weeks||{}).map(function(w){return 'Week '+w+': '+m.weeks[w];}).join(' · ')+'</span>';
+      ok+='<br><span style="color:var(--muted)">'+String(m.first_match_utc||'').slice(0,10)+' → '+String(m.last_match_utc||'').slice(0,10)+(m.teams_tbd?' · '+m.teams_tbd+' with teams still to be decided':'')+'</span></div>';
+    }
+    var c=r.competition||{},cl=[];
+    if(c.week1_anchor_utc)cl.push('Week-1 date set to '+String(c.week1_anchor_utc[1]).slice(0,10));
+    if(c.max_weeks)cl.push('Season length: '+c.max_weeks[0]+' → '+c.max_weeks[1]+' weeks');
+    if(c.valid_teams_json){try{cl.push('Teams set to: '+JSON.parse(c.valid_teams_json[1]).join(', '));}catch(e){}}
+    if(c.series_id)cl.push('Series id set to '+c.series_id[1]);
+    if(c.series_slug)cl.push('Series set to '+c.series_slug[1]);
+    if(c.year)cl.push('Year set to '+c.year[1]);
+    if(cl.length)ok+='<div style="margin-top:8px"><strong>Competition</strong>'+_impList(cl,"var(--muted)")+'</div>';
+    h+=ok+'</div>';
+  }
+  if(r.warnings&&r.warnings.length)h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(245,197,24,.08);border:1px solid rgba(245,197,24,.30)"><strong style="color:var(--gold);font-size:12px">Worth a look:</strong>'+_impList(r.warnings,"var(--text)")+'</div>';
+  return h;
+}
+function _buildImportPanel(){
+  var r=_imp.report;
+  var h='<div style="margin-top:14px;border:1px solid rgba(245,197,24,.25);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)">';
+  h+='<div class="user-header-bar" style="margin-bottom:8px"><h3 class="section-title" style="margin:0;font-size:14px">Import data into <code>'+esc(_imp.slug)+'</code></h3><button class="btn btn-ghost btn-sm" onclick="_impOpen(\''+escAttr(_imp.slug)+'\')">Close</button></div>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Choose a <code>players.json</code> and/or a <code>schedule.json</code>. You see a preview first — nothing is saved until you click <strong>Import now</strong>. Nothing is ever deleted, and importing the same file again changes nothing.</p>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px">';
+  [['players','Players · players.json'],['schedule','Schedule · schedule.json']].forEach(function(k){
+    var loaded=_imp[k[0]]!==null;
+    h+='<label style="font-size:12px;color:var(--muted);flex:1;min-width:210px">'+k[1]+'<br><input type="file" accept=".json,application/json" onchange="_impPick(\''+k[0]+'\',this)" style="margin-top:4px;font-size:12px;color:var(--text);max-width:100%">';
+    h+='<br><span style="font-size:11px;color:'+(loaded?'#22C55E':'var(--muted)')+'">'+(loaded?'✓ '+esc(_imp[k[0]+'Name']):'no file chosen')+'</span></label>';
+  });
+  h+='</div>';
+  if(_imp.needsAnchor||(_imp.anchor&&!_imp.done)){
+    // Shown only when the server says this competition was created without a week-1 date.
+    h+='<label style="display:block;font-size:12px;color:var(--muted);margin:8px 0">Week-1 date — the Monday before match 1 (this competition has none yet)<br><input type="date" value="'+esc(_imp.anchor)+'" onchange="_imp.anchor=this.value;_impCall(true)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin-top:4px"></label>';
+  }
+  if(_imp.msg)h+='<p style="color:#F87171;font-size:12px;margin:6px 0">'+esc(_imp.msg)+'</p>';
+  if(_imp.busy)h+='<p style="color:var(--gold);font-size:12px;margin:6px 0">Working…</p>';
+  if(r)h+=_buildImportReport(r);
+  var canRun=!!(r&&r.ok&&r.dry_run&&!_imp.busy&&!_imp.done);
+  h+='<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">';
+  h+='<button class="btn btn-ghost btn-sm"'+(_imp.busy?' disabled':'')+' onclick="_impCall(true)">Check again</button>';
+  h+='<button class="btn btn-teal btn-sm"'+(canRun?'':' disabled')+' onclick="_impRun()">Import now</button>';
+  h+='</div></div>';
+  return h;
 }
 
 function _buildAdminTab(){

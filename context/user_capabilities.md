@@ -15,7 +15,8 @@ backend context file should map its work back to one of these capabilities.
 > competition** (header dropdown; all data re-scopes to the selection); view
 > the **🏆 Championship tally** (titles per member across competitions) on the
 > Leaderboard tab; and an Admin **"Competitions"** card to create / activate /
-> close & crown competitions. Every existing capability below is now scoped to
+> close & crown competitions, and **import** a competition's players and
+> fixtures from `players.json` / `schedule.json` (§8.7). Every existing capability below is now scoped to
 > the selected competition via `?comp=`. See
 > [multi_competition.md](multi_competition.md).
 
@@ -243,6 +244,30 @@ The Admin tab is gated client-side on `_isAdmin` (set from
   every session for that user** so they're forced through §1.3's forced-reset
   flow on their next page load.
 - The card auto-refreshes after every reset.
+
+### 8.7 Import a competition's data (admin)
+- On the **Competitions** card, every `upcoming` or `active` competition has an
+  **Import data** button (completed competitions do not — they are read-only).
+  It opens a panel with two file pickers: `players.json` and `schedule.json`
+  (either or both).
+- Choosing a file **checks it immediately** (`POST /api/admin/competition`,
+  `action:"import"`, `dry_run:true`) and shows exactly what would change: players
+  new / updated / unchanged with team counts and the price range; matches per week,
+  first and last match, fixtures with teams still to be decided; competition fields
+  that would be filled in (season length, teams, series, year). **Nothing is saved
+  at this stage.** Problems are listed in red with the player or match and the
+  reason (bad id, unknown role, price over budget, team not in the competition, bad
+  date, …) and **Import now** stays disabled; softer issues are listed as "Worth a
+  look".
+- **Import now** asks for confirmation, then repeats the call with `dry_run:false`.
+  The whole import is one transaction; **nothing is ever deleted**, and importing
+  the same file again changes nothing. Matches that are already live or completed
+  are left untouched.
+- If the competition was created without its **week-1 date** (the Monday before
+  match 1), a date picker appears and the date is filled in with the import — an
+  existing date is never changed.
+- Rules and formats: [competition_import.md](competition_import.md). Replaces the
+  SQLite-only `Seed_Players.py` / `Seed_Matches.py` scripts for onboarding.
 
 ---
 

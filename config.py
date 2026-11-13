@@ -46,13 +46,15 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.11.0"
+APP_VERSION = "2.12.0"
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
                             # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.8.2"  # INF-2: GET /api/admin/health (PAT + freshness).
+ROUTES_VER       = "1.9.0"  # Admin import: POST /api/admin/competition action "import"
+                            #           (roster + fixtures upload; dry-run by default).
+                            # INF-2: GET /api/admin/health (PAT + freshness).
                             # BIZ-2: server-side deadline lock (selections_locked).
                             # SEC-1: token-gate all writes + admin-gate destructive ops;
                             #        BIZ-1: full server-side team validation (validate_selection).
@@ -60,7 +62,8 @@ ROUTES_VER       = "1.8.2"  # INF-2: GET /api/admin/health (PAT + freshness).
                             #           /api/passcode/change, /api/admin/passcode/reset,
                             #           /api/admin/members. Bearer-token auth for the new
                             #           passcode + admin surface only; rest of API unchanged.
-DB_VER           = "6.1"    # Phase 12: members + sessions tables (passcode hash + bearer tokens)
+DB_VER           = "6.2"    # Admin import: import_competition_data() (roster + fixtures upsert).
+                            # Phase 12: members + sessions tables (passcode hash + bearer tokens)
 SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
 INIT_DB_VER      = "1.1.0"  # Phase 12: _auto_seed_members_if_needed backfill (1234 + must_change=1)

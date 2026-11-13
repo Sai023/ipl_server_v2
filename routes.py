@@ -38,6 +38,7 @@ import psycopg
 from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, jsonify, render_template, send_from_directory
+from werkzeug.exceptions import RequestEntityTooLarge
 
 import cloud_sync   # Phase 2: git pull / push helpers (HOSTED mode)
 
@@ -114,6 +115,7 @@ from config import (
 import tasks
 from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team, selections_locked
 from logic.scoring_engine import debug_calc_pts as _debug_calc_pts
+from logic import competition_import as _ci
 
 bp = Blueprint("api", __name__)
 
@@ -471,13 +473,113 @@ def api_admin_health():
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
+def _admin_import(slug, comp, d):
+    """Admin data import for one competition (action "import" of
+    POST /api/admin/competition). Validates the uploaded roster and/or fixture
+    list (logic/competition_import.py), then upserts them in one transaction
+    (db.import_competition_data). Safe by default: unless the body says
+    "dry_run": false it only REPORTS what would change (the DAO rolls back).
+    Returns the Flask response. (Body size is capped app-wide by MAX_CONTENT_LENGTH, 1 MB;
+    a roster plus a schedule is about 25 KB.)"""
+    if comp["status"] == "completed":
+        return jsonify({"ok": False, "code": 409,
+                        "error": "this competition is completed and read-only - reopen it before importing"}), 409
+    players_raw, schedule_raw = d.get("players"), d.get("schedule")
+    if players_raw is None and schedule_raw is None:
+        return jsonify({"ok": False, "error": "nothing to import - send players and/or schedule", "code": 400}), 400
+    dry = d.get("dry_run", True) is not False
+    budget, xi, *_ = _comp_cfg(slug)
+    valid_teams = comp.get("valid_teams") or []
+
+    out = {"ok": True, "dry_run": dry, "slug": slug}
+    errors, warnings, prow, mrow, meta = [], [], None, None, {}
+    # The week-1 date can be filled in by an import when the competition was created without
+    # one, but an existing date is never changed (it would shift every week number).
+    anchor = _ci.parse_anchor(comp.get("week1_anchor_utc"))
+    comp_updates, anchor_in = {}, d.get("week1_anchor_utc")
+    if anchor_in:
+        if anchor:
+            errors.append("the week-1 date is already set (%s) and cannot be changed by an import"
+                          % anchor.date().isoformat())
+        else:
+            anchor = _ci.parse_anchor(anchor_in)
+            if anchor is None:
+                errors.append("week1_anchor_utc is not a valid date")
+            else:
+                comp_updates["week1_anchor_utc"] = anchor.isoformat()
+    needs_anchor = schedule_raw is not None and anchor is None
+    if players_raw is not None:
+        r = _ci.parse_players(players_raw, budget_total=budget, xi_size=xi, valid_teams=valid_teams)
+        errors += ["players: " + e for e in r["errors"]]
+        warnings += ["players: " + w for w in r["warnings"]]
+        prow, out["players"] = r["rows"], (r["stats"] or {})
+    if schedule_raw is not None:
+        r = _ci.parse_schedule(schedule_raw, slug=slug, valid_teams=valid_teams, anchor=anchor)
+        errors += ["schedule: " + e for e in r["errors"]]
+        warnings += ["schedule: " + w for w in r["warnings"]]
+        mrow, meta, out["matches"] = r["rows"], r["meta"], (r["stats"] or {})
+    if errors:
+        # Counts built from only the rows that passed would mislead, so an error response
+        # carries just the errors and warnings (plus needs_anchor so the UI can offer a date picker).
+        return jsonify({"ok": False, "dry_run": dry, "slug": slug, "code": 400, "needs_anchor": needs_anchor,
+                        "errors": errors, "warnings": warnings}), 400
+    warnings += _ci.cross_check(prow, mrow)
+
+    # Fill in competition metadata the files imply, but never overwrite what an admin already set.
+    if not valid_teams:
+        teams = {r[2] for r in (prow or [])} | {t for m in (mrow or []) for t in m["teams"]}
+        if teams:
+            comp_updates["valid_teams_json"] = _json.dumps(sorted(teams))
+    for key in ("series_id", "series_slug", "year"):
+        if meta.get(key) is not None and not comp.get(key):
+            comp_updates[key] = meta[key] if key == "year" else str(meta[key])
+
+    try:
+        rep = db.import_competition_data(slug, players=prow, matches=mrow,
+                                         comp_updates=comp_updates, dry_run=dry)
+    except LookupError as e:
+        return jsonify({"ok": False, "error": str(e), "code": 404}), 404
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e), "code": 409}), 409
+
+    if rep["players"]:
+        out["players"] = {**out.get("players", {}), **rep["players"]}
+        if rep["players"]["not_in_file"]:
+            warnings.append("%d player(s) already in the database are not in this file (they are kept): %s"
+                            % (len(rep["players"]["not_in_file"]), ", ".join(rep["players"]["not_in_file"][:8])
+                               + (" ..." if len(rep["players"]["not_in_file"]) > 8 else "")))
+        if rep["players"]["updated"] and rep["selections_with_teams"]:
+            warnings.append("%d member(s) already have a saved team - changed prices or roles apply to their "
+                            "next save" % rep["selections_with_teams"])
+    if rep["matches"]:
+        out["matches"] = {**out.get("matches", {}), **rep["matches"]}
+        if rep["matches"]["locked"]:
+            warnings.append("%d match(es) are already live or completed and were left untouched"
+                            % rep["matches"]["locked"])
+    out.update({"competition": rep["competition"], "status": rep["status"],
+                "selections_with_teams": rep["selections_with_teams"], "warnings": warnings})
+    if not dry:
+        _push_if_hosted(f"comp-import:{slug}")
+        _log("admin import into %s: players %s, matches %s, competition %s" % (
+            slug, {k: rep["players"][k] for k in ("inserted", "updated", "unchanged")} if rep["players"] else "-",
+            {k: rep["matches"][k] for k in ("inserted", "updated", "unchanged", "locked")} if rep["matches"] else "-",
+            list(rep["competition"]) or "-"))
+    return jsonify(out)
+
+
 @bp.route("/api/admin/competition", methods=["POST"])
 def api_admin_competition():
-    """Admin-only competition lifecycle: create / activate / reopen / close.
+    """Admin-only competition lifecycle: create / import / activate / reopen / close.
 
     Body: {"action": "...", "slug": "...", ...}
       create  : + name, week1_anchor_utc, budget_total, xi_size, max_weeks,
                 series_id, series_slug, year, valid_teams[]
+      import  : + players (list of {id,name,team,price,role}) and/or schedule
+                ({"matches":[...]} as in data/<slug>/schedule.json), dry_run
+                (default TRUE - writes only when "dry_run": false). Upserts the
+                roster / fixtures in one transaction and returns a change
+                report; 400 {errors[], warnings[]} if validation fails, 409 if
+                the competition is completed. See logic/competition_import.py.
       activate: status -> 'active'  (becomes the default competition; picks open)
       reopen  : status -> 'upcoming'
       close   : status -> 'completed', champion = body.champion OR the
@@ -516,6 +618,9 @@ def api_admin_competition():
         if not comp:
             return jsonify({"ok": False, "error": f"competition '{slug}' not found", "code": 404}), 404
 
+        if action == "import":
+            return _admin_import(slug, comp, d)
+
         if action in ("activate", "reopen"):
             new_status = "active" if action == "activate" else "upcoming"
             db.set_competition_status(slug, new_status)
@@ -539,6 +644,8 @@ def api_admin_competition():
             return jsonify({"ok": True, "action": "close", "slug": slug, "champion": champion, "status": "completed"})
 
         return jsonify({"ok": False, "error": f"unknown action '{action}'", "code": 400}), 400
+    except RequestEntityTooLarge:
+        return jsonify({"ok": False, "error": "upload too large (the limit is 1 MB)", "code": 413}), 413
     except Exception as e:
         _log(f"POST /api/admin/competition: {e}", "error")
         return jsonify({"ok": False, "error": str(e), "code": 500}), 500
