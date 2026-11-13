@@ -128,6 +128,13 @@
          + '</div>';
   }
 
+  window._mcToggleAll = function (btn) {
+    var all = document.querySelectorAll('details[data-acc^="mcw-"]'), anyClosed = false;
+    all.forEach(function (d) { if (!d.open) anyClosed = true; });
+    Ui.accAll('details[data-acc^="mcw-"]', anyClosed);
+    if (btn) btn.textContent = anyClosed ? 'Collapse all' : 'Expand all';
+  };
+
   // ── Hub renderer ────────────────────────────────────────────────────────
   function _renderHub(d) {
     var s = d.season || {};
@@ -147,18 +154,23 @@
     if (!weeks.length) {
       h += (window.Ui ? Ui.stateHtml('empty', {title: 'No matches yet', message: 'Fixtures will appear here as soon as they are added.'}) : '<p class="empty">No matches yet.</p>');
     }
+    // The week that is in play (some matches played, some not) opens by default; else the last week; before the season, the first.
+    var openWk = null;
+    weeks.forEach(function (w) { var pl = w.matches_played || 0, tt = w.total_matches || (w.matches || []).length; if (openWk === null && pl > 0 && pl < tt) openWk = w.week_no; });
+    if (openWk === null) { var lastPlayed = null; weeks.forEach(function (w) { if ((w.matches_played || 0) > 0) lastPlayed = w.week_no; }); openWk = lastPlayed !== null ? lastPlayed : (weeks[0] ? weeks[0].week_no : 0); }
+    if (weeks.length > 1) h += '<div class="mc-toolbar"><h3 class="mc-tb-title">Weeks</h3><button type="button" class="btn btn-ghost btn-sm" onclick="_mcToggleAll(this)">' + (weeks.every(function (w) { return Ui.accOpen('mcw-' + w.week_no, w.week_no === openWk); }) ? 'Collapse all' : 'Expand all') + '</button></div>';
     h += '<div class="mc-weeks">';
     weeks.forEach(function (wk) {
       var played = wk.matches_played || 0;
       var total  = wk.total_matches  || (wk.matches || []).length;
 
-      h += '<section class="mc-week">';
-      h += '<div class="mc-week-hdr">';
-      h += '<span class="mc-week-lbl">WEEK ' + wk.week_no + '</span>';
-      h += '<span class="mc-week-pts">' + (wk.week_pts || 0) + ' pts'
-         + '<span style="font-size:10px;color:var(--muted,#5F7A9B);font-weight:400"> '
-         + played + '/' + total + '</span></span>';
-      h += '</div>';
+      var open = Ui.accOpen('mcw-' + wk.week_no, wk.week_no === openWk);
+      h += '<details class="acc mc-week" data-acc="mcw-' + wk.week_no + '" data-def="' + (wk.week_no === openWk ? 1 : 0) + '" ontoggle="Ui.accToggle(this)"' + (open ? ' open' : '') + '>';
+      h += '<summary class="mc-week-hdr">';
+      h += '<span class="mc-week-lbl">Week ' + wk.week_no + '</span>';
+      h += '<span class="mc-week-meta"><span class="mc-week-pts">' + (wk.week_pts || 0) + ' pts</span>'
+         + '<span class="mc-week-prog">' + played + '/' + total + ' played</span>' + Ui.icon('down', 18) + '</span>';
+      h += '</summary><div class="mc-week-body">';
 
       (wk.matches || []).forEach(function (m) {
         var upcoming = (m.status || '').toLowerCase() !== 'completed';
@@ -196,7 +208,7 @@
         h += '</div>';
         h += '</div>';
       });
-      h += '</section>';
+      h += '</div></details>';
     });
     h += '</div>';
 

@@ -389,6 +389,14 @@ class DatabaseManager:
                     "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
                     "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
                 }
+            # Every registered member belongs to every competition. A brand-new competition has no
+            # user_selections rows yet; without this the login screen would list nobody (and a signed-in
+            # member would be logged out) the moment it is activated.
+            for r in con.execute("SELECT username FROM members ORDER BY username").fetchall():
+                members.setdefault(r["username"], {
+                    "this_week": {"team": [], "cap": None, "vc": None},
+                    "next_week": {"team": [], "cap": None, "vc": None},
+                })
             match_rows = con.execute(
                 "SELECT id,week_no,title,teams_json,date_label,status,raw_json "
                 "FROM matches WHERE competition_id=%s ORDER BY week_no,id", (cid,)).fetchall()

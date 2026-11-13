@@ -137,7 +137,10 @@
     key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>',
     logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>',
     book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14Z"/><path d="M20 17v4H6.5A2.5 2.5 0 0 1 4 19.5"/>',
-    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    down: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 6 6 6-6 6"/>', back: '<path d="m15 6-6 6 6 6"/>', plus: '<path d="M12 5v14M5 12h14"/>', check: '<path d="m5 12 5 5 9-10"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+    tools: '<path d="M14.7 6.3a4 4 0 0 0-5 5L3 18l3 3 6.7-6.7a4 4 0 0 0 5-5l-2.5 2.5-2.4-.6-.6-2.4Z"/>', search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
   };
   Ui.icon = function (name, size) {
     var n = size || 20;
@@ -152,7 +155,7 @@
       '<div class="ui-sheet-grip" aria-hidden="true"></div>' + (o.title ? '<h2 class="ui-sheet-title">' + esc(o.title) + "</h2>" : "") + '<div class="ui-sheet-list">';
     (o.items || []).forEach(function (it, i) {
       if (it.divider) { html += '<div class="ui-sheet-div"></div>'; return; }
-      html += '<button type="button" class="ui-sheet-item' + (it.danger ? " danger" : "") + '" data-i="' + i + '">' + (it.icon ? Ui.icon(it.icon, 20) : "") + '<span class="t">' + esc(it.label) + "</span>" + (it.hint ? '<span class="h">' + esc(it.hint) + "</span>" : "") + "</button>";
+      html += '<button type="button" class="ui-sheet-item' + (it.danger ? " danger" : "") + '" data-i="' + i + '">' + (it.icon ? Ui.icon(it.icon, 20) : "") + '<span class="t">' + esc(it.label) + "</span>" + (it.hint ? '<span class="h">' + esc(it.hint) + "</span>" : "") + (it.checked ? '<span class="ck" aria-label="current">' + Ui.icon("check", 18) + "</span>" : "") + "</button>";
     });
     bd.innerHTML = html + "</div></div>";
     document.body.appendChild(bd);
@@ -173,6 +176,12 @@
     var first = bd.querySelector(".ui-sheet-item"); if (first) first.focus();
     return close;
   };
+
+  /* ---------- accordion state: <details> sections remember what the user opened across re-renders ---------- */
+  var _acc = {};
+  Ui.accOpen = function (id, def) { return Object.prototype.hasOwnProperty.call(_acc, id) ? _acc[id] : !!def; };
+  Ui.accToggle = function (el) { var id = el.getAttribute("data-acc"), def = el.getAttribute("data-def") === "1"; if (el.open === def) delete _acc[id]; else _acc[id] = el.open; };
+  Ui.accAll = function (selector, open) { document.querySelectorAll(selector).forEach(function (d) { d.open = open; Ui.accToggle(d); }); };
 
   /* ---------- status cards ---------- */
   Ui.stateHtml = function (kind, o) {

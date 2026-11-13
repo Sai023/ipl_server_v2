@@ -112,6 +112,8 @@ function logout(){
   if(_state)render(_state);
 }
 function switchTab(tab){
+  if(tab!=="admin")_adminView=null;
+  _pickOpen=false;
   _activeTab=tab;
   if(tab==="admin")_loadAdminMatches();
   if(_state)render(_state);
@@ -375,26 +377,25 @@ function _buildPicker(){
     return(b.season_pts||0)-(a.season_pts||0);
   });
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
-  var xi_full=_nwDraft.team.length>=XI_SIZE,rem=_remaining();
-  var h='<div class="picker-shell"><div class="picker-toolbar">';
+  var n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
+  function opt(v,l,cur){return '<option value="'+esc(v)+'"'+(cur===v?" selected":"")+'>'+esc(l)+'</option>';}
+  var h='<div class="picker-shell">';
+  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><div class="lh-sub">'+n+'/'+XI_SIZE+' picked \u00B7 '+rem.toFixed(1)+' CR left</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
+  h+='<div class="picker-toolbar">';
   if(_pickerNotice){
     var ncolor=_pickerNotice.type==="warn"?"#FF6B6B":"var(--teal)";
     var nbg=_pickerNotice.type==="warn"?"rgba(255,107,107,.12)":"rgba(46,204,170,.12)";
-    h+='<div class="picker-notice" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
+    h+='<div class="picker-notice" role="status" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
   }
-  h+='<div class="picker-top-bar"><div class="picker-search" style="flex:1;margin-bottom:0"><span style="color:var(--muted);font-size:13px">\uD83D\uDD0D</span><input id="picker-search-input" type="text" placeholder="Search players\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"></div>';
-  h+='<span class="picker-count-badge">'+filtered.length+'</span>';
-  h+='<select class="picker-sort-sel" onchange="_pickerSort=this.value;if(_state)render(_state)">';
-  [{v:"season",l:"Season pts"},{v:"price",l:"Price"},{v:"name",l:"Name"}].forEach(function(o){h+='<option value="'+o.v+'"'+(sv===o.v?" selected":"")+'>Sort: '+o.l+'</option>';});
-  h+='</select></div>';
-  h+='<div class="picker-filters" style="margin-top:8px">';
-  ["All"].concat(teams).forEach(function(t){h+='<button class="pf-btn'+(_pickerTeam===t?" active":"")+'" onclick="_pickerTeam=\''+escAttr(t)+'\';if(_state)render(_state)">'+esc(t)+'</button>';});
-  h+='</div><div class="picker-filters" style="margin-top:4px">';
-  ["All","WK","BAT","AR","BOWL"].forEach(function(r){h+='<button class="pf-btn'+(_pickerRole===r?" active":"")+'" onclick="_pickerRole=\''+r+'\';if(_state)render(_state)">'+r+'</button>';});
+  h+='<div class="picker-search">'+Ui.icon("search",16)+'<input id="picker-search-input" type="text" aria-label="Search players" placeholder="Search players\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"><span class="picker-count-badge" aria-label="'+filtered.length+' players shown">'+filtered.length+'</span></div>';
+  h+='<div class="picker-selects">';
+  h+='<select aria-label="Filter by team" onchange="_pickerTeam=this.value;if(_state)render(_state)">'+opt("All","All teams",_pickerTeam)+teams.map(function(t){return opt(t,t,_pickerTeam);}).join("")+'</select>';
+  h+='<select aria-label="Filter by role" onchange="_pickerRole=this.value;if(_state)render(_state)">'+opt("All","All roles",_pickerRole)+opt("WK","Keepers",_pickerRole)+opt("BAT","Batters",_pickerRole)+opt("AR","All-rounders",_pickerRole)+opt("BOWL","Bowlers",_pickerRole)+'</select>';
+  h+='<select aria-label="Sort players" onchange="_pickerSort=this.value;if(_state)render(_state)">'+opt("season","Sort: Points",sv)+opt("price","Sort: Price",sv)+opt("name","Sort: Name",sv)+'</select>';
   h+='</div></div>';
-  h+='<div class="picker-table-wrap"><table class="picker-tbl"><thead><tr><th>Player</th><th>Role</th><th>Team</th><th class="num">Season</th><th class="num">Price</th><th></th></tr></thead><tbody>';
+  h+='<ul class="plist">';
   if(filtered.length===0){
-    h+='<tr><td colspan="6" class="picker-empty">No players match.</td></tr>';
+    h+='<li class="picker-empty">No players match.<br><button type="button" class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="_pickerTeam=\'All\';_pickerRole=\'All\';_pickerSearch=\'\';if(_state)render(_state)">Clear filters</button></li>';
   } else {
     filtered.forEach(function(p){
       var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
@@ -402,20 +403,15 @@ function _buildPicker(){
       var btnCls="padd-btn"+(isSel?" p-sel":isFull?" p-full":over?" p-over":"");
       var btnLbl=isSel?"\u2713 In":isFull?"\u21C4 Swap":"Add";
       var spts=p.season_pts!=null?p.season_pts:"\u2014";
-      var rowStyle='cursor:pointer'+(over?';opacity:0.55':'');
-      var rowOc=' onclick="_pickerRowClick(\''+escAttr(key)+'\')"';
-      var btnOc=' onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')"';
-      h+='<tr class="'+(isSel?"p-sel":"")+'" style="'+rowStyle+'"'+rowOc+'>'+
-        '<td><div style="display:flex;align-items:center;gap:7px"><div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+esc(p.name)+'</div></td>'+
-        '<td>'+_roleBadge(p.role)+'</td>'+
-        '<td style="color:var(--muted);font-size:11px">'+esc(p.team||"\u2014")+'</td>'+
-        '<td class="num p-pts">'+spts+'</td>'+
-        '<td class="num p-price">'+(p.price?p.price.toFixed(1):"\u2014")+'</td>'+
-        '<td><button class="'+btnCls+'"'+btnOc+'>'+btnLbl+'</button></td>'+
-        '</tr>';
+      var oc=' onclick="_pickerRowClick(\''+escAttr(key)+'\')"';
+      h+='<li class="picker-row'+(isSel?" selected":"")+(over?" over-budget":"")+(isFull?" full-xi":"")+'"'+oc+'>'+
+        '<div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+
+        '<div class="prow-info"><div class="prow-name">'+esc(p.name)+'</div><div class="prow-sub">'+_roleBadge(p.role)+' '+esc(p.team||"")+' \u00B7 '+spts+' pts</div></div>'+
+        '<div class="prow-price">'+(p.price?p.price.toFixed(1):"\u2014")+'<small> CR</small></div>'+
+        '<button type="button" class="'+btnCls+'" aria-label="'+(isSel?"In your XI: ":isFull?"Swap in ":"Add ")+esc(p.name)+'" onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
     });
   }
-  h+='</tbody></table></div></div>';
+  h+='</ul></div>';
   return h;
 }
 
@@ -485,13 +481,16 @@ function _buildThisWeekCard(){
   return h+'</div>';
 }
 function _buildNextWeekCard(){
+  if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+(_currentWeek+1)+' Draft &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
   h+=_buildBudgetBar();
   h+=_buildNwSquad();
+  var _n=_nwDraft.team.length;
+  h+='<button type="button" class="btn '+(_n>=XI_SIZE?'btn-ghost':'btn-teal')+' add-players only-narrow" onclick="_pickOpenLayer()">'+Ui.icon("plus",18)+(_n>=XI_SIZE?' Change players':' Add players ('+_n+'/'+XI_SIZE+')')+'</button>';
   if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
   h+='</div>';
-  return '<div class="nw-layout"><div class="nw-left">'+h+'</div><div class="nw-right">'+_buildPicker()+'</div></div>';
+  return '<div class="nw-layout"><div class="nw-left">'+h+'</div><div class="nw-right'+(_pickOpen?' layer-open':'')+'">'+_buildPicker()+'</div></div>';
 }
 function _buildMembersCard(memberNames){
   var h='<div class="card"><h3 class="section-title">\uD83D\uDC65 All Members ('+memberNames.length+')</h3><div class="members-grid">';
@@ -502,10 +501,11 @@ function _buildMembersCard(memberNames){
     if(isMe&&_historyData){var cur=_getCurrentWeekRow();if(cur){var src=null;if(cur.this_week&&cur.this_week.team&&cur.this_week.team.length>0)src=cur.this_week;else if(cur.next_week&&cur.next_week.team&&cur.next_week.team.length>0)src=cur.next_week;if(src){tw=src.team;capId=src.cap;vcId=src.vc;}}}
     if(tw.length===0){var picks=_state&&_state.members&&_state.members[n];if(picks){var raw=null;if(picks.this_week&&picks.this_week.team&&picks.this_week.team.length>0)raw=picks.this_week;else if(picks.next_week&&picks.next_week.team&&picks.next_week.team.length>0)raw=picks.next_week;else if(picks.team&&picks.team.length>0)raw=picks;if(raw){tw=raw.team||[];capId=raw.cap||null;vcId=raw.vc||null;}}}
     var cost=0;tw.forEach(function(id){var p=resolvePlayer(id);cost+=(p.price||0);});cost=Math.round(cost*10)/10;
-    h+='<div class="member-xi-card"><div class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'" onclick="if(\''+escAttr(n)+'\'!==_username)attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</span>'+(isMe?'&nbsp;<span class="me-tag">You</span>':'')+(tw.length>0?'&nbsp;<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:auto">'+cost.toFixed(1)+' CR</span>':'')+'</div>';
+    var _rk=null;if(_leaderboard&&_leaderboard.rankings){_leaderboard.rankings.forEach(function(r){if(r.name===n)_rk=r;});}
+    h+='<details class="acc member-xi-card" data-acc="mem-'+esc(n)+'" data-def="'+(isMe?1:0)+'" ontoggle="Ui.accToggle(this)"'+(Ui.accOpen('mem-'+n,isMe)?' open':'')+'><summary class="member-xi-header"><span class="member-xi-name'+(isMe?' me':'')+'">'+esc(n)+'</span>'+(isMe?'<span class="me-tag">You</span>':'')+'<span class="mx-meta">'+(_rk?'<b>'+(_rk.total_pts||0)+'</b> pts \u00B7 #'+_rk.rank:(tw.length>0?cost.toFixed(1)+' CR':''))+'</span>'+Ui.icon('down',18)+'</summary><div class="acc-body">';
     if(tw.length>0)h+=_buildXiGrid(tw,capId,vcId);
     else{h+='<p class="empty" style="padding:14px 0;color:var(--dim)">No XI set this week</p>';if(isMe)h+='<button class="btn btn-teal btn-sm" onclick="switchTab(\'next\')" style="margin-top:4px">\u270F\uFE0F Set my XI</button>';else h+='<p style="font-size:11px;color:var(--dim);margin-top:4px">Waiting for '+esc(n)+' to set their squad.</p>';}
-    h+='</div>';
+    h+='</div></details>';
   });
   return h+'</div>';
 }
@@ -593,9 +593,9 @@ function _buildAdminCompetitionsCard(){
   var ist='background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
   h+='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">';
   h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
-  h+='<input id="newcomp-slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
-  h+='<input id="newcomp-name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
-  h+='<input id="newcomp-anchor" type="date" title="Week-1 lock date (Mon before match 1)" style="'+ist+'">';
+  h+='<input id="newcomp-slug" aria-label="Competition slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
+  h+='<input id="newcomp-name" aria-label="Competition name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
+  h+='<input id="newcomp-anchor" aria-label="Week-1 lock date (the Monday)" type="date" title="Week-1 lock date (Mon before match 1)" style="'+ist+'">';
   h+='<button class="btn btn-teal btn-sm" onclick="_adminCreateComp()">Create</button>';
   h+='</div></div>';
   return h;
@@ -771,15 +771,48 @@ function _buildImportPanel(){
   return h;
 }
 
+function _adminNoLink(m){var u=m.scorecard_url||"",last=u.split("/").pop();return !last||last==="00000"||!/[1-9]/.test(last);}
+function _adminSections(){
+  var noLink=_adminMatches?_adminMatches.filter(function(m){return m.status==="completed"&&_adminNoLink(m);}).length:null;
+  return [
+    {id:"competitions",icon:"table",title:"Competitions",sub:(_competitions||[]).map(function(c){return c.name;}).join(" \u00B7 ")||"Create, import and activate"},
+    {id:"members",icon:"members",title:"Members & passcodes",sub:_adminMembersList?(_adminMembersList.length+" members"):"Reset a forgotten passcode"},
+    {id:"matches",icon:"link",title:"Match links",sub:noLink===null?"Cricbuzz scorecard links":(noLink?noLink+" finished match"+(noLink===1?"":"es")+" without a link":"All finished matches have a link")},
+    {id:"tools",icon:"tools",title:"Developer tools",sub:"Force the Monday rollover"}
+  ];
+}
+function _adminOpen(id){
+  _adminView=id;
+  if(id==="matches"&&!_adminMatches)_loadAdminMatches();
+  if(!_wide())_pushLayer("admin");
+  if(_state)render(_state);
+  window.scrollTo(0,0);
+}
+function _adminBack(){if(!_popLayer("admin")){_adminView=null;if(_state)render(_state);}}
 function _buildAdminTab(){
-  var h=_buildAdminPasscodesCard();
-  h+=_buildAdminCompetitionsCard();
-  h+='<div class="card">';
+  var wide=_wide(),secs=_adminSections(),view=_adminView||(wide?"competitions":null);
+  var nav='<nav class="admin-nav" aria-label="Admin sections">',title="";
+  secs.forEach(function(sc){
+    if(sc.id===view)title=sc.title;
+    nav+='<button type="button" class="admin-row'+(view===sc.id?" on":"")+'" onclick="_adminOpen(\''+sc.id+'\')"'+(wide&&view===sc.id?' aria-current="page"':'')+'><span class="ar-ico">'+Ui.icon(sc.icon,20)+'</span><span class="ar-text"><span class="ar-title">'+esc(sc.title)+'</span><span class="ar-sub">'+esc(sc.sub)+'</span></span>'+Ui.icon("right",18)+'</button>';
+  });
+  nav+='</nav>';
+  var body="";
+  if(view==="competitions")body=_buildAdminCompetitionsCard();
+  else if(view==="members")body=_buildAdminPasscodesCard();
+  else if(view==="matches")body=_buildAdminMatchesCard();
+  else if(view==="tools")body=_buildDevTools();
+  if(wide)return '<div class="admin-split">'+nav+'<div class="admin-pane">'+body+'</div></div>';
+  if(!view)return nav;
+  return '<div class="subpage-head"><button type="button" class="icon-btn" onclick="_adminBack()" aria-label="Back to Admin">'+Ui.icon("back")+'</button><h2 class="subpage-title">'+esc(title)+'</h2></div>'+body;
+}
+function _buildAdminMatchesCard(){
+  var h='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:14px">';
-  h+='<h3 class="section-title" style="margin:0">\u2699\uFE0F Match URL Admin</h3>';
+  h+='<h3 class="section-title" style="margin:0">Match links</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMatches=null;_loadAdminMatches();if(_state)render(_state)">\u27F3 Refresh</button>';
   h+='</div>';
-  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Paste the Cricbuzz scorecard URL for each completed match, then click Save. The scraper will run automatically in the background.</p>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Paste the Cricbuzz scorecard link for each match, then tap Save. Scores are collected by the scoring run on the admin PC (score_competition.py).</p>';
   h+='<div class="admin-filter">';
   [{v:"all",l:"All"},{v:"completed",l:"\uD83D\uDFE2 Completed"},{v:"upcoming",l:"\uD83D\uDD51 Upcoming"},{v:"no-id",l:"\u26A0 Missing IDs"}].forEach(function(f){
     h+='<button class="admin-filter-btn'+(_adminFilter===f.v?' active':'')+'" onclick="_adminFilter=\''+f.v+'\';if(_state)render(_state)">'+f.l+'</button>';
@@ -833,7 +866,7 @@ function _buildAdminTab(){
     h+='<div class="admin-match-meta">'+esc(m.id)+' \u00B7 '+esc(subLabel)+'</div>';
     h+='<div class="admin-url-row">';
     h+='<input class="admin-url-input" id="'+inputId+'" type="url" placeholder="https://www.cricbuzz.com/live-cricket-scorecard/XXXXXX/..." value="'+esc(m.scorecard_url||'')+'">';
-    h+='<button class="admin-save-btn" id="btn-'+m.id+'" onclick="_adminSaveUrl(\''+escAttr(m.id)+"','"+inputId+"','"+statusId+'\')" >Save &amp; Scrape</button>';
+    h+='<button class="admin-save-btn" id="btn-'+m.id+'" onclick="_adminSaveUrl(\''+escAttr(m.id)+"','"+inputId+"','"+statusId+'\')" >Save link</button>';
     h+='<span class="admin-save-status" id="'+statusId+'"></span>';
     h+='</div>';
     if(m.scorecard_url&&hasId){
@@ -1081,9 +1114,12 @@ function _statusChip(c){
   return '<span class="chip done">🏁 Finished'+(c.champion?' · '+esc(c.champion):'')+'</span>';
 }
 function _buildAppBar(){
-  var c=_activeCompObj(),sub=(c.name?esc(c.name)+' · ':'')+'Week '+_currentWeek;
+  var c=_activeCompObj(),sub=(c.name?esc(c.name)+' \u00B7 ':'')+'Week '+_currentWeek;
+  var subHtml=(_competitions&&_competitions.length>=2)
+    ?'<button type="button" class="brand-sub as-btn" onclick="_openCompMenu()" aria-haspopup="dialog" aria-label="Competition: '+esc(c.name||"")+'. Tap to switch.">'+sub+Ui.icon("down",14)+'</button>'
+    :'<div class="brand-sub">'+sub+'</div>';
   var h='<a class="skip-link" href="#main">Skip to content</a><header class="app-bar"><div class="app-bar-in">';
-  h+='<div class="brand"><div class="brand-mark" aria-hidden="true">🏏</div><div style="min-width:0"><h1 class="brand-name">BCL Fantasy</h1><div class="brand-sub">'+sub+'</div></div></div>';
+  h+='<div class="brand"><div class="brand-mark" aria-hidden="true">\uD83C\uDFCF</div><div style="min-width:0"><h1 class="brand-name">BCL Fantasy</h1>'+subHtml+'</div></div>';
   if(_username){
     h+='<div class="app-bar-actions"><button type="button" class="icon-btn" id="refresh-btn" onclick="_refreshData()" aria-label="Refresh data" title="Refresh">'+Ui.icon("refresh")+'</button>';
     h+='<button type="button" class="avatar-btn" onclick="_openUserMenu()" aria-haspopup="dialog" aria-label="Account menu for '+esc(_username)+'">'+esc(_initials(_username))+'</button></div>';
@@ -1129,11 +1165,12 @@ function render(state){
       _preserveSearchPos=_prevInp.selectionStart||_prevInp.value.length;
     }
   }
+  var _lay=document.querySelector(".nw-right.layer-open"),_layTop=_lay?_lay.scrollTop:0;   // keep the open picker where it was
   var memberNames=Object.keys(members).sort();
   if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
   var html=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1">';
-  html+=_buildCompSwitcher();
-  html+='<div class="page-strip">'+_statusChip(_activeCompObj())+'<span class="chip"><b>'+memberNames.length+'</b> members</span><span class="chip"><b>'+matches.length+'</b> matches</span><span class="chip"><b>'+BUDGET_TOTAL.toFixed(0)+'</b> CR budget</span></div>';
+  var _hideStrip=(_activeTab==="admin"&&_adminView&&!_wide());
+  if(!_hideStrip)html+='<div class="page-strip">'+_statusChip(_activeCompObj())+'<span class="chip"><b>'+memberNames.length+'</b> members</span><span class="chip"><b>'+matches.length+'</b> matches</span><span class="chip"><b>'+BUDGET_TOTAL.toFixed(0)+'</b> CR budget</span></div>';
   if(!_username){
     html+='<h2 class="ui-sr-only">Sign in</h2>'+_buildLoginCard(memberNames);
     html+=_lbGrid();
@@ -1141,16 +1178,19 @@ function render(state){
   } else {
     var _lbl=_tabList().filter(function(t){return t.id===_activeTab;})[0];
     html+='<h2 class="ui-sr-only">'+esc(_lbl?_lbl.label:"")+'</h2>';
+    if(["match-centre","leaderboard","team"].indexOf(_activeTab)>-1)html+=_buildActionBanner();
     if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
     else if(_activeTab==="leaderboard")  html+=_lbGrid();
     else if(_activeTab==="match-centre") html+=typeof _buildMatchCentreTab==='function'?_buildMatchCentreTab():'<div id="match-centre-tab" class="card" style="display:none"></div>';
     else if(_activeTab==="members")      html+=_buildMembersCard(memberNames);
-    else if(_activeTab==="admin")        {html+=_buildAdminTab();html+=_buildDevTools();}
+    else if(_activeTab==="admin")        html+=_buildAdminTab();
   }
   html+='</main>';
   if(_username)html+=_buildBottomNav();
   $app.innerHTML=html;
+  document.body.classList.toggle("layer-open",!!(_pickOpen&&_activeTab==="next"));
+  if(_layTop){var _l2=document.querySelector(".nw-right.layer-open");if(_l2)_l2.scrollTop=_layTop;}
   if(_activeTab==="next"&&_preserveSearchFocus){
     var inp=document.getElementById("picker-search-input");
     if(inp){inp.focus();try{inp.selectionStart=inp.selectionEnd=_preserveSearchPos;}catch(e){}}
@@ -1193,6 +1233,7 @@ function _deadlineText(){
   return '🔒 locks in '+t;
 }
 setInterval(function(){
+  document.querySelectorAll('.js-lockin').forEach(function(e){e.textContent=_lockIn()||'now';});
   var el=document.getElementById('nw-countdown'); if(!el)return;
   el.textContent=_deadlineText();
   if(_deadlineLocked()){var b=document.getElementById('nw-save-btn');if(b){b.disabled=true;b.title='Locked — the weekly deadline has passed';}}
@@ -1213,6 +1254,46 @@ function _buildCompSwitcher(){
   });
   h+='</div>';
   return h;
+}
+// ─── POLISH: layered pages, dropdown menus, accordions, deadline banner ─────────────────────────
+var _pickOpen=false,_adminView=null;
+function _wide(){return !!(window.matchMedia&&window.matchMedia("(min-width:1000px)").matches);}
+function _pushLayer(tag){try{history.pushState({ui:tag},"");}catch(e){}}
+function _popLayer(tag){if(history.state&&history.state.ui===tag){history.back();return true;}return false;}
+window.addEventListener("popstate",function(){            // the phone's Back button closes the top layer
+  var ch=false;
+  if(_pickOpen){_pickOpen=false;ch=true;}
+  else if(_activeTab==="admin"&&_adminView&&!_wide()){_adminView=null;ch=true;}
+  if(ch&&_state)render(_state);
+});
+document.addEventListener("keydown",function(e){if(e.key==="Escape"&&_pickOpen&&!document.querySelector(".ui-backdrop"))_pickClose();});
+var _rsz=null;window.addEventListener("resize",function(){clearTimeout(_rsz);_rsz=setTimeout(function(){if(_state&&(_activeTab==="admin"||_pickOpen))render(_state);},200);});
+function _pickOpenLayer(){_pickOpen=true;_pushLayer("pick");if(_state)render(_state);var l=document.querySelector(".nw-right.layer-open");if(l)l.scrollTop=0;}
+function _pickClose(){if(!_pickOpen)return;if(!_popLayer("pick")){_pickOpen=false;if(_state)render(_state);}}
+
+function _lockIn(){
+  var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc)return "";
+  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();if(ms<=0)return "";
+  var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
+  return d>0?(d+"d "+hh+"h "+mm+"m"):(hh>0?(hh+"h "+mm+"m "+ss+"s"):(mm+"m "+ss+"s"));
+}
+function _buildActionBanner(){
+  if(!_username)return "";
+  var c=_activeCompObj();if(!c.status||c.status==="completed")return "";
+  if(!_lockIn()||_deadlineLocked())return "";
+  var n=_nwDraft.team.length;
+  if(!n&&!_historyData)return "";                       // do not claim "no team" before the saved team has loaded
+  var full=n>=XI_SIZE,pre=_currentWeek<=1;
+  var sub=full?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it":(n?n+"/"+XI_SIZE+" players picked \u2014 finish your XI":"You haven\u0027t picked a team yet");
+  return '<div class="action-banner'+(full?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'
+    +'<button type="button" class="btn '+(full?"btn-ghost":"btn-gold")+' btn-sm" onclick="switchTab(\'next\')">'+(full?"Edit team":"Pick team")+'</button></div>';
+}
+function _openCompMenu(){
+  var items=(_competitions||[]).map(function(c){
+    var st=c.status==="active"?"Live":(c.status==="upcoming"?"Starts soon":"Finished"+(c.champion?" \u00B7 "+c.champion:""));
+    return {icon:c.status==="completed"?"table":(c.status==="active"?"matches":"clock"),label:c.name,hint:st,checked:c.slug===_activeComp,onClick:function(){_switchComp(c.slug);}};
+  });
+  Ui.sheet({title:"Competition",items:items});
 }
 function _lbGrid(){var ch=_buildChampionshipCard();return '<div class="lb-grid'+(ch?'':' lb-solo')+'">'+_buildLeaderboardCard(_leaderboard)+ch+'</div>';}
 function _buildChampionshipCard(){
