@@ -395,6 +395,7 @@
     window.addEventListener("ipl:rollover-triggered", function () { _lastStateEtag = null; _pollCycle(); });
 
     _safeBootTimer = setTimeout(function () {
+      if (window.Ui && window.Ui.boot) return;   // Ui.boot explains a slow start and only fails after ~75 s
       var loading = document.getElementById("app-loading");
       if (loading && !loading.classList.contains("hidden")) {
         loading.classList.add("hidden");

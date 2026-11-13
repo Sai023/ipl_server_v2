@@ -7,11 +7,13 @@
   <link rel="manifest" href="/manifest.json" />
   <title>BCL Fantasy</title>
   <link rel="stylesheet" href="/static/style.css?v=1.0">
+  <link rel="stylesheet" href="/static/ui.css?v=1.0">
 </head>
 <body>
 <div id="app-loading"><div class="logo">🏏</div><h1>BCL Fantasy</h1><div class="spinner"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
+<script src="/static/ui.js?v=1.0"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -58,8 +60,8 @@ function clearUsername(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function escAttr(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");}
 function hideLoading(){if($loading&&!$loading.classList.contains("hidden")){$loading.classList.add("hidden");setTimeout(function(){if($loading)$loading.remove();},450);}}
-function showErrorBanner(msg){if(!$errorBanner)return;$errorBanner.textContent="\u26a0\uFE0F  "+(msg||"Server error \u2014 retrying\u2026");$errorBanner.classList.add("visible");}
-function hideErrorBanner(){if($errorBanner)$errorBanner.classList.remove("visible");}
+function showErrorBanner(msg){Ui.connection.set("reconnecting",msg);}
+function hideErrorBanner(){Ui.connection.clear();}
 function _avClass(team){
   if(!team)return"";
   switch(team.toLowerCase()){
@@ -195,7 +197,7 @@ function _nwToggle(id){
 }
 function _nwSave(){
   if(!_username)return;
-  if(_nwDraft.team.length!==XI_SIZE){alert("Select exactly 11 players first.");return;}
+  if(_nwDraft.team.length!==XI_SIZE){Ui.warn("Select exactly 11 players first.");return;}
   var btn=document.getElementById("nw-save-btn"),msg=document.getElementById("nw-save-msg");
   if(btn){btn.disabled=true;btn.textContent="Saving\u2026";}
   if(msg){msg.textContent="";msg.className="save-status";}
@@ -573,12 +575,13 @@ function _loadAdminMembers(){
   }).catch(function(e){console.warn("[admin] members:",e);});
 }
 function _adminResetPasscode(targetUsername){
-  if(!confirm('Reset passcode for "'+targetUsername+'" back to 1234? They will be asked to set a new one on next login.'))return;
-  window.IplApi.adminResetPasscode(targetUsername).then(function(d){
-    if(!d||!d.ok)throw new Error('reset failed');
-    _adminMembersList=null;_loadAdminMembers();
-  }).catch(function(e){
-    alert('Could not reset passcode: '+((e&&e.serverMessage)||e.message||'unknown error'));
+  Ui.confirm({title:"Reset passcode?",message:targetUsername+"'s passcode goes back to 1234. They will be asked to set a new one the next time they sign in.",confirmText:"Reset passcode",danger:true}).then(function(ok){
+    if(!ok)return;
+    window.IplApi.adminResetPasscode(targetUsername).then(function(d){
+      if(!d||!d.ok)throw new Error("reset failed");
+      Ui.success("Passcode for "+targetUsername+" reset to 1234.");
+      _adminMembersList=null;_loadAdminMembers();
+    }).catch(function(e){Ui.fail(e,"Could not reset passcode");});
   });
 }
 function _buildAdminPasscodesCard(){
@@ -636,28 +639,55 @@ function _buildAdminCompetitionsCard(){
 }
 function _adminCompAction(action,slug){
   window.IplApi.adminCompetition({action:action,slug:slug}).then(function(d){
-    if(d&&d.ok){_bootstrap();}else{alert("Failed: "+((d&&d.error)||"error"));}
-  }).catch(function(e){alert("Failed: "+e.message);});
+    if(d&&d.ok){Ui.success(action==="activate"?slug+" is now active.":"Done.");_bootstrap();}
+    else{Ui.error((d&&d.error)||"That did not work. Please try again.");}
+  }).catch(function(e){Ui.fail(e);});
+}
+function _crownDone(slug,champion){Ui.notice({title:"🏆 Crowned "+champion,message:slug+" is now closed."});_bootstrap();}
+function _crownTie(slug,tied){
+  Ui.prompt({title:"Tie for #1",message:"Tied: "+tied.join(", ")+".\nType the champion's name exactly.",label:"Champion",confirmText:"Crown",
+    validate:function(v){return tied.indexOf(v)<0?"Must be exactly one of: "+tied.join(", "):"";}}).then(function(who){
+    if(!who)return;
+    window.IplApi.adminCompetition({action:"close",slug:slug,champion:who}).then(function(d){
+      if(d&&d.ok)_crownDone(slug,d.champion);else Ui.error((d&&d.error)||"Could not close the competition.");
+    }).catch(function(e){Ui.fail(e);});
+  });
 }
 function _adminCloseComp(slug){
-  if(!confirm("Close & crown "+slug+"?\nThe current leaderboard #1 gets a championship point."))return;
-  window.IplApi.adminCompetition({action:"close",slug:slug}).then(function(d){
-    if(d&&d.ok){alert("🏆 Crowned "+d.champion);_bootstrap();}
-    else if(d&&d.tie){var who=prompt("Tie for #1 ("+d.tied.join(", ")+").\nType the champion exactly:");if(who){window.IplApi.adminCompetition({action:"close",slug:slug,champion:who.trim()}).then(function(d2){if(d2&&d2.ok){alert("🏆 Crowned "+d2.champion);_bootstrap();}else alert("Failed: "+((d2&&d2.error)||"error"));});}}
-    else{alert("Failed: "+((d&&d.error)||"error"));}
-  }).catch(function(e){alert("Failed: "+e.message);});
+  Ui.confirm({title:"Close & crown "+slug+"?",message:"The current leaderboard #1 gets a championship point.",confirmText:"Close & crown"}).then(function(ok){
+    if(!ok)return;
+    window.IplApi.adminCompetition({action:"close",slug:slug}).then(function(d){
+      if(d&&d.ok)_crownDone(slug,d.champion);
+      else if(d&&d.tie)_crownTie(slug,d.tied);
+      else Ui.error((d&&d.error)||"Could not close the competition.");
+    }).catch(function(e){
+      var sd=e&&e.serverData;                       // the server answers a tie with HTTP 409 + {tie:true,tied:[...]}
+      if(sd&&sd.tie)_crownTie(slug,sd.tied);else Ui.fail(e);
+    });
+  });
 }
 function _adminCreateComp(){
   var slug=((document.getElementById("newcomp-slug")||{}).value||"").trim();
   var name=((document.getElementById("newcomp-name")||{}).value||"").trim();
   var anchor=((document.getElementById("newcomp-anchor")||{}).value||"").trim();
-  if(!slug||!name){alert("slug and name are required");return;}
+  if(!slug||!name){Ui.warn("Enter both a slug and a name.");return;}
   var body={action:"create",slug:slug,name:name};
   if(anchor)body.week1_anchor_utc=anchor+"T14:00:00+00:00";
-  window.IplApi.adminCompetition(body).then(function(d){
-    if(d&&d.ok){alert("Created "+slug+".\nNext: click Import data on it to load its players and schedule.");_bootstrap();}
-    else alert("Failed: "+((d&&d.error)||"error"));
-  }).catch(function(e){alert("Failed: "+e.message);});
+  function go(){
+    window.IplApi.adminCompetition(body).then(function(d){
+      if(d&&d.ok){Ui.success("Created "+slug+". Next: click Import data on it to load its players and schedule.",{duration:9000});_bootstrap();}
+      else Ui.error((d&&d.error)||"Could not create the competition.");
+    }).catch(function(e){Ui.fail(e);});
+  }
+  // The week-1 date is the Monday lock and cannot be changed later, so double-check anything unusual.
+  var odd="";
+  if(anchor){
+    var dt=new Date(anchor+"T00:00:00Z");
+    if(dt.getUTCDay()!==1)odd="That date is a "+["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][dt.getUTCDay()]+", not a Monday.";
+    else if(dt.getTime()<Date.now()-86400000)odd="That date is in the past.";
+  }
+  if(odd){Ui.confirm({title:"Check the week-1 date",message:odd+"\nThis date sets every week's Monday lock and cannot be changed afterwards.",confirmText:"Use it anyway",cancelText:"Go back"}).then(function(ok){if(ok)go();});return;}
+  go();
 }
 
 // ─── ADMIN: IMPORT COMPETITION DATA ──────────────────────────────────────────
@@ -706,8 +736,9 @@ function _impRun(){
   var bits=[];
   if(r.players)bits.push((r.players.inserted||0)+" new and "+(r.players.updated||0)+" updated players");
   if(r.matches)bits.push((r.matches.inserted||0)+" new and "+(r.matches.updated||0)+" updated matches");
-  if(!confirm("Import into "+_imp.slug+"?\n\n"+bits.join("\n")+"\n\nNothing is deleted, and importing the same files again changes nothing."))return;
-  _impCall(false);
+  Ui.confirm({title:"Import into "+_imp.slug+"?",message:bits.join("\n")+"\n\nNothing is deleted, and importing the same files again changes nothing.",confirmText:"Import now"}).then(function(ok){
+    if(ok)_impCall(false);
+  });
 }
 function _impList(items,color){
   var h='<ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:'+color+'">';
@@ -1194,6 +1225,9 @@ function _buildChampionshipCard(){
   return h;
 }
 
+var _bootTries=0;
+function _bootRetry(){if(!$loading||_bootTries>=12)return;_bootTries++;setTimeout(function(){if(!_state)_bootstrap();},Math.min(2000*_bootTries,10000));}
+window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();});
 function _bootstrap(){
   var savedUser=getSavedUsername();
   var compP=(window.IplApi&&window.IplApi.getCompetitions)?window.IplApi.getCompetitions().catch(function(){return null;}):Promise.resolve(null);
@@ -1237,6 +1271,7 @@ function _bootstrap(){
   }).catch(function(err){
     console.error("[IPL] bootstrap:",err);
     showErrorBanner("Could not reach server \u2014 retrying\u2026");
+    _bootRetry();
   });
   Promise.all([stP,hP]).then(function(results){
     var state=results[0],history=results[1];
