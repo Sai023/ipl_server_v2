@@ -23,7 +23,7 @@ services:
     name: ipl-fantasy-2026
     runtime: python
     plan: free
-    region: frankfurt         # MUST match the Neon region (eu-central-1) — cross-region = slow
+    region: oregon            # the live service runs in Oregon (Render can't change a region). Keep Neon in aws-us-west-2 (Oregon) — cross-region = slow
     branch: main
     autoDeploy: true          # any push to main redeploys
 
