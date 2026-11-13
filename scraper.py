@@ -117,20 +117,29 @@ def _auto_add_player(
     player = _generate_dynamic_player(name, team_code, cricbuzz_id)
     new_id = player["id"]
 
-    # 3. Persist to DB (INSERT OR IGNORE so re-runs are idempotent)
-    try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=30)
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute(
-            "INSERT OR IGNORE INTO players (id, name, team, price, role) "
-            "VALUES (?,?,?,?,?)",
-            (new_id, player["name"], player["team"], player["price"], player["role"])
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"    ⚠ DB write failed for '{name}' ({new_id}): {e}")
+    # 3. Persist to DB (INSERT OR IGNORE so re-runs are idempotent).
+    #    The Postgres, competition-aware runner (score_competition.py) supplies its
+    #    own writer through pidx["persist_player"]; the SQLite path below is the legacy one.
+    persist = pidx.get("persist_player")
+    if persist:
+        try:
+            persist(player)
+        except Exception as e:
+            print(f"    ⚠ DB write failed for '{name}' ({new_id}): {e}")
+    else:
+        try:
+            conn = sqlite3.connect(str(DB_PATH), timeout=30)
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute(
+                "INSERT OR IGNORE INTO players (id, name, team, price, role) "
+                "VALUES (?,?,?,?,?)",
+                (new_id, player["name"], player["team"], player["price"], player["role"])
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"    ⚠ DB write failed for '{name}' ({new_id}): {e}")
 
     # 4. Update live index
     pidx["all"].append(player)

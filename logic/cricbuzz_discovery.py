@@ -167,7 +167,7 @@ _SERIES_LOOKUP_URLS = (
 )
 
 
-def resolve_series_id(year: int, debug: bool = False) -> str | None:
+def resolve_series_id(year: int, debug: bool = False, slug: str | None = None) -> str | None:
     """
     Find the Cricbuzz series ID for IPL {year} by trying multiple
     listing pages.  Returns the numeric ID as a string, or None if
@@ -182,7 +182,7 @@ def resolve_series_id(year: int, debug: bool = False) -> str | None:
     404 means "page genuinely doesn't exist" — we skip to the next URL
     immediately rather than waste exponential backoff on a dead URL.
     """
-    slug = f"indian-premier-league-{year}"
+    slug = slug or f"indian-premier-league-{year}"   # slug= lets other competitions (SA20) reuse this
     pat  = re.compile(rf"/cricket-series/(\d+)/{re.escape(slug)}(?:/|\")")
 
     for url in _SERIES_LOOKUP_URLS:

@@ -139,6 +139,12 @@ def _build_player_index(con: sqlite3.Connection) -> dict:
     """
     rows    = con.execute("SELECT id, name, team, role FROM players").fetchall()
     players = [{"id": r[0], "name": r[1], "team": r[2], "role": r[3]} for r in rows]
+    return _index_players(players)
+
+
+def _index_players(players: list) -> dict:
+    """Build the lookup index from player dicts {id,name,team,role}. Shared by the
+    SQLite-era _build_player_index and the Postgres, competition-aware scoring runner."""
     by_name = {}; by_surname = {}; by_name_team = {}; name_conflicts = set()
     for p in players:
         n = _norm(p["name"])
