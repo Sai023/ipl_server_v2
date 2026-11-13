@@ -302,3 +302,48 @@ body.layer-open { overflow: hidden; }
 
 /* contrast: secondary text meets WCAG AA (>= 4.5:1) on the card backgrounds */
 :root { --muted: #8099B8; --dim: #5C7595; }
+
+/* =====================================================================================================
+   BRAND + FINAL POLISH
+   ===================================================================================================== */
+
+/* ---- logo + wordmark ---- */
+.brand-logo { width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0; display: block; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.brand-logo.lg { width: 72px; height: 72px; border-radius: 20px; margin: 0 auto 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.06); }
+.brand-name { display: flex; align-items: baseline; gap: 7px; font-size: 18px; line-height: 1.1; margin: 0; }
+.bn-bcl { font-weight: 900; letter-spacing: .01em; color: var(--text-strong); }
+.bn-fan { font-weight: 700; font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--gold); }
+#app-loading .logo-img { width: 88px; height: 88px; border-radius: 24px; display: block; box-shadow: 0 12px 36px rgba(0,0,0,.5), 0 0 44px rgba(0,212,170,.2); animation: ui-breathe 2.4s ease-in-out infinite; }
+#app-loading h1.wordmark { display: flex; align-items: baseline; gap: 9px; font-size: 26px; }
+#app-loading h1.wordmark .bn-fan { font-size: 12px; }
+@keyframes ui-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+
+/* ---- Admin competitions as cards ---- */
+.comp-list { display: grid; gap: 10px; margin-top: 4px; }
+.comp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; align-items: center; padding: 12px 14px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 14px; }
+.comp-name { font-size: 15px; font-weight: 700; color: var(--text-strong); }
+.comp-slug { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: ui-monospace, Consolas, monospace; }
+.comp-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+@media (min-width: 640px) { .comp-row { grid-template-columns: minmax(0, 1fr) auto auto; } .comp-actions { grid-column: auto; justify-content: flex-end; } }
+
+/* ---- tab transition ---- */
+@keyframes ui-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+#main.enter { animation: ui-enter .24s var(--ease); }
+
+/* ---- loading placeholders ---- */
+.mm-loading { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 36px 16px; color: var(--muted); font-size: 13px; }
+.mm-loading .ui-spinner { margin: 0; }
+.card-locked .ui-state { padding-top: 18px; padding-bottom: 14px; }
+
+/* ---- the older bottom-sheet modals (rules, swap, passcode) now match the new dialogs ---- */
+#rules-modal, #swap-modal, #reset-passcode-modal { z-index: var(--z-dialog) !important; background: rgba(3,8,16,.74) !important; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: ui-fade .15s ease; }
+#rules-modal > div, #swap-modal > div, #reset-passcode-modal > div { background: var(--surface-2) !important; border: 1px solid var(--border-strong) !important; border-radius: 20px 20px 0 0 !important; box-shadow: var(--shadow-2); animation: ui-pop .2s var(--ease); padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important; }
+@media (min-width: 760px) {
+  #rules-modal, #swap-modal, #reset-passcode-modal { align-items: center !important; }
+  #rules-modal > div, #swap-modal > div, #reset-passcode-modal > div { border-radius: 20px !important; padding-bottom: 24px !important; }
+}
+.match-modal-backdrop { z-index: var(--z-dialog); }
+
+/* the page body is focused programmatically after a tab change (for screen readers); it never needs a visible ring */
+main:focus, main:focus-visible, #main:focus, #main:focus-visible { outline: none; box-shadow: none; }
+.ui-state-mark { display: block; margin: 0 auto 10px; opacity: .96; }

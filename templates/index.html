@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#07111F" />
+  <link rel="icon" type="image/svg+xml" href="/static/brand/icon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.json" />
   <title>BCL Fantasy</title>
   <link rel="stylesheet" href="/static/style.css?v=1.0">
@@ -11,7 +14,7 @@
   <link rel="stylesheet" href="/static/screens.css?v=1.0">
 </head>
 <body>
-<div id="app-loading"><div class="logo">🏏</div><h1>BCL Fantasy</h1><div class="spinner"></div><p>Loading your league…</p></div>
+<div id="app-loading"><img class="logo-img" src="/static/brand/icon.svg" width="88" height="88" alt="" /><h1 class="wordmark"><span class="bn-bcl">BCL</span> <span class="bn-fan">Fantasy</span></h1><div class="spinner"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
 <script src="/static/ui.js?v=1.0"></script>
@@ -118,7 +121,7 @@ function switchTab(tab){
   if(tab==="admin")_loadAdminMatches();
   if(_state)render(_state);
   window.scrollTo(0,0);
-  var m=document.getElementById("main");if(m)m.focus({preventScroll:true});
+  var m=document.getElementById("main");if(m){m.classList.add("enter");m.focus({preventScroll:true});}
 }
 
 // ─── HISTORY ────────────────────────────────────────────────────────────────
@@ -211,11 +214,13 @@ function _nwSave(){
     .then(function(){
       if(btn){btn.disabled=false;btn.textContent="Save Draft";}
       if(msg){msg.textContent="\u2713 Saved!";msg.className="save-status ok";}
+      Ui.success("Team saved");
       window.dispatchEvent(new CustomEvent("ipl:saved"));
       setTimeout(function(){if(msg)msg.textContent="";},3000);
     }).catch(function(e){
       if(btn){btn.disabled=false;btn.textContent="Save Draft";}
       if(msg){msg.textContent="\u2717 "+(e.serverMessage||e.message);msg.className="save-status err";}
+      Ui.fail(e,"Could not save your team");
     });
 }
 function _pickerSetRole(r){_pickerRole=r;if(_state)render(_state);}
@@ -258,7 +263,7 @@ function _doStateRefresh(onDone){
   var plP=window.IplApi?window.IplApi.getPlayers().catch(function(){return null;}):Promise.resolve(null);
   Promise.all([stP,lbP,hP,plP]).then(function(results){
     var state=results[0],lb=results[1],history=results[2],players=results[3];
-    if(state){
+    if(state&&!_staleState(state)){
       if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;}
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
       if(players&&players.ok!==false){_players=players;}
@@ -440,7 +445,7 @@ function _buildPitchView(teamArr,capId,vcId){
 
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
-  var h='<div class="card login-hero"><div class="brand-mark" aria-hidden="true">\uD83C\uDFCF</div><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
+  var h='<div class="card login-hero"><img class="brand-logo lg" src="/static/brand/icon.svg" width="72" height="72" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
@@ -475,8 +480,12 @@ function _doRegister(){
 }
 function _buildThisWeekCard(){
   var tw=_getThisWeekData();
-  var h='<div class="card card-locked"><div class="week-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+_currentWeek+' &nbsp;<span class="badge-lock">\uD83D\uDD12 Locked</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">\uD83D\uDCD6 Scoring Rules</button></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
-  if(!tw||!tw.team||tw.team.length===0){h+='<p class="empty">No XI locked for this week yet.'+((_username&&!_historyData)?" Loading\u2026":"")+'\'</p></div>';return h;}
+  var h='<div class="card card-locked"><div class="week-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+_currentWeek+' &nbsp;<span class="badge-lock">'+((_currentWeek<=1&&_lockIn())?'Not started':'\uD83D\uDD12 Locked')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">\uD83D\uDCD6 Scoring Rules</button></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
+  if(!tw||!tw.team||tw.team.length===0){
+    if(_username&&!_historyData)h+=Ui.stateHtml("loading",{title:"Loading your team\u2026"});
+    else h+=Ui.stateHtml("empty",{title:"No XI locked for this week",message:(_currentWeek<=1?"Pick your team before the lock and it will appear here.":"You did not have a team locked this week."),retry:(_lockIn()?"switchTab('next')":""),retryLabel:"Pick your team"});
+    return h+'</div>';
+  }
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
   return h+'</div>';
 }
@@ -578,24 +587,25 @@ function _buildAdminCompetitionsCard(){
   var h='<div class="card">';
   h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">🏆 Competitions</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_bootstrap()">⟳ Refresh</button></div>';
-  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Create a competition (set the Monday lock date before match 1), then <strong>Import data</strong> to load its players and fixtures from your <code>players.json</code> / <code>schedule.json</code> files. Activate it so members can pick before match 1; close &amp; crown when it ends.</p>';
-  h+='<table class="lb-table"><thead><tr><th>Competition</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Create a competition (set its week-1 date: the first Monday after the opening match), then <strong>Import data</strong> to load its players and fixtures from your <code>players.json</code> / <code>schedule.json</code> files. Activate it so members can pick before match 1; close &amp; crown when it ends.</p>';
+  h+='<div class="comp-list">';
   (_competitions||[]).forEach(function(c){
     var act,imp='';
     if(c.status==="upcoming"||c.status==="active") imp='<button class="btn btn-ghost btn-sm" onclick="_impOpen(\''+escAttr(c.slug)+'\')">'+(_imp.slug===c.slug?'Hide import':'Import data')+'</button> ';
     if(c.status==="upcoming") act=imp+'<button class="btn btn-teal btn-sm" onclick="_adminCompAction(\'activate\',\''+escAttr(c.slug)+'\')">Activate</button>';
     else if(c.status==="active") act=imp+'<button class="btn btn-sm" style="background:var(--gold);color:#07111F;font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
     else act='🏆 '+esc(c.champion||"—");
-    h+='<tr><td>'+esc(c.name)+'<br><span style="font-size:10px;color:var(--muted)">'+esc(c.slug)+'</span></td><td>'+esc(c.status)+'</td><td>'+act+'</td></tr>';
+    var _chip=c.status==="active"?'<span class="chip live">\u25CF Live</span>':(c.status==="upcoming"?'<span class="chip soon">Upcoming</span>':'<span class="chip done">Finished</span>');
+    h+='<div class="comp-row"><div class="comp-main"><div class="comp-name">'+esc(c.name)+'</div><div class="comp-slug">'+esc(c.slug)+'</div></div>'+_chip+'<div class="comp-actions">'+act+'</div></div>';
   });
-  h+='</tbody></table>';
+  h+='</div>';
   if(_imp.slug)h+=_buildImportPanel();
   var ist='background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
   h+='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">';
   h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
   h+='<input id="newcomp-slug" aria-label="Competition slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
   h+='<input id="newcomp-name" aria-label="Competition name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
-  h+='<input id="newcomp-anchor" aria-label="Week-1 lock date (the Monday)" type="date" title="Week-1 lock date (Mon before match 1)" style="'+ist+'">';
+  h+='<input id="newcomp-anchor" aria-label="Week-1 lock date (the Monday)" type="date" title="Week-1 date: the first Monday after the opening match" style="'+ist+'">';
   h+='<button class="btn btn-teal btn-sm" onclick="_adminCreateComp()">Create</button>';
   h+='</div></div>';
   return h;
@@ -758,7 +768,7 @@ function _buildImportPanel(){
   h+='</div>';
   if(_imp.needsAnchor||(_imp.anchor&&!_imp.done)){
     // Shown only when the server says this competition was created without a week-1 date.
-    h+='<label style="display:block;font-size:12px;color:var(--muted);margin:8px 0">Week-1 date — the Monday before match 1 (this competition has none yet)<br><input type="date" value="'+esc(_imp.anchor)+'" onchange="_imp.anchor=this.value;_impCall(true)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin-top:4px"></label>';
+    h+='<label style="display:block;font-size:12px;color:var(--muted);margin:8px 0">Week-1 date — the first Monday after the opening match (this competition has none yet)<br><input type="date" value="'+esc(_imp.anchor)+'" onchange="_imp.anchor=this.value;_impCall(true)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin-top:4px"></label>';
   }
   if(_imp.msg)h+='<p style="color:#F87171;font-size:12px;margin:6px 0">'+esc(_imp.msg)+'</p>';
   if(_imp.busy)h+='<p style="color:var(--gold);font-size:12px;margin:6px 0">Working…</p>';
@@ -949,7 +959,7 @@ function _showResetPasscodeModal(forced){
   var sub=forced
     ?'Your passcode was reset to the default by an admin. Choose a new 4-digit passcode now.'
     :'Choose a new 4-digit passcode. Your other devices will be signed out.';
-  var h='<div id="reset-passcode-modal" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.92);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.92);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">'+title+'</div>';
   if(!forced)h+='<button onclick="_closeResetPasscode()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button>';
@@ -995,7 +1005,7 @@ function _submitResetPasscode(forced){
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
 function _showSwapModal(incomingId){
   var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
-  var h='<div id="swap-modal" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 32px;max-height:80vh;overflow-y:auto;">';
   h+='<div style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Select who to remove from your XI</div>';
@@ -1030,7 +1040,7 @@ function _showRulesModal(){
   var val='style="color:var(--teal);font-weight:700;white-space:nowrap;"';
   var neg='style="color:#FF6B6B;font-weight:700;white-space:nowrap;"';
   var note='style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;"';
-  var h ='<div id="rules-modal" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:18px 16px 32px;max-height:85vh;overflow-y:auto;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">How fantasy points are calculated for each player, every match.</div>';
@@ -1119,7 +1129,7 @@ function _buildAppBar(){
     ?'<button type="button" class="brand-sub as-btn" onclick="_openCompMenu()" aria-haspopup="dialog" aria-label="Competition: '+esc(c.name||"")+'. Tap to switch.">'+sub+Ui.icon("down",14)+'</button>'
     :'<div class="brand-sub">'+sub+'</div>';
   var h='<a class="skip-link" href="#main">Skip to content</a><header class="app-bar"><div class="app-bar-in">';
-  h+='<div class="brand"><div class="brand-mark" aria-hidden="true">\uD83C\uDFCF</div><div style="min-width:0"><h1 class="brand-name">BCL Fantasy</h1>'+subHtml+'</div></div>';
+  h+='<div class="brand"><img class="brand-logo" src="/static/brand/icon.svg" width="40" height="40" alt="" aria-hidden="true"><div style="min-width:0"><h1 class="brand-name"><span class="bn-bcl">BCL</span> <span class="bn-fan">Fantasy</span></h1>'+subHtml+'</div></div>';
   if(_username){
     h+='<div class="app-bar-actions"><button type="button" class="icon-btn" id="refresh-btn" onclick="_refreshData()" aria-label="Refresh data" title="Refresh">'+Ui.icon("refresh")+'</button>';
     h+='<button type="button" class="avatar-btn" onclick="_openUserMenu()" aria-haspopup="dialog" aria-label="Account menu for '+esc(_username)+'">'+esc(_initials(_username))+'</button></div>';
@@ -1267,6 +1277,12 @@ window.addEventListener("popstate",function(){            // the phone's Back bu
   if(ch&&_state)render(_state);
 });
 document.addEventListener("keydown",function(e){if(e.key==="Escape"&&_pickOpen&&!document.querySelector(".ui-backdrop"))_pickClose();});
+document.addEventListener("keydown",function(e){            // Escape closes the older bottom-sheet modals too
+  if(e.key!=="Escape"||document.querySelector(".ui-backdrop"))return;
+  var m=document.getElementById("rules-modal")||document.getElementById("swap-modal");
+  if(m){m.remove();return;}
+  if(typeof _closeMatchModal==="function"&&document.querySelector(".match-modal-backdrop"))_closeMatchModal();
+});
 var _rsz=null;window.addEventListener("resize",function(){clearTimeout(_rsz);_rsz=setTimeout(function(){if(_state&&(_activeTab==="admin"||_pickOpen))render(_state);},200);});
 function _pickOpenLayer(){_pickOpen=true;_pushLayer("pick");if(_state)render(_state);var l=document.querySelector(".nw-right.layer-open");if(l)l.scrollTop=0;}
 function _pickClose(){if(!_pickOpen)return;if(!_popLayer("pick")){_pickOpen=false;if(_state)render(_state);}}
@@ -1309,6 +1325,12 @@ function _buildChampionshipCard(){
   return h;
 }
 
+function _staleState(s){
+  if(!s||!s.competition)return false;
+  var cur=(window.IplComp&&IplComp.get&&IplComp.get())||_activeComp||"";
+  if(!cur||s.competition===cur)return false;
+  return (_competitions||[]).some(function(c){return c.slug===cur;});   // an unknown stored slug falls back on the server: not stale
+}
 var _bootTries=0;
 function _bootRetry(){if(!$loading||_bootTries>=12)return;_bootTries++;setTimeout(function(){if(!_state)_bootstrap();},Math.min(2000*_bootTries,10000));}
 window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();});
@@ -1332,6 +1354,7 @@ function _bootstrap(){
     }
   });
   stP.then(function(state){
+    if(_staleState(state))return;
     if(!_username){
       var savedTok=(window.IplAuth&&window.IplAuth.getToken)?window.IplAuth.getToken():null;
       if(savedUser&&savedTok&&state.members&&state.members[savedUser]&&window.IplApi){
@@ -1359,7 +1382,7 @@ function _bootstrap(){
   });
   Promise.all([stP,hP]).then(function(results){
     var state=results[0],history=results[1];
-    if(!state)return;
+    if(!state||_staleState(state))return;
     if(history&&history.ok){
       _historyData=history;_currentWeek=history.current_week;
       if(_nwDraft.team.length===0){
@@ -1380,7 +1403,7 @@ setTimeout(function(){if(!_glueReady&&window.IplApi){_glueReady=true;_bootstrap(
 
 window.addEventListener("ipl:state-updated",function(e){
   var state=e.detail;
-  if(!state||typeof state.members!=="object")return;
+  if(!state||typeof state.members!=="object"||_staleState(state))return;
   if(!_username){var saved=getSavedUsername();if(saved&&state.members[saved])_username=saved;else if(saved&&!state.members[saved])clearUsername();}
   render(state);
 });

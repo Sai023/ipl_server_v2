@@ -250,7 +250,7 @@ def parse_schedule(raw, *, slug, anchor, valid_teams=None):
     if len(raw) > MAX_MATCHES:
         return fail("too many matches (%d, the limit is %d)" % (len(raw), MAX_MATCHES))
     if anchor is None:
-        return fail("this competition has no week-1 date yet - pick the Monday before match 1 (the first "
+        return fail("this competition has no week-1 date yet - pick the first Monday after the opening match (the first "
                     "weekly lock); week numbers cannot be worked out without it")
 
     allowed = set(valid_teams or [])

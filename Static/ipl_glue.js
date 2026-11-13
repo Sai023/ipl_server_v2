@@ -189,7 +189,7 @@
   var COMP_KEY = "ipl_active_comp";
   var IplComp = {
     get:   function ()  { try { return localStorage.getItem(COMP_KEY) || ""; } catch (e) { return ""; } },
-    set:   function (s) { try { if (s) localStorage.setItem(COMP_KEY, s); } catch (e) {} },
+    set:   function (s) { try { if (s) { if (localStorage.getItem(COMP_KEY) !== s) _lastStateEtag = null; localStorage.setItem(COMP_KEY, s); } } catch (e) {} },   // another competition: never answer "unchanged" with the previous one's etag
     clear: function ()  { try { localStorage.removeItem(COMP_KEY); } catch (e) {} },
   };
 
@@ -236,7 +236,9 @@
     getState: function () {
       var headers = { "Accept": "application/json" };
       if (_lastStateEtag) headers["If-None-Match"] = _lastStateEtag;
-      return fetch("/api/state", { headers: headers }).then(function (res) {
+      var url = "/api/state";   // always say WHICH competition (the server would otherwise answer with the default one)
+      try { var _c = (window.IplComp && IplComp.get && IplComp.get()) || ""; if (_c) url += "?comp=" + encodeURIComponent(_c); } catch (e) {}
+      return fetch(url, { headers: headers }).then(function (res) {
         if (res.status === 304) return null;
         if (!res.ok) { var err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
         var etag = res.headers.get("ETag"); if (etag) _lastStateEtag = etag;

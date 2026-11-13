@@ -188,7 +188,8 @@
     o = o || {};
     var ico = { loading: "", empty: "🏏", error: "⚠️", offline: "📵" }[kind] || "";
     var h = '<div class="ui-state ui-state-' + kind + '" role="' + (kind === "error" ? "alert" : "status") + '">';
-    h += kind === "loading" ? '<div class="ui-spinner" aria-hidden="true"></div>' : '<div class="ui-state-ico" aria-hidden="true">' + ico + "</div>";
+    h += kind === "loading" ? '<div class="ui-spinner" aria-hidden="true"></div>'
+      : (kind === "empty" ? '<img class="ui-state-mark" src="/static/brand/mark.svg" width="76" height="68" alt="" aria-hidden="true">' : '<div class="ui-state-ico" aria-hidden="true">' + ico + "</div>");
     if (o.title) h += "<h3>" + esc(o.title) + "</h3>";
     if (o.message) h += "<p>" + esc(o.message) + "</p>";
     if (o.retry) h += '<button type="button" class="btn btn-teal btn-sm" onclick="' + o.retry + '">' + esc(o.retryLabel || "Try again") + "</button>";

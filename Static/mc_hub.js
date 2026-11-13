@@ -409,7 +409,7 @@
     }
 
     return '<div id="match-centre-tab" class="card" style="min-height:160px">'
-         + '<div class="mm-loading">\u23F3 Loading Match Centre\u2026</div>'
+         + '<div class="mm-loading"><div class="ui-spinner" aria-hidden="true"></div>Loading Match Centre\u2026</div>'
          + '</div>';
   };
 

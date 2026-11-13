@@ -677,6 +677,7 @@ def api_get_state():
             else:
                 nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
         state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", "")}
+        state["competition"] = comp   # lets the browser discard a reply that belongs to another competition
         resp = jsonify(state); resp.headers["ETag"] = etag; return resp
     except Exception as e:
         _log(f"GET /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500
@@ -1686,17 +1687,19 @@ def serve_static(filename):
 
 @bp.route("/manifest.json")
 def manifest():
-    return jsonify({"name":"BCL Fantasy","short_name":"BCL Fantasy",
-        "description":"BCL Fantasy - private fantasy cricket across our leagues","start_url":"/","display":"standalone",
-        "background_color":"#07111F","theme_color":"#07111F",
-        "icons":[{"src":"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F3CF;</text></svg>",
-                  "sizes":"any","type":"image/svg+xml"}]})
+    return jsonify({"id":"/","name":"BCL Fantasy","short_name":"BCL Fantasy",
+        "description":"BCL Fantasy - private fantasy cricket across our leagues","start_url":"/","scope":"/","display":"standalone",
+        "orientation":"portrait","background_color":"#07111F","theme_color":"#07111F","categories":["sports","games"],
+        "icons":[{"src":"/static/brand/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+                 {"src":"/static/brand/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+                 {"src":"/static/brand/icon-maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"},
+                 {"src":"/static/brand/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]})
 
 @bp.route("/offline")
 def offline_page():
     return ("<html><body style='background:#07111F;color:#D8E8F5;font-family:sans-serif;"
             "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
-            "<div style='text-align:center'><div style='font-size:64px'>&#x1F3CF;</div>"
+            "<div style='text-align:center'><img src='/static/brand/icon.svg' width='96' height='96' alt='' style='border-radius:24px'>"
             "<h1 style='color:#F5C518;margin:16px 0 8px'>You're offline</h1>"
-            "<p style='color:#5F7A9B'>Check your connection and try again.</p>"
+            "<p style='color:#8099B8'>Check your connection and try again.</p>"
             "</div></body></html>")
