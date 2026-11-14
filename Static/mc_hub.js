@@ -65,8 +65,8 @@
       '.tab-btn{flex-shrink:0;}',
       /* Match Centre tab — teal accent border so it stands out when scrolled */
       '.tab-btn.active[onclick*="match-centre"]{',
-        'border-color:rgba(0,210,255,.55)!important;',
-        'color:var(--ipl-teal,#00d2ff)!important;',
+        'border-color:color-mix(in srgb, var(--teal-line) 88%, transparent)!important;',
+        'color:var(--ipl-teal)!important;',
       '}',
       /* Narrow screen: slightly tighter tab buttons */
       '@media(max-width:480px){',
@@ -104,17 +104,17 @@
 
   // ── Role badge pill ──────────────────────────────────────────────────────────
   var _ROLE_COLOURS = {
-    WK:   { bg: 'rgba(251,191,36,.18)',  txt: '#FBBF24' },
-    BAT:  { bg: 'rgba(52,211,153,.18)',  txt: '#34D399' },
-    AR:   { bg: 'rgba(139,92,246,.18)',  txt: '#A78BFA' },
-    BOWL: { bg: 'rgba(96,165,250,.18)',  txt: '#60A5FA' },
+    WK:   { bg: 'color-mix(in srgb, var(--teal-wash) 42%, transparent)',   txt: 'var(--teal-ink)' },
+    BAT:  { bg: 'color-mix(in srgb, var(--gold-wash) 42%, transparent)',   txt: 'var(--gold-ink)' },
+    AR:   { bg: 'color-mix(in srgb, var(--violet-wash) 42%, transparent)', txt: 'var(--violet-ink)' },
+    BOWL: { bg: 'color-mix(in srgb, var(--danger-wash) 42%, transparent)', txt: 'var(--danger-ink)' },
   };
 
   function _rolePill(role) {
     if (!role) return '';
     var r = role.toUpperCase();
     var c = _ROLE_COLOURS[r];
-    if (!c) return '<span style="font-size:9px;color:var(--muted,#5F7A9B)">' + _esc(r) + '</span>';
+    if (!c) return '<span style="font-size:9px;color:var(--muted)">' + _esc(r) + '</span>';
     return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;'
          + 'font-size:9px;font-weight:700;letter-spacing:.03em;'
          + 'background:' + c.bg + ';color:' + c.txt + '">' + _esc(r) + '</span>';
@@ -263,7 +263,7 @@
     } else {
       h += '<div class="mm-xi-lbl">Your XI \u00B7 Points This Match</div>';
       if (noBreakdown) {
-        h += '<div style="font-size:11px;color:var(--muted,#5F7A9B);margin-bottom:8px;font-style:italic">'
+        h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-style:italic">'
            + 'Per-player breakdown available after the scraper runs for this match.</div>';
       }
       players.forEach(function (p, idx) {
@@ -281,12 +281,12 @@
         else if (p.multiplier_str)         multAnnot = p.multiplier_str;
 
         // Colour rules
-        var ptsColour   = noBreakdown ? 'var(--muted,#5F7A9B)'
-                        : zero        ? 'var(--dim,#3D5572)'
-                        : isCap       ? '#F5C518'
-                        : 'var(--ipl-teal,#00d2ff)';
-        var annotColour = isCap ? '#F5C518' : 'var(--ipl-teal,#00d2ff)';
-        var rowBorder   = isTop ? 'border-left:2px solid #F5C518;padding-left:6px;margin-left:-6px;' : '';
+        var ptsColour   = noBreakdown ? 'var(--muted)'
+                        : zero        ? 'var(--dim)'
+                        : isCap       ? 'var(--gold-ink)'
+                        : 'var(--ipl-teal)';
+        var annotColour = isCap ? 'var(--gold-ink)' : 'var(--ipl-teal)';
+        var rowBorder   = isTop ? 'border-left:2px solid var(--gold-line);padding-left:6px;margin-left:-6px;' : '';
 
         var cBdg  = isCap ? '<span class="badge badge-c" style="font-size:9px;padding:1px 5px">C</span>'  : '';
         var vcBdg = isVc  ? '<span class="badge badge-vc" style="font-size:9px;padding:1px 5px">VC</span>' : '';
@@ -302,7 +302,7 @@
         if (rolePillHtml || teamStr) {
           h += '<div class="mm-psub" style="display:flex;align-items:center;gap:5px;margin-top:2px">'
              + (rolePillHtml || '')
-             + (teamStr ? '<span style="color:var(--muted,#5F7A9B)">' + teamStr + '</span>' : '')
+             + (teamStr ? '<span style="color:var(--muted)">' + teamStr + '</span>' : '')
              + '</div>';
         }
         h += '</div>';
@@ -328,7 +328,7 @@
     var mismatchHtml = '';
     if (!noBreakdown && !totalsMatch && players.length > 0) {
       mismatchHtml = ' <span title="Server total: ' + serverTotal + '" '
-        + 'style="font-size:10px;color:#FB923C;font-weight:600">⚠</span>';
+        + 'style="font-size:10px;color:var(--orange-ink);font-weight:600">⚠</span>';
     }
     h += '<div class="mm-total">'
        + '<span class="mm-tlbl">Match Total</span>'

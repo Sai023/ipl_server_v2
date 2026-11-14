@@ -1689,17 +1689,18 @@ def serve_static(filename):
 def manifest():
     return jsonify({"id":"/","name":"BCL Fantasy","short_name":"BCL Fantasy",
         "description":"BCL Fantasy - private fantasy cricket across our leagues","start_url":"/","scope":"/","display":"standalone",
-        "orientation":"portrait","background_color":"#07111F","theme_color":"#07111F","categories":["sports","games"],
+        "orientation":"portrait","background_color":"#F3EBD8","theme_color":"#F3EBD8","categories":["sports","games"],
         "icons":[{"src":"/static/brand/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
                  {"src":"/static/brand/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
                  {"src":"/static/brand/icon-maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"},
-                 {"src":"/static/brand/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]})
+                 {"src":"/static/brand/icon-paper.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]})
 
 @bp.route("/offline")
 def offline_page():
-    return ("<html><body style='background:#07111F;color:#D8E8F5;font-family:sans-serif;"
+    return ("<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#F3EBD8'></head>"
+            "<body style='background:#F3EBD8;color:#3A352C;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
             "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
-            "<div style='text-align:center'><img src='/static/brand/icon.svg' width='96' height='96' alt='' style='border-radius:24px'>"
-            "<h1 style='color:#F5C518;margin:16px 0 8px'>You're offline</h1>"
-            "<p style='color:#8099B8'>Check your connection and try again.</p>"
+            "<div style='text-align:center;padding:0 24px'><img src='/static/brand/mark-paper.svg' width='120' height='120' alt=''>"
+            "<h1 style='color:#231F18;margin:16px 0 8px;font-size:28px'>You're offline</h1>"
+            "<p style='color:#6A6255'>Check your connection and try again.</p>"
             "</div></body></html>")

@@ -1,28 +1,9 @@
-/* BCL Fantasy - design system v1.0 (tokens + shared components)
-   Loaded AFTER style.css. Keeps the brand palette (navy / gold / teal) and adds semantic tokens, accessible focus
-   styles, and the shared components used by static/ui.js: toasts, dialogs, status cards, connection banner. */
-
-:root {
-  /* semantic colours */
-  --success: #22C55E; --success-bg: rgba(34,197,94,.12);
-  --danger:  #F87171; --danger-bg:  rgba(248,113,113,.12);
-  --warn:    #F5C518; --warn-bg:    rgba(245,197,24,.12);
-  --info:    #38BDF8; --info-bg:    rgba(56,189,248,.12);
-  --surface-2: #132845;           /* raised surface (dialogs, toasts) */
-  --text-strong: #F2F7FC;
-  /* spacing / shape / depth / motion */
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
-  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
-  --shadow-1: 0 2px 8px rgba(0,0,0,.35);
-  --shadow-2: 0 12px 40px rgba(0,0,0,.55);
-  --ease: cubic-bezier(.2,.8,.2,1);
-  --z-banner: 9000; --z-toast: 9500; --z-dialog: 9800;
-  --focus: 0 0 0 3px rgba(0,212,170,.55);
-}
+/* BCL Fantasy - shared components (tokens live in theme.css)
+   Accessible focus styles and the components used by static/ui.js: toasts, dialogs, status cards, connection banner. */
 
 /* ---- accessibility basics ---- */
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 4px; }
+:focus-visible { outline: 2px solid var(--teal-line); outline-offset: 2px; border-radius: 4px; }
 .btn:focus-visible, .btn-refresh:focus-visible, button:focus-visible { box-shadow: var(--focus); outline: none; }
 .ui-sr-only { position: absolute !important; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
@@ -31,14 +12,14 @@
 .btn { min-height: 36px; transition: opacity .15s, transform .1s, background .15s; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn.is-loading { position: relative; color: transparent !important; pointer-events: none; }
-.btn.is-loading::after { content: ""; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px; border: 2px solid rgba(7,17,31,.35); border-top-color: #07111F; border-radius: 50%; animation: ui-spin .7s linear infinite; }
+.btn.is-loading::after { content: ""; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--on-fill) 35%, transparent); border-top-color: var(--on-fill); border-radius: 50%; animation: ui-spin .7s linear infinite; }
 @keyframes ui-spin { to { transform: rotate(360deg); } }
 
 /* ---- toasts ---- */
 #ui-toasts { position: fixed; left: 0; right: 0; bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)); z-index: var(--z-toast);
   display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-4); pointer-events: none; }
 .ui-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: var(--sp-3); width: 100%; max-width: 440px; box-sizing: border-box;
-  background: var(--surface-2); color: var(--text); border: 1px solid rgba(255,255,255,.08); border-left: 4px solid var(--info);
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-left: 4px solid var(--info);
   border-radius: var(--radius-md); padding: var(--sp-3) var(--sp-4); box-shadow: var(--shadow-2); font-size: 13px; line-height: 1.45;
   animation: ui-toast-in .25s var(--ease); }
 .ui-toast.out { animation: ui-toast-out .2s ease forwards; }
@@ -46,13 +27,13 @@
 .ui-toast-warn { border-left-color: var(--warn); } .ui-toast-info { border-left-color: var(--info); }
 .ui-toast .ui-ico { font-size: 16px; line-height: 1.3; }
 .ui-toast .ui-msg { flex: 1; min-width: 0; word-wrap: break-word; }
-.ui-toast .ui-act { background: none; border: 0; color: var(--teal); font-weight: 700; font-size: 13px; cursor: pointer; padding: 0 var(--sp-1); }
+.ui-toast .ui-act { background: none; border: 0; color: var(--teal-ink); font-weight: 700; font-size: 13px; cursor: pointer; padding: 0 var(--sp-1); }
 .ui-toast .ui-x { background: none; border: 0; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 var(--sp-1); }
 @keyframes ui-toast-in { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes ui-toast-out { to { opacity: 0; transform: translateY(8px); } }
 
 /* ---- dialogs ---- */
-.ui-backdrop { position: fixed; inset: 0; z-index: var(--z-dialog); background: rgba(3,8,16,.72); backdrop-filter: blur(2px);
+.ui-backdrop { position: fixed; inset: 0; z-index: var(--z-dialog); background: color-mix(in srgb, var(--backdrop) 72%, transparent); backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center; padding: var(--sp-4); animation: ui-fade .15s ease; }
 @keyframes ui-fade { from { opacity: 0; } to { opacity: 1; } }
 .ui-dialog { background: var(--surface-2); color: var(--text); width: 100%; max-width: 400px; max-height: 90vh; overflow: auto; box-sizing: border-box;
@@ -61,7 +42,7 @@
 .ui-dialog h2 { margin: 0 0 var(--sp-2); font-size: 17px; color: var(--text-strong); }
 .ui-dialog .ui-body { margin: 0 0 var(--sp-4); font-size: 14px; line-height: 1.55; color: var(--text); white-space: pre-line; }
 .ui-dialog label { display: block; font-size: 12px; color: var(--muted); margin-bottom: var(--sp-1); }
-.ui-dialog input[type=text] { width: 100%; box-sizing: border-box; background: #0A1830; color: var(--text); border: 1px solid rgba(245,197,24,.3);
+.ui-dialog input[type=text] { width: 100%; box-sizing: border-box; background: var(--field); color: var(--text); border: 1px solid color-mix(in srgb, var(--gold-line) 48%, transparent);
   border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; margin-bottom: var(--sp-2); }
 .ui-dialog .ui-err { color: var(--danger); font-size: 12px; min-height: 16px; margin-bottom: var(--sp-2); }
 .ui-dialog .ui-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; margin-top: var(--sp-2); }
@@ -74,8 +55,8 @@
 .ui-state p { margin: 0 auto var(--sp-4); max-width: 320px; font-size: 13px; line-height: 1.55; }
 .ui-state .ui-hint { font-size: 12px; color: var(--dim); }
 .ui-state-error .ui-state-ico { color: var(--danger); }
-.ui-spinner { width: 30px; height: 30px; margin: 0 auto var(--sp-3); border: 3px solid rgba(245,197,24,.15); border-top-color: var(--gold); border-radius: 50%; animation: ui-spin 1s linear infinite; }
-.ui-skel { background: linear-gradient(90deg, rgba(255,255,255,.04) 25%, rgba(255,255,255,.09) 37%, rgba(255,255,255,.04) 63%); background-size: 400% 100%;
+.ui-spinner { width: 30px; height: 30px; margin: 0 auto var(--sp-3); border: 3px solid color-mix(in srgb, var(--gold-line) 24%, transparent); border-top-color: var(--gold-line); border-radius: 50%; animation: ui-spin 1s linear infinite; }
+.ui-skel { background: linear-gradient(90deg, var(--tint-1) 25%, var(--tint-2) 37%, var(--tint-1) 63%); background-size: 400% 100%;
   animation: ui-shimmer 1.4s ease infinite; border-radius: var(--radius-sm); }
 @keyframes ui-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 
@@ -85,9 +66,9 @@
 
 /* ---- connection banner (slim, non-blocking) ---- */
 #ui-conn { position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-banner); display: none; align-items: center; justify-content: center; gap: var(--sp-2);
-  padding: 8px var(--sp-4); font-size: 12.5px; font-weight: 600; text-align: center; color: #07111F; background: var(--warn); box-shadow: var(--shadow-1); }
+  padding: 8px var(--sp-4); font-size: 12.5px; font-weight: 600; text-align: center; color: var(--on-fill); background: var(--gold-fill); border-bottom: 1.5px solid var(--gold-line); box-shadow: var(--shadow-1); }
 #ui-conn.show { display: flex; }
-#ui-conn.offline { background: var(--danger); color: #1b0606; }
-#ui-conn button { background: rgba(0,0,0,.18); color: inherit; border: 0; border-radius: 6px; padding: 3px 10px; font-weight: 700; font-size: 12px; cursor: pointer; }
+#ui-conn.offline { background: var(--danger-fill); border-bottom-color: var(--danger-line); color: var(--on-fill); }
+#ui-conn button { background: var(--well); color: inherit; border: 0; border-radius: 6px; padding: 3px 10px; font-weight: 700; font-size: 12px; cursor: pointer; }
 /* the old bare red banner is superseded */
 #error-banner { display: none !important; }

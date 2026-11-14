@@ -1,0 +1,241 @@
+/* BCL Fantasy - paper.css: the "scorebook" design layer (texture, pencil outlines, hand-drawn shapes, handwriting).
+   Loaded LAST. Colours come from theme.css tokens only. */
+
+/* ---------- the page: cream paper with a fine grain and uneven tone ---------- */
+html { background: var(--paper); }
+body { background: transparent; color: var(--text); font-family: var(--font); }
+/* the paper: a fine grain over an uneven, slightly warm tone (shared by the page and the loader) */
+:root { --paper-tex:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='g' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' seed='4' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .36  0 0 0 0 .29  0 0 0 0 .19  0 0 0 .44 -.12'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>"),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='520' height='520'><filter id='f' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='.012 .02' numOctaves='2' seed='9' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .55  0 0 0 0 .43  0 0 0 0 .22  0 0 0 .22 -.08'/></filter><rect width='100%25' height='100%25' filter='url(%23f)'/></svg>"); }
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(1200px 700px at 12% -10%, color-mix(in srgb, #fff 55%, transparent), transparent 60%),
+    radial-gradient(900px 600px at 105% 110%, color-mix(in srgb, var(--shade) 9%, transparent), transparent 62%),
+    var(--paper-tex);
+}
+::selection { background: color-mix(in srgb, var(--gold-wash) 55%, transparent); color: var(--text-strong); }
+
+/* ---------- type: handwriting for titles and big numbers, a friendly rounded sans for everything you read ---------- */
+h1, h2, h3, h4, .hand { font-family: var(--font-hand); font-weight: 700; letter-spacing: 0; color: var(--text-strong); }
+h2.page-title, .subpage-title { font-size: 32px; line-height: 1; }
+h3.section-title { font-size: 25px; line-height: 1.05; margin-bottom: 14px; }
+.mc-tb-title { font-size: 25px; line-height: 1.05; }
+.login-hero h2 { font-size: 34px; line-height: 1; }
+.ui-dialog h2 { font-size: 27px; line-height: 1.05; }
+.ui-state h3, .mm-title, .lh-title { font-size: 23px; line-height: 1.05; }
+.mc-week-lbl { font-size: 24px !important; line-height: 1; font-family: var(--font-hand); font-weight: 700; }
+.mc-stat-val, .pod .pod-pts, .mm-sval, .mm-tval, .pts-stat .val, .nw-budget-amt, .pitch-budget-amt, .mc-mpts, .mc-week-pts, .mx-meta b {
+  font-family: var(--font-hand); font-weight: 700; letter-spacing: 0;
+}
+.mc-stat-val { font-size: 40px; line-height: 1; }
+.mc-mpts { font-size: 28px; }
+.mc-week-pts { font-size: 24px; }
+.pod .pod-pts { font-size: 32px; } .pod.p1 .pod-pts { font-size: 38px; }
+.nw-budget-amt { font-size: 28px; }
+.mm-sval { font-size: 36px; } .mm-tval { font-size: 32px; }
+.mx-meta b { font-size: 22px; }
+
+/* a marker underline that sits under a title like a highlighter pass */
+h2.page-title, .mc-tb-title, h3.section-title { background: linear-gradient(transparent 62%, color-mix(in srgb, var(--gold-wash) 42%, transparent) 62% 90%, transparent 90%); display: inline-block; padding: 0 4px; margin-left: -4px; }
+
+/* ---------- sheets: every card is a page laid on the page; edges are drawn, not stamped ---------- */
+.card, .mc-stat-box, .mc-week, .member-xi-card, .picker-shell, .admin-row, .comp-row, .pod, .action-banner {
+  position: relative; border: 1.5px solid var(--border-strong); border-radius: var(--r-hand); box-shadow: var(--shadow-card);
+}
+/* a second, slightly misplaced pencil line: the sketchy double stroke */
+.card::before, .mc-stat-box::before, .mc-week::before, .member-xi-card::before, .picker-shell::before, .admin-row::before, .comp-row::before, .pod::before, .action-banner::before {
+  content: ""; position: absolute; inset: -3px -2px -2px -3px; pointer-events: none; z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--pencil) 24%, transparent); border-radius: 18px 14px 17px 15px / 14px 18px 15px 17px; transform: rotate(-.16deg);
+}
+.mc-week { overflow: visible; }
+.card-teal { border-color: var(--border-strong); }
+.card-locked { background: linear-gradient(180deg, color-mix(in srgb, var(--gold-wash) 16%, var(--sheet)), var(--sheet)); }
+.match-card, .xi-card, .nw-player-row, .member-xi-card .xi-card { border: 1.25px solid var(--border); border-radius: var(--r-hand-sm); box-shadow: none; }
+.match-card { background: var(--sheet-2); }
+.match-card:hover { border-color: var(--border-strong); background: var(--sheet-2); transform: none; box-shadow: 1px 2px 0 color-mix(in srgb, var(--shade) 18%, transparent); }
+.mc-week-body .match-card { background: var(--sheet-2); }
+.mc-mno { border-radius: 50% 46% 52% 48%; border: 1.25px solid var(--border); background: var(--sheet); color: var(--text); font-family: var(--font-hand); font-size: 17px; font-weight: 700; }
+
+/* ---------- buttons: a pastel crayon block with a pencil outline and a little printed shadow ---------- */
+.btn { border: 1.5px solid var(--pencil); border-radius: var(--r-hand-sm); background: var(--sheet-2); color: var(--on-fill); font-weight: 800;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 38%, transparent); }
+.btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 color-mix(in srgb, var(--pencil) 38%, transparent); }
+.btn-gold { background: var(--gold-fill); } .btn-teal { background: var(--teal-fill); }
+.btn-danger { background: var(--danger-fill); color: var(--on-fill); border-color: var(--pencil); }
+.btn-ghost { background: transparent; box-shadow: none; border-color: var(--border-strong); color: var(--text); font-weight: 700; }
+.btn-ghost:hover { background: var(--tint-2); }
+.btn:disabled { opacity: 1; background: var(--sheet-3); color: var(--dim); border-style: dashed; border-color: var(--border); box-shadow: none; }
+.btn-refresh { border: 1.5px solid var(--pencil); border-radius: var(--r-hand-sm); background: var(--teal-fill); color: var(--on-fill); box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 38%, transparent); }
+.icon-btn { background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: 12px 14px 11px 13px / 13px 11px 14px 12px; color: var(--text); box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 22%, transparent); }
+.icon-btn:hover { background: var(--sheet-3); border-color: var(--border-strong); }
+.avatar-btn { color: var(--on-fill); background: var(--gold-fill); border: 1.5px solid var(--pencil); font-family: var(--font-hand); font-size: 19px; box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 30%, transparent); }
+.avatar-btn:hover { background: var(--gold-fill); filter: brightness(1.04); }
+
+/* ---------- chips and tags: stickers ---------- */
+.chip { background: var(--sheet-2); border: 1.25px solid var(--border); color: var(--muted); }
+.chip b { color: var(--text-strong); }
+.chip.live { background: var(--success-bg); border-color: var(--success-line); color: var(--success-ink); }
+.chip.soon { background: var(--warn-bg); border-color: var(--gold-line); color: var(--gold-ink); }
+.chip.done { background: var(--info-bg); border-color: var(--info-line); color: var(--info-ink); }
+.role-tag { background: var(--gold-fill); color: var(--on-fill); border: 1px solid var(--pencil); }
+.badge, .status-pill, .mc-spill, .mc-team-tag { border: 1px solid color-mix(in srgb, var(--pencil) 28%, transparent); }
+
+/* ---------- app bar and navigation: a scorebook's header rule and its index tabs ---------- */
+.app-bar { background: color-mix(in srgb, var(--paper) 92%, transparent); border-bottom: 1.5px solid var(--border-strong); box-shadow: 0 3px 0 -1px var(--hair); }
+.brand-name .bn-bcl { color: var(--text-strong); } .bn-fan { color: var(--gold-ink); }
+.nav-tab { font-weight: 800; border-bottom-width: 3px; }
+.nav-tab[aria-current="page"] { color: var(--text-strong); border-bottom-color: var(--gold-line); background: linear-gradient(180deg, transparent 40%, color-mix(in srgb, var(--gold-wash) 24%, transparent)); }
+.bottom-nav { background: color-mix(in srgb, var(--paper) 95%, transparent); border-top: 1.5px solid var(--border-strong); box-shadow: 0 -3px 0 -1px var(--hair); }
+.bn-item { font-weight: 800; color: var(--muted); }
+.bn-item[aria-current="page"] { color: var(--text-strong); background: color-mix(in srgb, var(--gold-wash) 40%, transparent); border-radius: 14px 12px 15px 11px / 12px 15px 11px 14px; box-shadow: inset 0 0 0 1.25px var(--gold-line); }
+
+/* small headings stay in the sans: handwriting is for things you read at a glance, not captions */
+.ui-sheet-title, .picker-selects select, .lh-sub, .brand-name, #app-loading h1.wordmark { font-family: var(--font); }
+
+/* ---------- team stamps: pastel crayon with a darker ink of the same team colour ---------- */
+.av-rcb, .av-srh, .av-mi, .av-kkr, .av-csk, .av-rr, .av-dc, .av-pbks, .av-lsg, .av-gt, .av-dsg, .av-jsk, .av-mict, .av-pc, .av-pr, .av-sec {
+  background: rgba(var(--tcr), .30); color: color-mix(in srgb, rgb(var(--tcr)) 32%, var(--on-fill)); }
+.mc-team-tag[class*="av-"] { border: 1px solid rgba(var(--tcr), .65); }
+
+/* ---------- scorebook tables: ruled lines, a red margin, printed column heads ---------- */
+.lb-table th, .pts-table th, .picker-tbl th { font-family: var(--font); font-size: 10.5px; font-weight: 900; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); border-bottom: 1.5px solid var(--border-strong); }
+.lb-table td, .pts-table td, .picker-tbl td { border-bottom: 1px solid var(--hair); }
+.lb-table tr:last-child td, .pts-table tr:last-child td, .picker-tbl tr:last-child td { border-bottom: 1px solid var(--hair); }
+.lb-table th:first-child, .lb-table td:first-child { border-right: 1.5px solid var(--margin); text-align: center; }
+.lb-table .rank { font-family: var(--font-hand); font-size: 22px; font-weight: 700; color: var(--text-strong); }
+.lb-table .pts { font-family: var(--font-hand); font-size: 22px; font-weight: 700; color: var(--teal-ink); }
+.lb-table tr.me td { background: color-mix(in srgb, var(--gold-wash) 28%, transparent); }
+.lb-table-wide tr.me td:nth-child(1), .lb-table-wide tr.me td:nth-child(2) { background: color-mix(in srgb, var(--gold-wash) 28%, var(--sheet)); }
+.lb-table td:nth-child(n+3) { font-variant-numeric: tabular-nums; }
+.lb-bar { background: var(--tint-2); border: 1px solid var(--border); height: 8px; }
+.lb-bar > i { background: var(--teal-wash); background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--pencil) 26%, transparent) 0 1px, transparent 1px 4px); }
+
+/* ---------- podium: a hand-drawn bar chart ---------- */
+.pod { background: var(--sheet-2); border-radius: 18px 16px 6px 6px / 16px 18px 6px 6px; overflow: visible; }
+.pod::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 46%; pointer-events: none; border-radius: 0 0 5px 5px;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--pencil) 24%, transparent) 0 1px, transparent 1px 5px);
+  -webkit-mask-image: linear-gradient(transparent, #000); mask-image: linear-gradient(transparent, #000); }
+.pod .pod-av { position: relative; background: var(--sheet-3); border: 1.5px solid var(--pencil); color: var(--text-strong); font-family: var(--font-hand); font-size: 24px; font-weight: 700; box-shadow: none; }
+.pod .pod-name { font-weight: 800; }
+.pod .pod-pts { color: var(--teal-ink); }
+.pod .pod-rank { color: var(--muted); font-weight: 900; }
+.pod.p1 { background: color-mix(in srgb, var(--gold-wash) 34%, var(--sheet-2)); border-color: var(--border-strong); }
+.pod.p1 .pod-av { background: var(--gold-fill); border-color: var(--pencil); color: var(--on-fill); box-shadow: none; font-size: 28px; }
+.pod.p1 .pod-pts { color: var(--gold-ink); }
+.pod.p2 { background: color-mix(in srgb, var(--info-wash) 24%, var(--sheet-2)); }
+.pod:not(.p1):not(.p2) { background: color-mix(in srgb, var(--orange-wash) 26%, var(--sheet-2)); }
+.pod.me { box-shadow: 0 0 0 2px color-mix(in srgb, var(--info-line) 70%, transparent), var(--shadow-card); }
+.pod.p1 .pod-av::before { content: ""; position: absolute; left: 50%; top: -23px; width: 34px; height: 24px; margin-left: -17px; transform: rotate(-7deg);
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 24'><path d='M3 21 L2 7 L10 13 L17 3 L24 13 L32 6 L31 21 Z' fill='%23F6D77E' stroke='%234A4337' stroke-width='1.6' stroke-linejoin='round'/><path d='M4 17 H30' stroke='%234A4337' stroke-width='1.2' opacity='.55'/><circle cx='2.5' cy='6.5' r='1.7' fill='%23EC8A76' stroke='%234A4337' stroke-width='1'/><circle cx='17' cy='2.7' r='1.7' fill='%23EC8A76' stroke='%234A4337' stroke-width='1'/><circle cx='31.5' cy='5.5' r='1.7' fill='%23EC8A76' stroke='%234A4337' stroke-width='1'/></svg>") no-repeat center / contain; }
+
+/* ---------- inputs: a ruled line you write on ---------- */
+input[type=text], input[type=tel], input[type=password], input[type=search], input[type=number], select, textarea,
+.picker-search, .admin-url-input, #register-input, .login-row select, .ui-dialog input[type=text], .picker-selects select, .picker-sort-sel {
+  background: var(--field); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand-sm); color: var(--text); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--shade) 9%, transparent); }
+.picker-search input { border: 0; box-shadow: none; background: transparent; }
+input::placeholder, textarea::placeholder { color: var(--dim); }
+:focus-visible { outline: 2px solid var(--info-line); outline-offset: 2px; }
+.admin-url-input:focus { border-color: var(--info-line); }
+
+/* ---------- progress bars: pencil-outlined tracks, crayon fill with a hatch of shading ---------- */
+.budget-track, .nw-budget-track, .pitch-track { background: var(--tint-2); border: 1px solid var(--border); border-radius: 6px; height: 9px; }
+.budget-fill, .nw-budget-fill, .pitch-fill { position: relative; overflow: hidden; border-radius: 5px; }
+.budget-fill::after, .nw-budget-fill::after, .pitch-fill::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--pencil) 28%, transparent) 0 1px, transparent 1px 4px); }
+.pitch-fill { background: var(--gold-wash); }
+.nw-budget-bar, .budget-bar, .pitch-budget, .pitch-count, .pts-stat, .pitch-cvc { background: var(--sheet-2); border: 1.25px solid var(--border); border-radius: var(--r-hand-sm); }
+.nw-budget-bar { backdrop-filter: none; }
+.nw-budget-amt { white-space: nowrap; } .nw-budget-denom { font-family: var(--font); font-size: 12px; font-weight: 800; color: var(--muted); }
+.nw-budget-lbl, .budget-label, .week-label, .nw-squad-label { font-weight: 900; letter-spacing: .12em; }
+.nw-slot-badge, .picker-count-badge { background: var(--sheet-3); border: 1.25px solid var(--border); border-radius: var(--r-hand-sm); }
+
+/* ---------- the field plan: the XI drawn on the outfield, boundary rope dashed, pitch strip pencilled in ---------- */
+.pitch-ground { border: 1.5px solid var(--pencil); border-radius: var(--r-hand); box-shadow: var(--shadow-card);
+  background: radial-gradient(ellipse 72% 62% at 50% 50%, color-mix(in srgb, var(--success-wash) 66%, var(--sheet)) 0%, color-mix(in srgb, var(--success-wash) 46%, var(--sheet)) 62%, color-mix(in srgb, var(--success-wash) 30%, var(--sheet)) 100%); }
+.pitch-ground::before { width: 58px; height: 168px; border: 1.5px dashed color-mix(in srgb, var(--pencil) 48%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--gold-wash) 30%, transparent); }
+.pitch-ground::after { content: ""; position: absolute; inset: 12px 9px; border: 1.5px dashed color-mix(in srgb, var(--pencil) 34%, transparent); border-radius: 50%; pointer-events: none; }
+.pitch-role-label { color: color-mix(in srgb, var(--pencil) 78%, transparent); font-weight: 900; letter-spacing: .16em; }
+.pitch-circle { border: 1.5px solid var(--pencil); box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 32%, transparent); font-family: var(--font-hand); font-size: 22px; font-weight: 700; }
+.pitch-circle[class*="av-"] { background: linear-gradient(rgba(var(--tcr), .34), rgba(var(--tcr), .34)), var(--sheet-2); color: var(--text-strong); }
+.pitch-name { color: var(--text-strong); text-shadow: none; font-weight: 800; background: color-mix(in srgb, var(--sheet-2) 82%, transparent); border-radius: 6px; padding: 0 5px; }
+.pitch-badge { border: 1px solid var(--pencil); }
+.pitch-badge-c { background: var(--gold-fill); color: var(--on-fill); } .pitch-badge-vc { background: var(--teal-fill); color: var(--on-fill); }
+.pill-wk, .pill-bat, .pill-ar, .pill-bowl, .pill-valid, .pill-invalid { border-width: 1.25px; }
+
+/* ---------- squad cards ---------- */
+.xi-card, .nw-player-row { background: var(--sheet-2); }
+.xi-card.is-cap, .nw-player-row.is-cap { background: color-mix(in srgb, var(--gold-wash) 24%, var(--sheet-2)); border-color: var(--gold-line); }
+.xi-card.is-vc, .nw-player-row.is-vc { background: color-mix(in srgb, var(--teal-wash) 22%, var(--sheet-2)); border-color: var(--teal-line); }
+.xi-avatar, .prow-avatar, .mm-pav { border: 1.25px solid color-mix(in srgb, var(--pencil) 40%, transparent); font-family: var(--font-hand); font-size: 17px; font-weight: 700; }
+.ecap-btn, .evc-btn, .erem-btn { border: 1.25px solid color-mix(in srgb, var(--pencil) 55%, transparent); border-radius: 6px; }
+.ecap-btn.on { background: var(--gold-fill); color: var(--on-fill); } .evc-btn.on { background: var(--teal-fill); color: var(--on-fill); }
+.picker-row.selected { background: color-mix(in srgb, var(--teal-wash) 22%, transparent); }
+.picker-row, .match-item, .admin-match-row, .mm-prow { border-bottom-color: var(--hair); }
+.padd-btn { border: 1.25px solid var(--teal-line); background: color-mix(in srgb, var(--teal-wash) 30%, var(--sheet-2)); color: var(--teal-ink); font-weight: 800; }
+
+/* ---------- dialogs, sheets, toasts: paper sheets, a strip of tape, sticky notes ---------- */
+.ui-dialog, .match-modal { position: relative; background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand); box-shadow: 4px 5px 0 color-mix(in srgb, var(--shade) 22%, transparent), var(--shadow-2); }
+.ui-dialog::before { content: ""; position: absolute; top: -13px; left: 50%; width: 92px; height: 26px; margin-left: -46px; transform: rotate(-2.5deg); pointer-events: none;
+  background: color-mix(in srgb, var(--gold-wash) 52%, transparent);
+  clip-path: polygon(0 8%, 4% 0, 8% 10%, 12% 0, 16% 10%, 20% 0, 24% 10%, 28% 0, 32% 10%, 36% 0, 40% 10%, 44% 0, 48% 10%, 52% 0, 56% 10%, 60% 0, 64% 10%, 68% 0, 72% 10%, 76% 0, 80% 10%, 84% 0, 88% 10%, 92% 0, 96% 10%, 100% 0, 100% 92%, 96% 100%, 92% 90%, 88% 100%, 84% 90%, 80% 100%, 76% 90%, 72% 100%, 68% 90%, 64% 100%, 60% 90%, 56% 100%, 52% 90%, 48% 100%, 44% 90%, 40% 100%, 36% 90%, 32% 100%, 28% 90%, 24% 100%, 20% 90%, 16% 100%, 12% 90%, 8% 100%, 4% 90%, 0 100%); }
+.ui-dialog .ui-body { color: var(--text); }
+.ui-sheet { background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-bottom: 0; border-radius: 24px 20px 0 0 / 20px 24px 0 0; box-shadow: 0 -4px 0 -1px var(--hair), var(--shadow-2); }
+.ui-sheet-grip { background: color-mix(in srgb, var(--pencil) 38%, transparent); height: 5px; border-radius: 3px; }
+.ui-sheet-item:hover, .ui-sheet-item:focus-visible { background: var(--tint-2); }
+.ui-sheet-div { background: var(--hair); }
+.ui-toast { background: var(--sheet-2); border-top: 1.5px solid var(--border-strong); border-right: 1.5px solid var(--border-strong); border-bottom: 1.5px solid var(--border-strong); border-left-width: 7px;
+  border-radius: var(--r-hand-sm); box-shadow: 3px 3px 0 color-mix(in srgb, var(--pencil) 26%, transparent); }
+.ui-toast .ui-act { color: var(--info-ink); }
+#rules-modal > div, #swap-modal > div, #reset-passcode-modal > div { border-width: 1.5px !important; background: var(--sheet-2) !important; }
+
+/* ---------- sticky-note banner ---------- */
+.action-banner { background: color-mix(in srgb, var(--gold-wash) 30%, var(--sheet-2)); border-color: var(--border-strong); }
+.action-banner.ok { background: color-mix(in srgb, var(--teal-wash) 28%, var(--sheet-2)); }
+.action-banner::after { content: ""; position: absolute; top: -10px; left: 22px; width: 66px; height: 20px; transform: rotate(-4deg); pointer-events: none;
+  background: color-mix(in srgb, var(--info-wash) 46%, transparent);
+  clip-path: polygon(0 10%, 5% 0, 10% 12%, 15% 0, 20% 12%, 25% 0, 30% 12%, 35% 0, 40% 12%, 45% 0, 50% 12%, 55% 0, 60% 12%, 65% 0, 70% 12%, 75% 0, 80% 12%, 85% 0, 90% 12%, 95% 0, 100% 10%, 100% 90%, 95% 100%, 90% 88%, 85% 100%, 80% 88%, 75% 100%, 70% 88%, 65% 100%, 60% 88%, 55% 100%, 50% 88%, 45% 100%, 40% 88%, 35% 100%, 30% 88%, 25% 100%, 20% 88%, 15% 100%, 10% 88%, 5% 100%, 0 90%); }
+
+/* ---------- admin: index-card icons ---------- */
+.ar-ico { background: color-mix(in srgb, var(--gold-wash) 38%, var(--sheet-2)); border: 1.25px solid var(--gold-line); border-radius: 12px 14px 11px 13px / 13px 11px 14px 12px; color: var(--gold-ink); }
+.admin-row.on { background: color-mix(in srgb, var(--gold-wash) 20%, var(--sheet-2)); border-color: var(--pencil); }
+.comp-row { background: var(--sheet-2); }
+.pitch-row { position: relative; z-index: 1; }
+.pitch-ground::before { background: color-mix(in srgb, var(--gold-wash) 22%, transparent); }
+
+/* ---------- brand: mark + brush wordmark in the app bar ---------- */
+.brand-logo { width: 44px; height: 44px; border-radius: 0; box-shadow: none; flex-shrink: 0; }
+.brand-name { align-items: flex-end; gap: 9px; margin: 0; }
+.brand-name .bn-img { display: block; height: 25px; width: auto; }
+.brand-name .bn-fan { color: var(--text); font-size: 10.5px; font-weight: 900; letter-spacing: .26em; margin-bottom: 3px; }
+.brand-sub, .brand-sub.as-btn { color: var(--muted); }
+
+/* ---------- loader: the sketch logo settles onto the page, a pencil line draws itself underneath ---------- */
+#app-loading { background-color: var(--paper); background-image: var(--paper-tex); gap: 14px; }
+#app-loading .logo-img { width: min(250px, 68vw); height: auto; border-radius: 0; box-shadow: none; animation: paper-in .8s var(--ease) both; }
+#app-loading h1.wordmark { margin: -4px 0 0; font-family: var(--font); }
+#app-loading .bn-fan { font-size: 13px; letter-spacing: .52em; margin-right: -.52em; color: var(--text); font-weight: 900; }
+#app-loading p { color: var(--muted); font-size: 14px; }
+@keyframes paper-in { from { opacity: 0; transform: translateY(10px) rotate(-1deg); } to { opacity: 1; transform: none; } }
+.spinner { width: 190px; height: 14px; border: 0; border-radius: 0; margin-top: 2px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 190 14'><path d='M3 8 C30 4 52 11 80 7 S135 5 187 8' fill='none' stroke='%234A4337' stroke-width='2.4' stroke-linecap='round'/><path d='M6 10.5 C40 7.5 70 12.5 110 9.5 S160 8.5 184 10' fill='none' stroke='%234A4337' stroke-opacity='.5' stroke-width='1.2' stroke-linecap='round'/></svg>") no-repeat center / 100% 100%;
+  clip-path: inset(0 100% 0 0); animation: pencil-draw 1.9s ease-in-out infinite; }
+@keyframes pencil-draw { 0% { clip-path: inset(0 100% 0 0); opacity: 1; } 55% { clip-path: inset(0 0 0 0); opacity: 1; } 85% { clip-path: inset(0 0 0 0); opacity: 1; } 100% { clip-path: inset(0 0 0 0); opacity: 0; } }
+
+/* ---------- login ---------- */
+.login-hero { padding-top: 12px; }
+.login-logo { display: block; width: min(230px, 62vw); height: auto; margin: 0 auto 2px; }
+.login-chip { background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand-sm); font-weight: 800; box-shadow: 2px 2px 0 color-mix(in srgb, var(--pencil) 24%, transparent); }
+.login-chip:hover { background: color-mix(in srgb, var(--gold-wash) 36%, var(--sheet-2)); border-color: var(--pencil); color: var(--text-strong); }
+.ui-state-mark { width: 84px; height: 84px; }
+
+/* titles that are divs, not headings */
+.mm-title, .lh-title, .ui-state h3, .comp-name { font-family: var(--font-hand); letter-spacing: 0; }
+.mm-title { font-size: 25px; line-height: 1.05; } .lh-title { font-size: 26px; line-height: 1; } .comp-name { font-size: 22px; line-height: 1.1; }
+
+/* full-screen picker layer: no card frame, no second outline */
+.nw-right.layer-open .picker-shell { border: 0; box-shadow: none; }
+.nw-right.layer-open .picker-shell::before { display: none; }
+.layer-head { background: color-mix(in srgb, var(--paper) 96%, transparent); border-bottom: 1.5px solid var(--border-strong); box-shadow: 0 3px 0 -1px var(--hair); }
+.nw-right.layer-open .picker-toolbar { background: color-mix(in srgb, var(--paper) 98%, transparent); }

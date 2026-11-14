@@ -1,0 +1,78 @@
+/* BCL Fantasy - theme tokens: "the scorebook" (cream paper, graphite pencil, pastel crayon).
+   This file is the single source of truth for colour, type and shape. Every other stylesheet refers to these tokens only,
+   so the palette can be re-tuned here without touching a component. Loaded FIRST. */
+
+:root {
+  color-scheme: light;
+
+  /* ---- paper ---- */
+  --paper:   #F3EBD8;   /* the page */
+  --sheet:   #FCF7EA;   /* cards: a slightly brighter sheet laid on the page */
+  --sheet-2: #FFFCF2;   /* raised: dialogs, toasts, menus */
+  --sheet-3: #EFE6D0;   /* inset / hover / secondary rows */
+  --field:   #FFFDF7;   /* text fields */
+
+  /* ---- ink ---- */
+  --text:        #3A352C;   /* graphite */
+  --text-strong: #231F18;
+  --muted:       #655D50;   /* secondary text: 6:1 on --sheet */
+  --dim:         #6D6558;   /* tertiary text and hints: still >= 4.5:1 on every surface */
+  --on-fill:     #2A251D;   /* text that sits on a pastel fill */
+  --on-dark:     #FFFFFF;
+
+  /* ---- neutral overlays: one base colour, then a ladder of strengths ---- */
+  --wash:     #3A352C;      /* pencil wash base */
+  --shade:    #5B4B30;      /* warm shadow base */
+  --backdrop: #2C2417;      /* behind dialogs */
+  --tint-1: color-mix(in srgb, var(--wash) 3.5%, transparent);
+  --tint-2: color-mix(in srgb, var(--wash) 6.5%, transparent);
+  --tint-3: color-mix(in srgb, var(--wash) 11%, transparent);
+  --hair:        rgba(98, 140, 184, .27);                           /* ruled-paper blue: row dividers */
+  --line:        color-mix(in srgb, var(--wash) 20%, transparent);
+  --line-strong: color-mix(in srgb, var(--wash) 38%, transparent);
+  --well:        color-mix(in srgb, var(--shade) 7%, transparent);  /* recessed areas */
+  --hi:          rgba(255, 255, 255, .75);                          /* top-edge highlight */
+
+  /* ---- pastel crayons. fill = solid pastel, ink = text/icons on paper (>= 5:1), wash = base for translucent tints, line = outlines ---- */
+  --gold-fill:    #F6D77E; --gold-ink:    #765608; --gold-wash:    #E9B93C; --gold-line:    #C99B26;   /* butter: the trophy */
+  --teal-fill:    #B4E2D2; --teal-ink:    #1C6351; --teal-wash:    #62BFA2; --teal-line:    #4FAA91;   /* mint: the crease */
+  --danger-fill:  #F5B2A3; --danger-ink:  #972F1A; --danger-wash:  #EC8A76; --danger-line:  #CF6B58;   /* coral: the ball */
+  --success-fill: #C6DFB1; --success-ink: #2F6333; --success-wash: #86BE72; --success-line: #68A55C;   /* sage: the outfield */
+  --info-fill:    #B9D5EC; --info-ink:    #275885; --info-wash:    #78AAD8; --info-line:    #5790C3;   /* sky: biro blue */
+  --violet-fill:  #D6CCEC; --violet-ink:  #574697; --violet-wash:  #A491D8; --violet-line:  #8873C4;   /* lavender */
+  --orange-fill:  #F7D0A8; --orange-ink:  #8D470F; --orange-wash:  #EFA560; --orange-line:  #D3873F;   /* peach */
+
+  /* ---- semantic aliases used across the components ---- */
+  --success: var(--success-ink); --success-bg: color-mix(in srgb, var(--success-wash) 30%, transparent);
+  --danger:  var(--danger-ink);  --danger-bg:  color-mix(in srgb, var(--danger-wash) 30%, transparent);
+  --warn:    var(--gold-ink);    --warn-bg:    color-mix(in srgb, var(--gold-wash) 32%, transparent);
+  --info:    var(--info-ink);    --info-bg:    color-mix(in srgb, var(--info-wash) 30%, transparent);
+  --gold: var(--gold-fill); --teal: var(--teal-fill);
+  --ipl-teal: var(--teal-ink); --ipl-teal-soft: color-mix(in srgb, var(--teal-wash) 30%, transparent);
+
+  /* ---- legacy names (older rules still say --bg / --surface) ---- */
+  --bg: var(--paper); --surface: var(--sheet); --surface-2: var(--sheet-2); --surface-3: var(--sheet-3);
+
+  /* ---- pencil and paper details ---- */
+  --pencil:   #4A4337;                                         /* outline graphite */
+  --margin:   rgba(214, 96, 84, .48);                          /* the red margin line of a scorebook */
+  --border:        color-mix(in srgb, var(--pencil) 34%, transparent);
+  --border-strong: color-mix(in srgb, var(--pencil) 58%, transparent);
+  --r-hand:    15px 18px 14px 17px / 17px 14px 18px 15px;       /* corners that are not quite equal: drawn, not stamped */
+  --r-hand-sm: 9px 11px 8px 10px / 10px 8px 11px 9px;
+
+  /* ---- type ---- */
+  --font:      "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-hand: "Caveat", "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive;
+
+  /* ---- shape, spacing, depth, motion ---- */
+  --radius: 16px; --maxw: 1120px; --nav-h: 64px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+  --shadow-card: 0 1px 0 var(--hi) inset, 2px 3px 0 color-mix(in srgb, var(--shade) 14%, transparent);
+  --shadow-1: 0 2px 6px color-mix(in srgb, var(--shade) 22%, transparent);
+  --shadow-2: 0 14px 38px color-mix(in srgb, var(--shade) 30%, transparent);
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --z-banner: 9000; --z-toast: 9500; --z-dialog: 9800;
+  --focus: 0 0 0 3px color-mix(in srgb, var(--info-wash) 60%, transparent);
+}

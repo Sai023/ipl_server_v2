@@ -3,18 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#07111F" />
-  <link rel="icon" type="image/svg+xml" href="/static/brand/icon.svg" />
+  <meta name="theme-color" content="#F3EBD8" />
+  <link rel="icon" type="image/svg+xml" href="/static/brand/icon-paper.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32.png" />
   <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.json" />
   <title>BCL Fantasy</title>
-  <link rel="stylesheet" href="/static/style.css?v=1.0">
-  <link rel="stylesheet" href="/static/ui.css?v=1.0">
-  <link rel="stylesheet" href="/static/screens.css?v=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="/static/theme.css?v=paper1">
+  <link rel="stylesheet" href="/static/style.css?v=paper1">
+  <link rel="stylesheet" href="/static/ui.css?v=paper1">
+  <link rel="stylesheet" href="/static/screens.css?v=paper1">
+  <link rel="stylesheet" href="/static/paper.css?v=paper1">
 </head>
 <body>
-<div id="app-loading"><img class="logo-img" src="/static/brand/icon.svg" width="88" height="88" alt="" /><h1 class="wordmark"><span class="bn-bcl">BCL</span> <span class="bn-fan">Fantasy</span></h1><div class="spinner"></div><p>Loading your league…</p></div>
+<div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
 <script src="/static/ui.js?v=1.0"></script>
@@ -25,6 +30,7 @@ var BUDGET_TOTAL=100.0,XI_SIZE=11;
 // ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 var _state=null,_leaderboard=null,_players=null,_username=null;
 var _isAdmin=false,_mustChange=false;
+var _authPending=false;   // true while a saved session is being verified: render() holds back so a returning member never sees the login screen flash by
 var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
 var _pickerSearch="",_pickerRole="All",_pickerTeam="All",_pickerSort="season";
@@ -292,14 +298,14 @@ function _simulateRollover(){
   window.IplApi.rollover(true).then(function(data){
     if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
     if(res){
-      if(data&&data.rolled){res.textContent="\u2713 Done! New week: W"+(data.new_week_no||"?");res.style.color="var(--teal)";}
+      if(data&&data.rolled){res.textContent="\u2713 Done! New week: W"+(data.new_week_no||"?");res.style.color="var(--teal-ink)";}
       else{res.textContent="No-op: "+(data&&data.reason?data.reason:"already rolled");res.style.color="var(--muted)";}
     }
     _historyData=null;_nwDraft={team:[],cap:null,vc:null};
     window.dispatchEvent(new CustomEvent("ipl:saved"));_loadHistory();
   }).catch(function(e){
     if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
-    if(res){res.textContent="\u2717 Error: "+(e.serverMessage||e.message);res.style.color="#FF6B6B";}
+    if(res){res.textContent="\u2717 Error: "+(e.serverMessage||e.message);res.style.color="var(--danger-ink)";}
   });
 }
 
@@ -345,7 +351,7 @@ function _buildNwSquad(){
 function _buildBudgetBar(){
   var team=_nwDraft.team,spent=_teamCost(team),rem=Math.round((BUDGET_TOTAL-spent)*10)/10;
   var pct=Math.min(100,(spent/BUDGET_TOTAL)*100);
-  var fillBg=rem<0?"#FF6B6B":rem<10?"var(--gold)":"var(--teal)";
+  var fillBg=rem<0?"var(--danger-wash)":rem<10?"var(--gold-wash)":"var(--teal-wash)";
   var remCls=rem<0?"over":rem<10?"warn":"ok";
   var roles={WK:0,BAT:0,AR:0,BOWL:0};
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
@@ -388,8 +394,8 @@ function _buildPicker(){
   h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><div class="lh-sub">'+n+'/'+XI_SIZE+' picked \u00B7 '+rem.toFixed(1)+' CR left</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
   h+='<div class="picker-toolbar">';
   if(_pickerNotice){
-    var ncolor=_pickerNotice.type==="warn"?"#FF6B6B":"var(--teal)";
-    var nbg=_pickerNotice.type==="warn"?"rgba(255,107,107,.12)":"rgba(46,204,170,.12)";
+    var ncolor=_pickerNotice.type==="warn"?"var(--danger-ink)":"var(--teal-ink)";
+    var nbg=_pickerNotice.type==="warn"?"var(--danger-bg)":"var(--ipl-teal-soft)";
     h+='<div class="picker-notice" role="status" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
   }
   h+='<div class="picker-search">'+Ui.icon("search",16)+'<input id="picker-search-input" type="text" aria-label="Search players" placeholder="Search players\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"><span class="picker-count-badge" aria-label="'+filtered.length+' players shown">'+filtered.length+'</span></div>';
@@ -445,17 +451,17 @@ function _buildPitchView(teamArr,capId,vcId){
 
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
-  var h='<div class="card login-hero"><img class="brand-logo lg" src="/static/brand/icon.svg" width="72" height="72" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
+  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
-    h+='</div><p class="register-hint">New member? <button style="background:none;border:none;color:var(--teal);cursor:pointer;font-size:12px;text-decoration:underline" onclick="document.getElementById(\'register-panel\').style.display=\'block\'">Register here</button></p><div id="register-panel" style="display:none;margin-top:10px">';
+    h+='</div><p class="register-hint">New member? <button style="background:none;border:none;color:var(--teal-ink);cursor:pointer;font-size:12px;text-decoration:underline" onclick="document.getElementById(\'register-panel\').style.display=\'block\'">Register here</button></p><div id="register-panel" style="display:none;margin-top:10px">';
   } else {
     h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet \u2014 enter your name and pick a 4-digit passcode to join.</p><div id="register-panel" style="display:block;margin-top:0">';
   }
   h+='<input id="register-input" type="text" maxlength="30" placeholder="Your display name" style="margin-bottom:6px;">';
   h+='<input id="register-passcode" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="4-digit passcode" style="margin-bottom:4px;letter-spacing:6px;text-align:center;font-weight:700;">';
-  h+='<div id="register-error" style="color:#FF6B6B;font-size:11px;min-height:14px;text-align:center;"></div>';
+  h+='<div id="register-error" style="color:var(--danger-ink);font-size:11px;min-height:14px;text-align:center;"></div>';
   h+='<button class="btn btn-teal" onclick="_doRegister()" style="margin-top:6px;width:100%">Join League</button>';
   h+='</div></div>';
   return h;
@@ -492,7 +498,7 @@ function _buildThisWeekCard(){
 function _buildNextWeekCard(){
   if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
   h+=_buildBudgetBar();
   h+=_buildNwSquad();
   var _n=_nwDraft.team.length;
@@ -560,7 +566,7 @@ function _buildAdminPasscodesCard(){
   var h='<div class="card" style="margin-bottom:14px">';
   h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">\uD83D\uDD10 Member Passcodes</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMembersList=null;_loadAdminMembers();if(_state)render(_state)">\u27F3 Refresh</button></div>';
-  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Reset any member\'s passcode back to <strong style="color:var(--gold)">1234</strong>. They\'ll be forced to choose a new one on their next login.</p>';
+  h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Reset any member\'s passcode back to <strong style="color:var(--gold-ink)">1234</strong>. They\'ll be forced to choose a new one on their next login.</p>';
   if(!_adminMembersList){
     _loadAdminMembers();
     return h+'<p style="color:var(--muted);font-size:13px">Loading members\u2026</p></div>';
@@ -568,13 +574,13 @@ function _buildAdminPasscodesCard(){
   if(_adminMembersList.length===0){return h+'<p style="color:var(--muted);font-size:13px">No members yet.</p></div>';}
   _adminMembersList.forEach(function(m){
     var statusPill=m.must_change
-      ? '<span style="font-size:10px;background:rgba(245,197,24,.15);color:var(--gold);padding:2px 7px;border-radius:6px;font-weight:600">\u26A0 Default (1234)</span>'
-      : '<span style="font-size:10px;background:rgba(34,197,94,.12);color:#22C55E;padding:2px 7px;border-radius:6px;font-weight:600">\uD83D\uDD12 Custom</span>';
+      ? '<span style="font-size:10px;background:color-mix(in srgb, var(--gold-wash) 34.5%, transparent);color:var(--gold-ink);padding:2px 7px;border-radius:6px;font-weight:600">\u26A0 Default (1234)</span>'
+      : '<span style="font-size:10px;background:color-mix(in srgb, var(--success-wash) 27.6%, transparent);color:var(--success-ink);padding:2px 7px;border-radius:6px;font-weight:600">\uD83D\uDD12 Custom</span>';
     var adminTag=m.is_admin
-      ? '&nbsp;<span style="font-size:9px;background:var(--gold);color:#07111F;padding:1px 6px;border-radius:6px;font-weight:700">ADMIN</span>'
+      ? '&nbsp;<span style="font-size:9px;background:var(--gold-fill);color:var(--on-fill);padding:1px 6px;border-radius:6px;font-weight:700">ADMIN</span>'
       : '';
     var isSelf=(m.username===_username);
-    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);margin-bottom:7px;">';
+    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:var(--tint-1);border:1px solid var(--hair);margin-bottom:7px;">';
     h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--text)">'+esc(m.username)+adminTag+'</div><div style="font-size:11px;color:var(--muted);margin-top:2px">'+statusPill+'</div></div>';
     h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px"'+(isSelf?' disabled title="Use the header Reset Passcode button for your own account."':'')+' onclick="_adminResetPasscode(\''+escAttr(m.username)+'\')">Reset to 1234</button>';
     h+='</div>';
@@ -593,15 +599,15 @@ function _buildAdminCompetitionsCard(){
     var act,imp='';
     if(c.status==="upcoming"||c.status==="active") imp='<button class="btn btn-ghost btn-sm" onclick="_impOpen(\''+escAttr(c.slug)+'\')">'+(_imp.slug===c.slug?'Hide import':'Import data')+'</button> ';
     if(c.status==="upcoming") act=imp+'<button class="btn btn-teal btn-sm" onclick="_adminCompAction(\'activate\',\''+escAttr(c.slug)+'\')">Activate</button>';
-    else if(c.status==="active") act=imp+'<button class="btn btn-sm" style="background:var(--gold);color:#07111F;font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
+    else if(c.status==="active") act=imp+'<button class="btn btn-sm" style="background:var(--gold-fill);color:var(--on-fill);font-weight:600" onclick="_adminCloseComp(\''+escAttr(c.slug)+'\')">Close &amp; crown</button>';
     else act='🏆 '+esc(c.champion||"—");
     var _chip=c.status==="active"?'<span class="chip live">\u25CF Live</span>':(c.status==="upcoming"?'<span class="chip soon">Upcoming</span>':'<span class="chip done">Finished</span>');
     h+='<div class="comp-row"><div class="comp-main"><div class="comp-name">'+esc(c.name)+'</div><div class="comp-slug">'+esc(c.slug)+'</div></div>'+_chip+'<div class="comp-actions">'+act+'</div></div>';
   });
   h+='</div>';
   if(_imp.slug)h+=_buildImportPanel();
-  var ist='background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
-  h+='<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">';
+  var ist='background:var(--sheet);color:var(--text);border:1px solid color-mix(in srgb, var(--gold-line) 48%, transparent);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
+  h+='<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">';
   h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
   h+='<input id="newcomp-slug" aria-label="Competition slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
   h+='<input id="newcomp-name" aria-label="Competition name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
@@ -721,17 +727,17 @@ function _impList(items,color){
 function _buildImportReport(r){
   var h='';
   if(!r.ok){
-    h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.35)"><strong style="color:#F87171;font-size:12px">Not imported — fix these first:</strong>'+_impList(r.errors||[r.error||"error"],"var(--text)")+'</div>';
+    h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--danger-wash) 23%, transparent);border:1px solid color-mix(in srgb, var(--danger-line) 56%, transparent)"><strong style="color:var(--danger-ink);font-size:12px">Not imported — fix these first:</strong>'+_impList(r.errors||[r.error||"error"],"var(--text)")+'</div>';
   } else {
-    var ok='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.30);font-size:12px;color:var(--text)">';
-    ok+='<strong style="color:#22C55E">'+(r.dry_run?'Check passed — nothing is saved yet.':'✓ Imported.')+'</strong>';
+    var ok='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--success-wash) 18.4%, transparent);border:1px solid color-mix(in srgb, var(--success-line) 48%, transparent);font-size:12px;color:var(--text)">';
+    ok+='<strong style="color:var(--success-ink)">'+(r.dry_run?'Check passed — nothing is saved yet.':'✓ Imported.')+'</strong>';
     var p=r.players;
     if(p){
       ok+='<div style="margin-top:8px"><strong>Players</strong> · '+p.total+' in the file: '+(p.inserted||0)+' new, '+(p.updated||0)+' updated, '+(p.unchanged||0)+' unchanged';
       ok+='<br><span style="color:var(--muted)">'+Object.keys(p.by_team||{}).map(function(t){return esc(t)+' '+p.by_team[t];}).join(' · ')+'</span>';
       if(p.price)ok+='<br><span style="color:var(--muted)">Prices '+p.price.min+'–'+p.price.max+' CR (average '+p.price.mean+'); the 11 priciest cost '+p.top_xi_cost+' CR</span>';
       (p.changes||[]).slice(0,10).forEach(function(c){
-        ok+='<br><span style="color:var(--gold)">✎ '+esc(c.name)+': '+Object.keys(c.changes).map(function(k){return esc(k)+' '+esc(c.changes[k][0])+' → '+esc(c.changes[k][1]);}).join(', ')+'</span>';
+        ok+='<br><span style="color:var(--gold-ink)">✎ '+esc(c.name)+': '+Object.keys(c.changes).map(function(k){return esc(k)+' '+esc(c.changes[k][0])+' → '+esc(c.changes[k][1]);}).join(', ')+'</span>';
       });
       ok+='</div>';
     }
@@ -751,27 +757,27 @@ function _buildImportReport(r){
     if(cl.length)ok+='<div style="margin-top:8px"><strong>Competition</strong>'+_impList(cl,"var(--muted)")+'</div>';
     h+=ok+'</div>';
   }
-  if(r.warnings&&r.warnings.length)h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(245,197,24,.08);border:1px solid rgba(245,197,24,.30)"><strong style="color:var(--gold);font-size:12px">Worth a look:</strong>'+_impList(r.warnings,"var(--text)")+'</div>';
+  if(r.warnings&&r.warnings.length)h+='<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--gold-wash) 18.4%, transparent);border:1px solid color-mix(in srgb, var(--gold-line) 48%, transparent)"><strong style="color:var(--gold-ink);font-size:12px">Worth a look:</strong>'+_impList(r.warnings,"var(--text)")+'</div>';
   return h;
 }
 function _buildImportPanel(){
   var r=_imp.report;
-  var h='<div style="margin-top:14px;border:1px solid rgba(245,197,24,.25);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)">';
+  var h='<div style="margin-top:14px;border:1px solid color-mix(in srgb, var(--gold-line) 40%, transparent);border-radius:10px;padding:12px;background:var(--tint-1)">';
   h+='<div class="user-header-bar" style="margin-bottom:8px"><h3 class="section-title" style="margin:0;font-size:14px">Import data into <code>'+esc(_imp.slug)+'</code></h3><button class="btn btn-ghost btn-sm" onclick="_impOpen(\''+escAttr(_imp.slug)+'\')">Close</button></div>';
   h+='<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Choose a <code>players.json</code> and/or a <code>schedule.json</code>. You see a preview first — nothing is saved until you click <strong>Import now</strong>. Nothing is ever deleted, and importing the same file again changes nothing.</p>';
   h+='<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px">';
   [['players','Players · players.json'],['schedule','Schedule · schedule.json']].forEach(function(k){
     var loaded=_imp[k[0]]!==null;
     h+='<label style="font-size:12px;color:var(--muted);flex:1;min-width:210px">'+k[1]+'<br><input type="file" accept=".json,application/json" onchange="_impPick(\''+k[0]+'\',this)" style="margin-top:4px;font-size:12px;color:var(--text);max-width:100%">';
-    h+='<br><span style="font-size:11px;color:'+(loaded?'#22C55E':'var(--muted)')+'">'+(loaded?'✓ '+esc(_imp[k[0]+'Name']):'no file chosen')+'</span></label>';
+    h+='<br><span style="font-size:11px;color:'+(loaded?'var(--success-ink)':'var(--muted)')+'">'+(loaded?'✓ '+esc(_imp[k[0]+'Name']):'no file chosen')+'</span></label>';
   });
   h+='</div>';
   if(_imp.needsAnchor||(_imp.anchor&&!_imp.done)){
     // Shown only when the server says this competition was created without a week-1 date.
-    h+='<label style="display:block;font-size:12px;color:var(--muted);margin:8px 0">Week-1 date — the first Monday after the opening match (this competition has none yet)<br><input type="date" value="'+esc(_imp.anchor)+'" onchange="_imp.anchor=this.value;_impCall(true)" style="background:#0E1E35;color:#D8E8F5;border:1px solid rgba(245,197,24,.3);border-radius:7px;padding:6px 8px;font-size:12px;margin-top:4px"></label>';
+    h+='<label style="display:block;font-size:12px;color:var(--muted);margin:8px 0">Week-1 date — the first Monday after the opening match (this competition has none yet)<br><input type="date" value="'+esc(_imp.anchor)+'" onchange="_imp.anchor=this.value;_impCall(true)" style="background:var(--sheet);color:var(--text);border:1px solid color-mix(in srgb, var(--gold-line) 48%, transparent);border-radius:7px;padding:6px 8px;font-size:12px;margin-top:4px"></label>';
   }
-  if(_imp.msg)h+='<p style="color:#F87171;font-size:12px;margin:6px 0">'+esc(_imp.msg)+'</p>';
-  if(_imp.busy)h+='<p style="color:var(--gold);font-size:12px;margin:6px 0">Working…</p>';
+  if(_imp.msg)h+='<p style="color:var(--danger-ink);font-size:12px;margin:6px 0">'+esc(_imp.msg)+'</p>';
+  if(_imp.busy)h+='<p style="color:var(--gold-ink);font-size:12px;margin:6px 0">Working…</p>';
   if(r)h+=_buildImportReport(r);
   var canRun=!!(r&&r.ok&&r.dry_run&&!_imp.busy&&!_imp.done);
   h+='<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">';
@@ -869,8 +875,8 @@ function _buildAdminMatchesCard(){
     // Title row
     h+='<div class="admin-match-title">'+esc(displayTitle)
       +'<span class="status-pill status-'+m.status+'">'+m.status+'</span>'
-      +(hasId?'<span style="color:var(--teal);font-size:10px;margin-left:6px">\u2705 Has ID</span>':'<span style="color:#FF6B6B;font-size:10px;margin-left:6px">\u26A0 No ID</span>')
-      +(isDup?'<span style="color:#FF6B6B;font-size:10px;margin-left:6px">\u26A0 Duplicate URL \u2014 also on '+esc(dupWith.join(', '))+'</span>':'')
+      +(hasId?'<span style="color:var(--teal-ink);font-size:10px;margin-left:6px">\u2705 Has ID</span>':'<span style="color:var(--danger-ink);font-size:10px;margin-left:6px">\u26A0 No ID</span>')
+      +(isDup?'<span style="color:var(--danger-ink);font-size:10px;margin-left:6px">\u26A0 Duplicate URL \u2014 also on '+esc(dupWith.join(', '))+'</span>':'')
       +'</div>';
     // Meta row: internal ID + week + date
     h+='<div class="admin-match-meta">'+esc(m.id)+' \u00B7 '+esc(subLabel)+'</div>';
@@ -881,9 +887,9 @@ function _buildAdminMatchesCard(){
     h+='</div>';
     if(m.scorecard_url&&hasId){
       var cbNum=cbId;
-      h+='<div class="admin-url-current">Cricbuzz ID: <strong>'+esc(cbNum)+'</strong> \u00B7 <a href="'+esc(m.scorecard_url)+'" target="_blank" style="color:var(--teal)">View scorecard</a></div>';
+      h+='<div class="admin-url-current">Cricbuzz ID: <strong>'+esc(cbNum)+'</strong> \u00B7 <a href="'+esc(m.scorecard_url)+'" target="_blank" style="color:var(--teal-ink)">View scorecard</a></div>';
     } else if(m.scorecard_url){
-      h+='<div class="admin-url-current" style="color:#FF6B6B">No valid ID in URL</div>';
+      h+='<div class="admin-url-current" style="color:var(--danger-ink)">No valid ID in URL</div>';
     }
     h+='</div>';
   });
@@ -897,12 +903,12 @@ function _buildAdminMatchesCard(){
 function _showPasscodePromptModal(name){
   var existing=document.getElementById('passcode-prompt-modal');
   if(existing)existing.remove();
-  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">🔒 Welcome back, '+esc(name)+'</div><button onclick="_closePasscodePrompt()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button onclick="_closePasscodePrompt()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your 4-digit passcode to sign in.</div>';
-  h+='<input id="passcode-input" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:24px;letter-spacing:14px;text-align:center;padding:14px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
-  h+='<div id="passcode-error" style="color:#FF6B6B;font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
+  h+='<input id="passcode-input" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:24px;letter-spacing:14px;text-align:center;padding:14px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+='<div id="passcode-error" style="color:var(--danger-ink);font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
   h+='<button id="passcode-submit-btn" onclick="_submitPasscode(\''+escAttr(name)+'\')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Sign in</button>';
   h+='</div></div>';
   var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
@@ -959,17 +965,17 @@ function _showResetPasscodeModal(forced){
   var sub=forced
     ?'Your passcode was reset to the default by an admin. Choose a new 4-digit passcode now.'
     :'Choose a new 4-digit passcode. Your other devices will be signed out.';
-  var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.92);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 92%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">'+title+'</div>';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">'+title+'</div>';
   if(!forced)h+='<button onclick="_closeResetPasscode()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button>';
   h+='</div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">'+sub+'</div>';
   h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">New passcode</label>';
-  h+='<input id="rp-new" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;margin-bottom:10px;">';
+  h+='<input id="rp-new" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;margin-bottom:10px;">';
   h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Confirm new passcode</label>';
-  h+='<input id="rp-confirm" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
-  h+='<div id="rp-error" style="color:#FF6B6B;font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
+  h+='<input id="rp-confirm" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+='<div id="rp-error" style="color:var(--danger-ink);font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
   h+='<button id="rp-submit-btn" onclick="_submitResetPasscode('+(forced?'true':'false')+')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Save Passcode</button>';
   h+='</div></div>';
   var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
@@ -991,7 +997,7 @@ function _submitResetPasscode(forced){
     // Toast-style success — reuse error banner positioning, green colour.
     var t=document.createElement('div');
     t.textContent='✅ Passcode updated.';
-    t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--teal);color:#07111F;padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.4);';
+    t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--teal-fill);color:var(--on-fill);padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:9999;box-shadow:0 4px 16px color-mix(in srgb, var(--shade) 24%, transparent);';
     document.body.appendChild(t);
     setTimeout(function(){t.remove();},2500);
     if(_state)render(_state);
@@ -1005,9 +1011,9 @@ function _submitResetPasscode(forced){
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
 function _showSwapModal(incomingId){
   var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
-  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 32px;max-height:80vh;overflow-y:auto;">';
-  h+='<div style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
+  h+='<div style="font-size:13px;font-weight:700;color:var(--gold-ink);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Select who to remove from your XI</div>';
   _nwDraft.team.forEach(function(id){
     var cur=resolvePlayer(id),avC=_avClass(cur.team),curPrice=cur.price||0;
@@ -1015,14 +1021,14 @@ function _showSwapModal(incomingId){
     var newRem=Math.round((_remaining()+curPrice-inPrice)*10)/10;
     var canAfford=newRem>=-0.001;
     var roleTeam=[cur.role,cur.team].filter(Boolean).join(' \u00B7 ')+(id===_nwDraft.cap?' \u00B7 C':(id===_nwDraft.vc?' \u00B7 VC':''));
-    var diffLabel=diff>0?'<span style="color:#FF6B6B;font-size:10px;font-weight:600">\u2212'+diff.toFixed(1)+' CR</span>':diff<0?'<span style="color:var(--teal);font-size:10px;font-weight:600">+'+Math.abs(diff).toFixed(1)+' CR</span>':'<span style="color:var(--muted);font-size:10px">Same cost</span>';
-    h+='<div onclick="'+(canAfford?'_doSwap(\''+escAttr(id)+'\',\''+escAttr(incomingId)+'\')':'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);margin-bottom:7px;cursor:'+(canAfford?'pointer':'not-allowed')+';opacity:'+(canAfford?'1':'0.35')+'">';
+    var diffLabel=diff>0?'<span style="color:var(--danger-ink);font-size:10px;font-weight:600">\u2212'+diff.toFixed(1)+' CR</span>':diff<0?'<span style="color:var(--teal-ink);font-size:10px;font-weight:600">+'+Math.abs(diff).toFixed(1)+' CR</span>':'<span style="color:var(--muted);font-size:10px">Same cost</span>';
+    h+='<div onclick="'+(canAfford?'_doSwap(\''+escAttr(id)+'\',\''+escAttr(incomingId)+'\')':'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:var(--tint-1);border:1px solid var(--line);margin-bottom:7px;cursor:'+(canAfford?'pointer':'not-allowed')+';opacity:'+(canAfford?'1':'0.35')+'">';
     h+='<div class="prow-avatar '+avC+'">'+esc(_initials(cur.name||id))+'</div>';
     h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(cur.name||id)+'</div><div style="font-size:10px;color:var(--muted)">'+esc(roleTeam)+'</div></div>';
-    h+='<div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--gold)">'+(curPrice?curPrice.toFixed(1)+' CR':'')+'</div>'+diffLabel+'</div>';
+    h+='<div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--gold-ink)">'+(curPrice?curPrice.toFixed(1)+' CR':'')+'</div>'+diffLabel+'</div>';
     h+='</div>';
   });
-  h+='<button onclick="_closeSwapModal()" style="margin-top:8px;width:100%;padding:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>';
+  h+='<button onclick="_closeSwapModal()" style="margin-top:8px;width:100%;padding:10px;background:var(--tint-1);border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>';
   h+='</div></div>';
   var el=document.createElement('div');
   el.innerHTML=h;
@@ -1034,15 +1040,15 @@ function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.re
 // Display copy — numbers must stay in sync with logic/scoring_engine.py (calc_pts).
 function _showRulesModal(){
   if(document.getElementById('rules-modal'))return;
-  var sec='style="font-size:12px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;"';
-  var li ='style="font-size:13px;color:var(--text);line-height:1.55;padding:3px 0;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid rgba(255,255,255,.04);"';
+  var sec='style="font-size:12px;font-weight:700;color:var(--gold-ink);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;"';
+  var li ='style="font-size:13px;color:var(--text);line-height:1.55;padding:3px 0;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--hair);"';
   var lbl='style="color:var(--text);flex:1;"';
-  var val='style="color:var(--teal);font-weight:700;white-space:nowrap;"';
-  var neg='style="color:#FF6B6B;font-weight:700;white-space:nowrap;"';
+  var val='style="color:var(--teal-ink);font-weight:700;white-space:nowrap;"';
+  var neg='style="color:var(--danger-ink);font-weight:700;white-space:nowrap;"';
   var note='style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;"';
-  var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:rgba(7,17,31,.88);display:flex;align-items:flex-end;justify-content:center;">';
+  var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:18px 16px 32px;max-height:85vh;overflow-y:auto;">';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">How fantasy points are calculated for each player, every match.</div>';
 
   h+='<div '+sec+'>🏏 Participation</div>';
@@ -1093,7 +1099,7 @@ function _showRulesModal(){
   h+='<div '+li+'><span '+lbl+'><span class="badge badge-vc">VC</span> Vice-Captain — multiplies final points</span><span '+val+'>×1.5</span></div>';
   h+='<div '+note+'>The multiplier is applied to the player\'s total base points for the match.</div>';
 
-  h+='<button onclick="_closeRulesModal()" style="margin-top:18px;width:100%;padding:11px;background:var(--gold);border:none;border-radius:8px;color:#07111F;font-size:13px;font-weight:700;cursor:pointer;">Got it</button>';
+  h+='<button onclick="_closeRulesModal()" style="margin-top:18px;width:100%;padding:11px;background:var(--gold-fill);border:none;border-radius:8px;color:var(--on-fill);font-size:13px;font-weight:700;cursor:pointer;">Got it</button>';
   h+='</div></div>';
   var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
 }
@@ -1129,7 +1135,7 @@ function _buildAppBar(){
     ?'<button type="button" class="brand-sub as-btn" onclick="_openCompMenu()" aria-haspopup="dialog" aria-label="Competition: '+esc(c.name||"")+'. Tap to switch.">'+sub+Ui.icon("down",14)+'</button>'
     :'<div class="brand-sub">'+sub+'</div>';
   var h='<a class="skip-link" href="#main">Skip to content</a><header class="app-bar"><div class="app-bar-in">';
-  h+='<div class="brand"><img class="brand-logo" src="/static/brand/icon.svg" width="40" height="40" alt="" aria-hidden="true"><div style="min-width:0"><h1 class="brand-name"><span class="bn-bcl">BCL</span> <span class="bn-fan">Fantasy</span></h1>'+subHtml+'</div></div>';
+  h+='<div class="brand"><img class="brand-logo" src="/static/brand/mark-paper.svg" width="44" height="44" alt="" aria-hidden="true"><div style="min-width:0"><h1 class="brand-name"><img class="bn-img" src="/static/brand/wordmark-bcl.png" width="52" height="25" alt="BCL"><span class="bn-fan">Fantasy</span></h1>'+subHtml+'</div></div>';
   if(_username){
     h+='<div class="app-bar-actions"><button type="button" class="icon-btn" id="refresh-btn" onclick="_refreshData()" aria-label="Refresh data" title="Refresh">'+Ui.icon("refresh")+'</button>';
     h+='<button type="button" class="avatar-btn" onclick="_openUserMenu()" aria-haspopup="dialog" aria-label="Account menu for '+esc(_username)+'">'+esc(_initials(_username))+'</button></div>';
@@ -1166,6 +1172,7 @@ function _openMoreMenu(){
 }
 function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
+  if(_authPending)return;   // keep the loader up until we know which screen to show
   hideLoading();hideErrorBanner();
   var _preserveSearchFocus=false,_preserveSearchPos=0;
   if(_activeTab==="next"){
@@ -1256,8 +1263,8 @@ function _buildCompSwitcher(){
     var on=(c.slug===_activeComp);
     var glyph=c.status==='completed'?'🏆':(c.status==='active'?'🟢':'🔜');
     var sub=c.status==='completed'?(c.champion?('· '+esc(c.champion)):'· done'):(c.status==='active'?'· live':'· upcoming');
-    var st=on?'background:rgba(245,197,24,.16);border:1px solid var(--gold);color:var(--text)'
-             :'background:#0E1E35;border:1px solid var(--border);color:var(--muted)';
+    var st=on?'background:color-mix(in srgb, var(--gold-wash) 36.8%, transparent);border:1px solid var(--gold-line);color:var(--text)'
+             :'background:var(--sheet);border:1px solid var(--border);color:var(--muted)';
     h+='<button type="button" onclick="_switchComp(\''+escAttr(c.slug)+'\')" aria-pressed="'+(on?'true':'false')+'" '+
        'style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;'+st+'">'+
        glyph+' '+esc(c.name)+' <span style="font-weight:400;font-size:11px;opacity:.75">'+sub+'</span></button>';
@@ -1319,7 +1326,7 @@ function _buildChampionshipCard(){
   h+='<table class="lb-table"><thead><tr><th>#</th><th>Member</th><th>Titles</th></tr></thead><tbody>';
   _championship.forEach(function(row,i){
     var isMe=row.champion===_username;
-    h+='<tr'+(isMe?' class="me"':'')+'><td class="rank">'+(i+1)+'</td><td>'+esc(row.champion)+(isMe?' <span style="color:var(--gold);font-size:11px">(you)</span>':'')+'</td><td class="pts">'+row.titles+'</td></tr>';
+    h+='<tr'+(isMe?' class="me"':'')+'><td class="rank">'+(i+1)+'</td><td>'+esc(row.champion)+(isMe?' <span style="color:var(--gold-ink);font-size:11px">(you)</span>':'')+'</td><td class="pts">'+row.titles+'</td></tr>';
   });
   h+='</tbody></table></div>';
   return h;
@@ -1360,14 +1367,18 @@ function _bootstrap(){
       if(savedUser&&savedTok&&state.members&&state.members[savedUser]&&window.IplApi){
         // Validate the token against the server before trusting localStorage.
         // 401 inside _fetchJson auto-clears the token; we then drop to login.
+        _authPending=true;
+        var _authGuard=setTimeout(function(){if(_authPending){_authPending=false;if(_state)render(_state);}},8000);   // never leave the loader stuck
         window.IplApi.whoami().then(function(d){
+          clearTimeout(_authGuard);_authPending=false;
           if(d&&d.ok&&d.name===savedUser){
             _establishSession(d.name,d.is_admin,d.must_change);
           } else {
-            clearUsername();render(state);
+            clearUsername();render(_state||state);
           }
         }).catch(function(){
-          clearUsername();render(state);
+          clearTimeout(_authGuard);_authPending=false;
+          clearUsername();render(_state||state);
         });
         return;  // skip render \u2014 _establishSession or the catch will render.
       } else if(savedUser){
