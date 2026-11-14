@@ -27,7 +27,7 @@
 .mc-team-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;}
 .mc-vs{font-size:9px;font-weight:600;color:var(--muted);text-transform:uppercase;}
 .mc-result{color:var(--dim)!important;font-style:italic;}
-.match-modal-backdrop{position:fixed;inset:0;z-index:1000;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;animation:mcFade .2s ease;}
+.match-modal-backdrop{position:fixed;inset:0;z-index:1000;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;animation:mcFade .2s ease;}
 @keyframes mcFade{from{opacity:0}
 to{opacity:1}
 }

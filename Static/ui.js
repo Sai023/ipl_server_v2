@@ -186,7 +186,7 @@
   /* ---------- status cards ---------- */
   Ui.stateHtml = function (kind, o) {
     o = o || {};
-    var ico = { loading: "", empty: "🏏", error: "⚠️", offline: "📵" }[kind] || "";
+    var ico = { loading: "", empty: "🏏", error: "⚠", offline: "📵" }[kind] || "";
     var h = '<div class="ui-state ui-state-' + kind + '" role="' + (kind === "error" ? "alert" : "status") + '">';
     h += kind === "loading" ? '<div class="ui-spinner" aria-hidden="true"></div>'
       : (kind === "empty" ? '<img class="ui-state-mark" src="/static/brand/mark-paper.svg" width="84" height="84" alt="" aria-hidden="true">' : '<div class="ui-state-ico" aria-hidden="true">' + ico + "</div>");

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#F3EBD8" />
+  <meta name="color-scheme" content="light" />
   <link rel="icon" type="image/svg+xml" href="/static/brand/icon-paper.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/brand/favicon-32.png" />
   <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" />
@@ -11,7 +12,8 @@
   <title>BCL Fantasy</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
   <link rel="stylesheet" href="/static/theme.css?v=paper1">
   <link rel="stylesheet" href="/static/style.css?v=paper1">
   <link rel="stylesheet" href="/static/ui.css?v=paper1">
@@ -903,7 +905,7 @@ function _buildAdminMatchesCard(){
 function _showPasscodePromptModal(name){
   var existing=document.getElementById('passcode-prompt-modal');
   if(existing)existing.remove();
-  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button onclick="_closePasscodePrompt()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your 4-digit passcode to sign in.</div>';
@@ -965,7 +967,7 @@ function _showResetPasscodeModal(forced){
   var sub=forced
     ?'Your passcode was reset to the default by an admin. Choose a new 4-digit passcode now.'
     :'Choose a new 4-digit passcode. Your other devices will be signed out.';
-  var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 92%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">'+title+'</div>';
   if(!forced)h+='<button onclick="_closeResetPasscode()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button>';
@@ -1011,7 +1013,7 @@ function _submitResetPasscode(forced){
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
 function _showSwapModal(incomingId){
   var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
-  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 32px;max-height:80vh;overflow-y:auto;">';
   h+='<div style="font-size:13px;font-weight:700;color:var(--gold-ink);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Select who to remove from your XI</div>';
@@ -1046,7 +1048,7 @@ function _showRulesModal(){
   var val='style="color:var(--teal-ink);font-weight:700;white-space:nowrap;"';
   var neg='style="color:var(--danger-ink);font-weight:700;white-space:nowrap;"';
   var note='style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;"';
-  var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--paper) 88%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:18px 16px 32px;max-height:85vh;overflow-y:auto;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">How fantasy points are calculated for each player, every match.</div>';

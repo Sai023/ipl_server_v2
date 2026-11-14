@@ -239,3 +239,26 @@ input::placeholder, textarea::placeholder { color: var(--dim); }
 .nw-right.layer-open .picker-shell::before { display: none; }
 .layer-head { background: color-mix(in srgb, var(--paper) 96%, transparent); border-bottom: 1.5px solid var(--border-strong); box-shadow: 0 3px 0 -1px var(--hair); }
 .nw-right.layer-open .picker-toolbar { background: color-mix(in srgb, var(--paper) 98%, transparent); }
+
+/* small asides inside a handwritten heading ("(read-only)", counts) stay legible in the sans */
+h2 span, h3 span, .section-title span, .mc-tb-title span { font-family: var(--font); letter-spacing: 0; }
+h3 span[style*="font-size:1"], h3 small, h2 small { font-size: 12px !important; font-weight: 700; }
+
+/* role badges and pills: opaque pastel (not a see-through wash) so they stay readable on any row tint, e.g. a selected player */
+.badge-wk,   .pill-wk   { background: color-mix(in srgb, var(--teal-fill) 78%, var(--sheet-2));   color: var(--teal-ink); }
+.badge-bat,  .pill-bat  { background: color-mix(in srgb, var(--gold-fill) 78%, var(--sheet-2));   color: var(--gold-ink); }
+.badge-ar,   .pill-ar   { background: color-mix(in srgb, var(--violet-fill) 78%, var(--sheet-2)); color: var(--violet-ink); }
+.badge-bowl, .pill-bowl { background: color-mix(in srgb, var(--danger-fill) 66%, var(--sheet-2)); color: var(--danger-ink); }
+.pill-valid { background: color-mix(in srgb, var(--teal-fill) 78%, var(--sheet-2)); color: var(--teal-ink); }
+.pill-invalid { background: color-mix(in srgb, var(--danger-fill) 66%, var(--sheet-2)); color: var(--danger-ink); }
+.padd-btn { background: color-mix(in srgb, var(--teal-fill) 55%, var(--sheet-2)); }
+.padd-btn.p-sel { background: color-mix(in srgb, var(--teal-fill) 88%, var(--sheet-2)); color: var(--teal-ink); }
+.padd-btn.p-full { background: color-mix(in srgb, var(--gold-fill) 60%, var(--sheet-2)); color: var(--gold-ink); }
+
+/* the budget bar: a handwritten amount is wider than the old sans, so keep the whole row inside the card */
+.nw-budget-bar { grid-template-columns: auto minmax(20px, 1fr) auto auto; gap: 6px 8px; padding: 10px; }
+.nw-budget-bar > * { min-width: 0; }
+.nw-budget-amt { font-size: 25px; }
+.nw-budget-denom { font-size: 11px; }
+.nw-budget-bar .btn { padding: 8px 11px; }
+.nw-slot-badge { padding: 3px 8px; }

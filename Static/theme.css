@@ -62,8 +62,8 @@
   --r-hand-sm: 9px 11px 8px 10px / 10px 8px 11px 9px;
 
   /* ---- type ---- */
-  --font:      "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-hand: "Caveat", "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive;
+  --font:      "Nunito", "Noto Emoji", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;   /* Noto Emoji: pictograms as line drawings in the ink colour */
+  --font-hand: "Caveat", "Noto Emoji", "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive;
 
   /* ---- shape, spacing, depth, motion ---- */
   --radius: 16px; --maxw: 1120px; --nav-h: 64px;
