@@ -46,13 +46,13 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.12.0"
+APP_VERSION = "2.13.0"
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
                             # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.9.0"  # Admin import: POST /api/admin/competition action "import"
+ROUTES_VER       = "1.10.0" # UI redesign: /api/state carries "competition"; paper-themed /manifest.json + /offline. Admin import: POST /api/admin/competition action "import"
                             #           (roster + fixtures upload; dry-run by default).
                             # INF-2: GET /api/admin/health (PAT + freshness).
                             # BIZ-2: server-side deadline lock (selections_locked).
@@ -62,7 +62,7 @@ ROUTES_VER       = "1.9.0"  # Admin import: POST /api/admin/competition action "
                             #           /api/passcode/change, /api/admin/passcode/reset,
                             #           /api/admin/members. Bearer-token auth for the new
                             #           passcode + admin surface only; rest of API unchanged.
-DB_VER           = "6.2"    # Admin import: import_competition_data() (roster + fixtures upsert).
+DB_VER           = "6.3"    # get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
                             # Phase 12: members + sessions tables (passcode hash + bearer tokens)
 SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
