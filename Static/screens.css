@@ -325,11 +325,11 @@ body.layer-open { overflow: hidden; }
 .card-locked .ui-state { padding-top: 18px; padding-bottom: 14px; }
 
 /* ---- the older bottom-sheet modals (rules, swap, passcode) now match the new dialogs ---- */
-#rules-modal, #swap-modal, #reset-passcode-modal { z-index: var(--z-dialog) !important; background: color-mix(in srgb, var(--backdrop) 74%, transparent) !important; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: ui-fade .15s ease; }
-#rules-modal > div, #swap-modal > div, #reset-passcode-modal > div { background: var(--surface-2) !important; border: 1px solid var(--border-strong) !important; border-radius: 20px 20px 0 0 !important; box-shadow: var(--shadow-2); animation: ui-pop .2s var(--ease); padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important; }
+#rules-modal, #swap-modal, #reset-passcode-modal, #passcode-prompt-modal { z-index: var(--z-dialog) !important; background: color-mix(in srgb, var(--backdrop) 74%, transparent) !important; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: ui-fade .15s ease; }
+#rules-modal > div, #swap-modal > div, #reset-passcode-modal > div, #passcode-prompt-modal > div { background: var(--surface-2) !important; border: 1px solid var(--border-strong) !important; border-radius: 20px 20px 0 0 !important; box-shadow: var(--shadow-2); animation: ui-pop .2s var(--ease); padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important; }
 @media (min-width: 760px) {
-  #rules-modal, #swap-modal, #reset-passcode-modal { align-items: center !important; }
-  #rules-modal > div, #swap-modal > div, #reset-passcode-modal > div { border-radius: 20px !important; padding-bottom: 24px !important; }
+  #rules-modal, #swap-modal, #reset-passcode-modal, #passcode-prompt-modal { align-items: center !important; }
+  #rules-modal > div, #swap-modal > div, #reset-passcode-modal > div, #passcode-prompt-modal > div { border-radius: 20px !important; padding-bottom: 24px !important; }
 }
 .match-modal-backdrop { z-index: var(--z-dialog); }
 

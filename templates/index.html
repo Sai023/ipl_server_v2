@@ -36,6 +36,8 @@ var _authPending=false;   // true while a saved session is being verified: rende
 var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
 var _pickerSearch="",_pickerRole="All",_pickerTeam="All",_pickerSort="season";
+var _pickerMaxPrice=null,_pickerFiltersOpen=false;   // null = no price limit
+var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (signature), and whether that is last week's XI carried over
 var _pickerNotice=null,_pickerNoticeTimer=null;
 var _adminMatches=null,_adminFilter="all";
 var _adminMembersList=null;
@@ -119,7 +121,7 @@ function logout(){
   if(window.IplApi&&IplApi.logoutClearToken)IplApi.logoutClearToken();
   _username=null;_isAdmin=false;_mustChange=false;
   clearUsername();_historyData=null;_historyViewWk=null;
-  _nwDraft={team:[],cap:null,vc:null};_adminMatches=null;_adminMembersList=null;
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
 }
 function switchTab(tab){
@@ -138,12 +140,7 @@ function _loadHistory(){
   window.IplApi.getHistory(_username).then(function(data){
     if(!data||!data.ok)return;
     _historyData=data;_currentWeek=data.current_week;
-    var cur=_getCurrentWeekRow(data);
-    if(cur){
-      var nw=cur.next_week,tw=cur.this_week;
-      if(nw&&nw.team&&nw.team.length>0)_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};
-      else if(tw&&tw.team&&tw.team.length>0)_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};
-    }
+    _nwInit(_getCurrentWeekRow(data));
     if(_state)render(_state);
   }).catch(function(e){console.error("[IPL] history:",e);});
 }
@@ -202,7 +199,42 @@ function _getThisWeekData(){
 function _selectHistoryWeek(wkNo){_historyViewWk=(wkNo===_currentWeek)?null:wkNo;if(_state)render(_state);}
 function _nwSetCap(id){_nwDraft.cap=(_nwDraft.cap===id)?null:id;_nwDraft.vc=(_nwDraft.vc===id)?null:_nwDraft.vc;if(_state)render(_state);}
 function _nwSetVc(id){_nwDraft.vc=(_nwDraft.vc===id)?null:id;_nwDraft.cap=(_nwDraft.cap===id)?null:_nwDraft.cap;if(_state)render(_state);}
-function _nwRemove(id){_nwDraft.team=_nwDraft.team.filter(function(x){return x!==id;});if(_nwDraft.cap===id)_nwDraft.cap=null;if(_nwDraft.vc===id)_nwDraft.vc=null;if(_state)render(_state);}
+// One player, one role: regular, captain (x2) or vice-captain (x1.5). Choosing a new captain / vice-captain replaces the old one.
+function _nwSetRole(id,role){
+  if(role==="cap"){_nwDraft.cap=id;if(_nwDraft.vc===id)_nwDraft.vc=null;}
+  else if(role==="vc"){_nwDraft.vc=id;if(_nwDraft.cap===id)_nwDraft.cap=null;}
+  else{if(_nwDraft.cap===id)_nwDraft.cap=null;if(_nwDraft.vc===id)_nwDraft.vc=null;}
+  if(_state)render(_state);
+}
+// Tapping a player in the draft opens a radio choice (regular / captain / vice-captain) with room for a thumb, plus Remove.
+function _nwOpenPlayer(id){
+  var p=resolvePlayer(id),nm=p.name||id,cur=_nwDraft.cap===id?"cap":_nwDraft.vc===id?"vc":"none";
+  Ui.sheet({title:nm,subtitle:[p.role,p.team,p.price?p.price.toFixed(1)+" CR":"",p.season_pts!=null?p.season_pts+" pts":""].filter(Boolean).join(" · "),items:[
+    {radio:true,label:"Regular player",desc:"Earns normal points.",checked:cur==="none",onClick:function(){_nwSetRole(id,"none");}},
+    {radio:true,label:"Captain",desc:"Earns double points (\xd72).",badge:"C",checked:cur==="cap",onClick:function(){_nwSetRole(id,"cap");}},
+    {radio:true,label:"Vice-captain",desc:"Earns \xd71.5 points.",badge:"VC",checked:cur==="vc",onClick:function(){_nwSetRole(id,"vc");}},
+    {divider:true},
+    {icon:"trash",label:"Remove from XI",danger:true,onClick:function(){_nwRemove(id);}}
+  ]});
+}
+// Removing a player is easy to do by accident, so it can always be undone (for a few seconds) from the toast.
+function _nwRemove(id,quiet){
+  var at=_nwDraft.team.indexOf(id);if(at<0)return;
+  var wasCap=_nwDraft.cap===id,wasVc=_nwDraft.vc===id;
+  _nwDraft.team=_nwDraft.team.filter(function(x){return x!==id;});
+  if(wasCap)_nwDraft.cap=null;
+  if(wasVc)_nwDraft.vc=null;
+  if(_state)render(_state);
+  if(quiet)return;
+  Ui.toast((resolvePlayer(id).name||id)+" removed",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){
+    if(_nwDraft.team.indexOf(id)>=0||_nwDraft.team.length>=XI_SIZE)return;
+    if(_teamCost(_nwDraft.team)+(resolvePlayer(id).price||0)>BUDGET_TOTAL+0.001){Ui.warn("Not enough budget left to bring them back.");return;}
+    _nwDraft.team.splice(Math.min(at,_nwDraft.team.length),0,id);
+    if(wasCap)_nwDraft.cap=id;
+    if(wasVc)_nwDraft.vc=id;
+    if(_state)render(_state);
+  }}});
+}
 function _nwToggle(id){
   var idx=_nwDraft.team.indexOf(id);
   if(idx!==-1){_nwRemove(id);return;}
@@ -215,24 +247,46 @@ function _nwToggle(id){
 function _nwSave(){
   if(!_username)return;
   if(_nwDraft.team.length!==XI_SIZE){Ui.warn("Select exactly 11 players first.");return;}
-  var btn=document.getElementById("nw-save-btn"),msg=document.getElementById("nw-save-msg");
-  if(btn){btn.disabled=true;btn.textContent="Saving\u2026";}
-  if(msg){msg.textContent="";msg.className="save-status";}
+  var btn=document.getElementById("nw-save-btn"),sent=_nwSig(_nwDraft);
+  if(btn){btn.disabled=true;btn.textContent="Saving…";}
   window.IplApi.saveNextWeek(_username,_nwDraft)
     .then(function(){
-      if(btn){btn.disabled=false;btn.textContent="Save Draft";}
-      if(msg){msg.textContent="\u2713 Saved!";msg.className="save-status ok";}
+      _nwSaved=sent;_nwCarry=false;        // what we sent is now what the server holds
       Ui.success("Team saved");
       window.dispatchEvent(new CustomEvent("ipl:saved"));
-      setTimeout(function(){if(msg)msg.textContent="";},3000);
+      if(_state)render(_state);
     }).catch(function(e){
       if(btn){btn.disabled=false;btn.textContent="Save Draft";}
-      if(msg){msg.textContent="\u2717 "+(e.serverMessage||e.message);msg.className="save-status err";}
       Ui.fail(e,"Could not save your team");
     });
 }
-function _pickerSetRole(r){_pickerRole=r;if(_state)render(_state);}
-function _pickerSetTeam(t){_pickerTeam=t;if(_state)render(_state);}
+
+// ─── PICKER: filters update the list in place (no page rebuild), so typing, dragging the slider and keyboard focus are never interrupted ───
+var _psTimer=null;
+function _pickerUpdate(){
+  var V=_pickerView(),el;
+  el=document.getElementById("pr-seg");
+  if(el){Ui.segSet(el,_pickerRole);[].forEach.call(el.querySelectorAll(".seg-opt"),function(b){var c=b.querySelector(".seg-n");if(c)c.textContent=V.counts[b.getAttribute("data-v")];});}
+  el=document.getElementById("pf-sort");if(el)Ui.segSet(el,V.sv);
+  el=document.getElementById("pf-team");if(el&&el.value!==_pickerTeam)el.value=_pickerTeam;
+  var cur=V.maxP!==null?V.maxP:V.pb.max,txt=V.maxP!==null?"Up to "+cur.toFixed(1)+" CR":"Any price";
+  el=document.getElementById("pf-price");
+  if(el){if(parseFloat(el.value)!==cur)el.value=cur;Ui.rangeFill(el);el.setAttribute("aria-valuetext",txt);}
+  el=document.getElementById("pf-price-out");if(el)el.textContent=txt;
+  el=document.getElementById("pf-badge");if(el){var a=_pickerActive(V);el.textContent=a;el.hidden=!a;}
+  el=document.getElementById("ps-clear");if(el)el.hidden=!_pickerSearch;
+  el=document.getElementById("pf-fit");if(el)el.hidden=!(_nwDraft.team.length<XI_SIZE&&_remaining()>=V.pb.min);
+  el=document.getElementById("picker-results");if(el)el.innerHTML=_pickerResultsHtml(V);
+  el=document.getElementById("plist");if(el)el.innerHTML=_pickerRowsHtml(V);
+}
+function _pickerSetRole(r){_pickerRole=r;_pickerUpdate();}
+function _pickerSetTeam(t){_pickerTeam=t;_pickerUpdate();}
+function _pickerSetSort(s){_pickerSort=s;_pickerUpdate();}
+function _pickerSetPrice(v){v=parseFloat(v);if(isNaN(v))return;_pickerMaxPrice=(v>=_priceBounds().max-0.001)?null:v;_pickerUpdate();}
+function _pickerFitBudget(){_pickerSetPrice(Math.max(_priceBounds().min,Math.floor(_remaining()*2)/2));}
+function _pickerSetSearch(v){_pickerSearch=v;_pickerUpdate();}
+function _pickerSearchInput(v){_pickerSearch=v;var c=document.getElementById("ps-clear");if(c)c.hidden=!v;clearTimeout(_psTimer);_psTimer=setTimeout(_pickerUpdate,90);}
+function _pickerClear(){_pickerRole="All";_pickerTeam="All";_pickerSearch="";_pickerMaxPrice=null;var i=document.getElementById("picker-search-input");if(i)i.value="";_pickerUpdate();}
 function _pickerShowNotice(msg,type){
   _pickerNotice={msg:msg,type:type||"info"};
   if(_pickerNoticeTimer)clearTimeout(_pickerNoticeTimer);
@@ -324,28 +378,38 @@ function _buildXiGrid(teamArr,capId,vcId){
   });
   return h+'</div>';
 }
+// ─── DRAFT STATE: "saved" means what the server will use at the rollover (the saved draft, or last week's XI when nothing was saved) ───
+function _nwSig(d){return JSON.stringify({t:((d&&d.team)||[]).slice().sort(),c:(d&&d.cap)||null,v:(d&&d.vc)||null});}
+function _nwDirty(){return _nwSig(_nwDraft)!==_nwSaved;}
+function _nwInit(row){
+  if(!row)return;
+  var nw=row.next_week,tw=row.this_week;
+  if(nw&&nw.team&&nw.team.length>0){_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=false;}
+  else if(tw&&tw.team&&tw.team.length>0){_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=true;}
+}
+function _focusPickerSearch(){var i=document.getElementById("picker-search-input");if(i){i.focus();try{i.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){}}}
+
 function _buildNwSquad(){
   var team=_nwDraft.team,cap=_nwDraft.cap,vc=_nwDraft.vc;
-  var h='<div class="nw-squad-label">YOUR DRAFT XI <span style="font-size:10px;color:var(--muted);font-weight:400">\u00B7 '+team.length+'/'+XI_SIZE+' selected</span></div>';
+  var h='<div class="nw-squad-label">YOUR DRAFT XI <span style="font-size:10px;color:var(--muted);font-weight:400">· '+team.length+'/'+XI_SIZE+' selected</span></div>';
+  if(team.length>0)h+='<p class="nw-tip">Tap a player to make them <span class="badge badge-c">C</span> captain \xd72 or <span class="badge badge-vc">VC</span> vice-captain \xd71.5</p>';
   h+='<div class="nw-squad">';
   team.forEach(function(id){
     var p=resolvePlayer(id),nm=p.name||id,iC=(id===cap),iV=(id===vc);
     var cls="nw-player-row"+(iC?" is-cap":iV?" is-vc":"");
-    var avC=_avClass(p.team);
     var pts=p.season_pts!=null?p.season_pts:"";
-    h+='<div class="'+cls+'">';
-    h+='<div class="xi-avatar '+avC+'">'+esc(_initials(nm))+'</div>';
-    h+='<div class="nw-player-info"><div class="nw-player-name">'+esc(nm)+'</div>';
-    h+='<div class="nw-player-sub">'+_roleBadge(p.role)+(p.team?' '+esc(p.team):'')+(p.price?' \u00B7 '+p.price.toFixed(1)+'CR':'')+'</div></div>';
-    h+='<div class="nw-player-pts">'+pts+'</div>';
-    h+='<div class="nw-player-actions">';
-    h+='<button class="ecap-btn'+(iC?' on':'')+'" onclick="_nwSetCap(\''+escAttr(id)+'\')">C</button>';
-    h+='<button class="evc-btn'+(iV?' on':'')+'" onclick="_nwSetVc(\''+escAttr(id)+'\')">V</button>';
-    h+='<button class="erem-btn" onclick="_nwRemove(\''+escAttr(id)+'\')">\xd7</button>';
-    h+='</div></div>';
+    var word={WK:"keeper",BAT:"batter",AR:"all-rounder",BOWL:"bowler"}[(p.role||"").toUpperCase()]||"";
+    var say=nm+(word?", "+word:"")+(iC?", captain":iV?", vice-captain":"")+". Change role or remove.";
+    h+='<button type="button" class="'+cls+'" onclick="_nwOpenPlayer(\''+escAttr(id)+'\')" aria-haspopup="dialog" aria-label="'+esc(say)+'">';
+    h+='<span class="xi-avatar '+_avClass(p.team)+'">'+esc(_initials(nm))+'</span>';
+    h+='<span class="nw-player-info"><span class="nw-player-name">'+esc(nm)+'</span>';
+    h+='<span class="nw-player-sub">'+_roleBadge(p.role)+(p.team?' '+esc(p.team):'')+(p.price?' · '+p.price.toFixed(1)+'CR':'')+'</span></span>';
+    h+='<span class="nw-player-pts">'+pts+'</span>';
+    h+=iC?'<span class="badge badge-c" aria-hidden="true">C</span>':iV?'<span class="badge badge-vc" aria-hidden="true">VC</span>':'<span class="row-go" aria-hidden="true">'+Ui.icon("right",18)+'</span>';
+    h+='</button>';
   });
   for(var i=team.length;i<XI_SIZE;i++){
-    h+='<div class="nw-add-slot">+ pick a player</div>';
+    h+='<button type="button" class="nw-add-slot" onclick="_wide()?_focusPickerSearch():_pickOpenLayer()">'+Ui.icon("plus",16)+' pick a player</button>';
   }
   h+='</div>';
   return h;
@@ -358,8 +422,18 @@ function _buildBudgetBar(){
   var roles={WK:0,BAT:0,AR:0,BOWL:0};
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
   var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001;
-  var _locked=_deadlineLocked();
-  var saveTitle=_locked?"Locked — the weekly deadline has passed":(!canSave?(count<XI_SIZE?"Select all "+XI_SIZE+" players first":"Over 100 CR budget"):"");
+  var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
+  // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone)
+  var hint,hcls,hico,k=XI_SIZE-count;
+  if(locked){hint="Picks are locked until the Monday rollover.";hcls="bad";hico="lock";}
+  else if(count<XI_SIZE){hint="Pick "+k+" more player"+(k===1?"":"s")+" to complete your XI.";hcls="todo";hico="plus";}
+  else if(rem<-0.001){hint="Over budget by "+Math.abs(rem).toFixed(1)+" CR. Swap someone for a cheaper player.";hcls="bad";hico="swap";}
+  else if(!_nwDraft.cap||!_nwDraft.vc){hint="Choose your "+(!_nwDraft.cap&&!_nwDraft.vc?"captain (\xd72) and vice-captain (\xd71.5).":!_nwDraft.cap?"captain (\xd72 points).":"vice-captain (\xd71.5 points).");hcls="todo";hico="team";}
+  else if(dirty){hint="You have unsaved changes.";hcls="todo";hico="pick";}
+  else if(_nwCarry){hint="Same XI as last week. It carries over unless you change it.";hcls="good";hico="check";}
+  else{hint="Saved. You can keep editing until picks lock.";hcls="good";hico="check";}
+  var lbl=saved?"Saved ✓":(_nwCarry&&!dirty?"Keep this XI":"Save Draft");
+  var cls="btn "+(saved?"btn-ghost is-saved":(dirty||!_nwCarry?"btn-gold":"btn-ghost"));
   var h='<div class="nw-budget-bar">';
   h+='<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>';
   h+='<div class="nw-budget-track"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>';
@@ -367,64 +441,104 @@ function _buildBudgetBar(){
   ['WK','BAT','AR','BOWL'].forEach(function(r){h+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
   h+='</div>';
   h+='<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>';
-  h+='<button id="nw-save-btn" class="btn btn-gold" onclick="_nwSave()"'+((!canSave||_locked)?' disabled title="'+esc(saveTitle)+'"':'')+'>Save Draft</button>';
+  h+='<button id="nw-save-btn" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved)?' disabled':'')+'>'+lbl+'</button>';
   h+='</div>';
-  h+='<span id="nw-save-msg" class="save-status" style="font-size:11px;display:block;text-align:right;min-height:14px;margin-bottom:4px"></span>';
+  h+='<div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span></div>';
   return h;
 }
-function _buildPicker(){
-  var allP=_allPlayers(),teams=[],ts={};
+
+// ─── PICKER ───────────────────────────────────────────────────────────────────
+function _priceBounds(){
+  var mn=Infinity,mx=0;
+  _allPlayers().forEach(function(p){var v=p.price||0;if(v>0){if(v<mn)mn=v;if(v>mx)mx=v;}});
+  if(!isFinite(mn))return{min:0,max:20};
+  return{min:Math.floor(mn*2)/2,max:Math.ceil(mx*2)/2};
+}
+function _pickerView(){
+  var allP=_allPlayers(),teams=[],ts={},pb=_priceBounds();
   allP.forEach(function(p){if(p.team&&!ts[p.team]){ts[p.team]=true;teams.push(p.team);}});
   teams.sort();
   var q=_pickerSearch.toLowerCase().trim();
-  var filtered=allP.filter(function(p){
-    if(_pickerRole!=="All"&&p.role!==_pickerRole)return false;
+  var maxP=(_pickerMaxPrice!==null&&_pickerMaxPrice<pb.max-0.001)?_pickerMaxPrice:null;
+  function pass(p,withRole){
+    if(withRole&&_pickerRole!=="All"&&p.role!==_pickerRole)return false;
     if(_pickerTeam!=="All"&&p.team!==_pickerTeam)return false;
     if(q&&(p.name+" "+(p.team||"")).toLowerCase().indexOf(q)===-1)return false;
+    if(maxP!==null&&(p.price||0)>maxP+0.001)return false;
     return true;
-  });
+  }
+  var filtered=allP.filter(function(p){return pass(p,true);});
+  var counts={All:0,WK:0,BAT:0,AR:0,BOWL:0};   // how many players each role has under the OTHER filters
+  allP.forEach(function(p){if(pass(p,false)){counts.All++;if(counts[p.role]!==undefined)counts[p.role]++;}});
   var sv=_pickerSort||"season";
   filtered.sort(function(a,b){
     if(sv==="price")return(b.price||0)-(a.price||0);
     if(sv==="name")return a.name<b.name?-1:1;
     return(b.season_pts||0)-(a.season_pts||0);
   });
+  return{teams:teams,filtered:filtered,counts:counts,pb:pb,maxP:maxP,q:q,sv:sv};
+}
+function _pickerActive(V){return(_pickerTeam!=="All"?1:0)+(V.maxP!==null?1:0);}   // narrowing filters hidden in the panel
+function _pickerRowsHtml(V){
+  if(V.filtered.length===0)return '<li class="picker-empty">No players match these filters.<br><button type="button" class="btn btn-ghost btn-sm" onclick="_pickerClear()">Clear filters</button></li>';
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
-  var n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
-  function opt(v,l,cur){return '<option value="'+esc(v)+'"'+(cur===v?" selected":"")+'>'+esc(l)+'</option>';}
-  var h='<div class="picker-shell">';
-  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><div class="lh-sub">'+n+'/'+XI_SIZE+' picked \u00B7 '+rem.toFixed(1)+' CR left</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
-  h+='<div class="picker-toolbar">';
+  var n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining(),h="";
+  V.filtered.forEach(function(p){
+    var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
+    var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
+    var btnCls="padd-btn"+(isSel?" p-sel":isFull?" p-full":over?" p-over":"");
+    var btnLbl=isSel?"✓ In":isFull?"⇄ Swap":over?"+"+((p.price||0)-rem).toFixed(1)+" over":"Add";
+    var spts=p.season_pts!=null?p.season_pts:"—";
+    var oc=' onclick="_pickerRowClick(\''+escAttr(key)+'\')"';
+    h+='<li class="picker-row'+(isSel?" selected":"")+(over?" over-budget":"")+(isFull?" full-xi":"")+'"'+oc+'>'+
+      '<div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+
+      '<div class="prow-info"><div class="prow-name">'+esc(p.name)+'</div><div class="prow-sub">'+_roleBadge(p.role)+' '+esc(p.team||"")+' · '+spts+' pts</div></div>'+
+      '<div class="prow-price">'+(p.price?p.price.toFixed(1):"—")+'<small> CR</small></div>'+
+      '<button type="button" class="'+btnCls+'"'+(over?' aria-disabled="true"':'')+' aria-label="'+(isSel?"In your XI: ":isFull?"Swap in ":over?"Over budget: ":"Add ")+esc(p.name)+'" onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
+  });
+  return h;
+}
+function _pickerResultsHtml(V){
+  var h='<span aria-live="polite"><b>'+V.filtered.length+'</b> player'+(V.filtered.length===1?'':'s')+'</span>';
+  if(_pickerTeam!=="All")h+='<span class="fchip">'+esc(_pickerTeam)+'<button type="button" aria-label="Remove the team filter" onclick="_pickerSetTeam(\'All\')">'+Ui.icon("close",14)+'</button></span>';
+  if(V.maxP!==null)h+='<span class="fchip">Up to '+V.maxP.toFixed(1)+' CR<button type="button" aria-label="Remove the price filter" onclick="_pickerSetPrice('+V.pb.max+')">'+Ui.icon("close",14)+'</button></span>';
+  if(_pickerActive(V)||V.q||_pickerRole!=="All")h+='<button type="button" class="link-btn" onclick="_pickerClear()">Clear all</button>';
+  return h;
+}
+function _pickerToolbarHtml(V){
+  var h='<div class="picker-toolbar">';
   if(_pickerNotice){
     var ncolor=_pickerNotice.type==="warn"?"var(--danger-ink)":"var(--teal-ink)";
     var nbg=_pickerNotice.type==="warn"?"var(--danger-bg)":"var(--ipl-teal-soft)";
     h+='<div class="picker-notice" role="status" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
   }
-  h+='<div class="picker-search">'+Ui.icon("search",16)+'<input id="picker-search-input" type="text" aria-label="Search players" placeholder="Search players\u2026" value="'+esc(_pickerSearch)+'" oninput="_pickerSearch=this.value;if(_state)render(_state)"><span class="picker-count-badge" aria-label="'+filtered.length+' players shown">'+filtered.length+'</span></div>';
-  h+='<div class="picker-selects">';
-  h+='<select aria-label="Filter by team" onchange="_pickerTeam=this.value;if(_state)render(_state)">'+opt("All","All teams",_pickerTeam)+teams.map(function(t){return opt(t,t,_pickerTeam);}).join("")+'</select>';
-  h+='<select aria-label="Filter by role" onchange="_pickerRole=this.value;if(_state)render(_state)">'+opt("All","All roles",_pickerRole)+opt("WK","Keepers",_pickerRole)+opt("BAT","Batters",_pickerRole)+opt("AR","All-rounders",_pickerRole)+opt("BOWL","Bowlers",_pickerRole)+'</select>';
-  h+='<select aria-label="Sort players" onchange="_pickerSort=this.value;if(_state)render(_state)">'+opt("season","Sort: Points",sv)+opt("price","Sort: Price",sv)+opt("name","Sort: Name",sv)+'</select>';
-  h+='</div></div>';
-  h+='<ul class="plist">';
-  if(filtered.length===0){
-    h+='<li class="picker-empty">No players match.<br><button type="button" class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="_pickerTeam=\'All\';_pickerRole=\'All\';_pickerSearch=\'\';if(_state)render(_state)">Clear filters</button></li>';
-  } else {
-    filtered.forEach(function(p){
-      var key=p.id||p.name,isSel=!!(selSet[key]||selSet[p.name]);
-      var over=!isSel&&!xi_full&&(rem-(p.price||0)<-0.001),isFull=xi_full&&!isSel;
-      var btnCls="padd-btn"+(isSel?" p-sel":isFull?" p-full":over?" p-over":"");
-      var btnLbl=isSel?"\u2713 In":isFull?"\u21C4 Swap":"Add";
-      var spts=p.season_pts!=null?p.season_pts:"\u2014";
-      var oc=' onclick="_pickerRowClick(\''+escAttr(key)+'\')"';
-      h+='<li class="picker-row'+(isSel?" selected":"")+(over?" over-budget":"")+(isFull?" full-xi":"")+'"'+oc+'>'+
-        '<div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+
-        '<div class="prow-info"><div class="prow-name">'+esc(p.name)+'</div><div class="prow-sub">'+_roleBadge(p.role)+' '+esc(p.team||"")+' \u00B7 '+spts+' pts</div></div>'+
-        '<div class="prow-price">'+(p.price?p.price.toFixed(1):"\u2014")+'<small> CR</small></div>'+
-        '<button type="button" class="'+btnCls+'" aria-label="'+(isSel?"In your XI: ":isFull?"Swap in ":"Add ")+esc(p.name)+'" onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
-    });
-  }
-  h+='</ul></div>';
+  h+='<div class="picker-search">'+Ui.icon("search",16)+'<input id="picker-search-input" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search players" placeholder="Search players…" value="'+esc(_pickerSearch)+'" oninput="_pickerSearchInput(this.value)">';
+  h+='<button type="button" class="ps-clear" id="ps-clear" aria-label="Clear search" onclick="_pickerSetSearch(\'\');var i=document.getElementById(\'picker-search-input\');if(i){i.value=\'\';i.focus();}"'+(_pickerSearch?'':' hidden')+'>'+Ui.icon("close",16)+'</button></div>';
+  h+='<div class="picker-roles">'+Ui.seg({id:"pr-seg",label:"Filter by role",value:_pickerRole,onSelect:"_pickerSetRole",options:[
+    {v:"All",l:"All",n:V.counts.All,cls:"r-all"},{v:"WK",l:"WK",n:V.counts.WK,cls:"r-wk",title:"Wicket-keepers"},{v:"BAT",l:"BAT",n:V.counts.BAT,cls:"r-bat",title:"Batters"},
+    {v:"AR",l:"AR",n:V.counts.AR,cls:"r-ar",title:"All-rounders"},{v:"BOWL",l:"BOWL",n:V.counts.BOWL,cls:"r-bowl",title:"Bowlers"}]})+'</div>';
+  return h+'</div>';
+}
+function _pickerFiltersHtml(V){
+  function opt(v,l,cur){return '<option value="'+esc(v)+'"'+(cur===v?" selected":"")+'>'+esc(l)+'</option>';}
+  var rem=_remaining(),act=_pickerActive(V),cur=V.maxP!==null?V.maxP:V.pb.max,pc=(V.pb.max>V.pb.min)?((cur-V.pb.min)/(V.pb.max-V.pb.min)*100):100;
+  var txt=V.maxP!==null?"Up to "+cur.toFixed(1)+" CR":"Any price";
+  var h='<details class="pf" id="picker-filters"'+(_pickerFiltersOpen?' open':'')+' ontoggle="_pickerFiltersOpen=this.open">';
+  h+='<summary>'+Ui.icon("sliders",18)+'<span>Filters</span><span class="pf-badge" id="pf-badge"'+(act?'':' hidden')+'>'+act+'</span>'+Ui.icon("down",16)+'</summary><div class="pf-body">';
+  h+='<div class="field"><label for="pf-team">Team</label><select id="pf-team" onchange="_pickerSetTeam(this.value)">'+opt("All","All teams",_pickerTeam)+V.teams.map(function(t){return opt(t,t,_pickerTeam);}).join("")+'</select></div>';
+  h+='<div class="field"><span class="field-l">Sort by</span>'+Ui.seg({id:"pf-sort",label:"Sort players by",value:V.sv,onSelect:"_pickerSetSort",cls:"sm",options:[{v:"season",l:"Points"},{v:"price",l:"Price"},{v:"name",l:"A–Z"}]})+'</div>';
+  h+='<div class="field"><label for="pf-price"><span>Max price</span><output id="pf-price-out" for="pf-price">'+txt+'</output></label>';
+  h+='<input id="pf-price" class="range" type="range" min="'+V.pb.min+'" max="'+V.pb.max+'" step="0.5" value="'+cur+'" style="--p:'+pc+'%" aria-valuetext="'+txt+'" oninput="_pickerSetPrice(this.value)">';
+  h+='<div class="pf-scale"><span>'+V.pb.min.toFixed(1)+'</span><button type="button" class="link-btn" id="pf-fit" onclick="_pickerFitBudget()"'+((_nwDraft.team.length<XI_SIZE&&rem>=V.pb.min)?'':' hidden')+'>Fits my budget</button><span>'+V.pb.max.toFixed(1)+' CR</span></div></div>';
+  return h+'</div></details>';
+}
+function _buildPicker(){
+  var V=_pickerView(),n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
+  var h='<div class="picker-shell">';
+  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><div class="lh-sub">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
+  h+=_pickerToolbarHtml(V)+_pickerFiltersHtml(V);
+  h+='<div class="picker-results" id="picker-results">'+_pickerResultsHtml(V)+'</div>';
+  h+='<ul class="plist" id="plist">'+_pickerRowsHtml(V)+'</ul></div>';
   return h;
 }
 
@@ -461,8 +575,8 @@ function _buildLoginCard(memberNames){
   } else {
     h+='<p style="color:var(--muted);font-size:13px;margin-bottom:10px">No members yet \u2014 enter your name and pick a 4-digit passcode to join.</p><div id="register-panel" style="display:block;margin-top:0">';
   }
-  h+='<input id="register-input" type="text" maxlength="30" placeholder="Your display name" style="margin-bottom:6px;">';
-  h+='<input id="register-passcode" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="4-digit passcode" style="margin-bottom:4px;letter-spacing:6px;text-align:center;font-weight:700;">';
+  h+='<label class="pin-label" for="register-input">Your name</label><input id="register-input" type="text" maxlength="30" autocomplete="nickname" autocapitalize="words" enterkeyhint="next" placeholder="e.g. Sam" style="margin-bottom:12px;">';
+  h+='<label class="pin-label" for="register-passcode">Choose a 4-digit passcode</label>'+Ui.pin({id:"register-passcode",label:"Choose a 4-digit passcode",describedby:"register-error"});
   h+='<div id="register-error" style="color:var(--danger-ink);font-size:11px;min-height:14px;text-align:center;"></div>';
   h+='<button class="btn btn-teal" onclick="_doRegister()" style="margin-top:6px;width:100%">Join League</button>';
   h+='</div></div>';
@@ -486,12 +600,31 @@ function _doRegister(){
     if(errEl)errEl.textContent='\u26a0 '+msg;
   });
 }
+function _histWeeks(){var d=_historyData;return(d&&d.weeks)?d.weeks.slice().sort(function(a,b){return a.week_no-b.week_no;}):[];}
+function _weekStep(delta){
+  var ws=_histWeeks(),cur=_historyViewWk||_currentWeek,i=-1;
+  ws.forEach(function(w,k){if(w.week_no===cur)i=k;});
+  if(i<0||i+delta<0||i+delta>=ws.length)return;
+  _selectHistoryWeek(ws[i+delta].week_no);
+}
 function _buildThisWeekCard(){
-  var tw=_getThisWeekData();
-  var h='<div class="card card-locked"><div class="week-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Week '+_currentWeek+' &nbsp;<span class="badge-lock">'+((_currentWeek<=1&&_lockIn())?'Not started':'\uD83D\uDD12 Locked')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">\uD83D\uDCD6 Scoring Rules</button></div><h3 class="section-title">\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span></h3>';
+  var ws=_histWeeks(),viewWk=_historyViewWk||_currentWeek,isCur=(viewWk===_currentWeek),idx=-1;
+  ws.forEach(function(w,k){if(w.week_no===viewWk)idx=k;});
+  var row=ws[idx];
+  var tw=isCur?_getThisWeekData():(row&&row.this_week&&row.this_week.team&&row.this_week.team.length>0?row.this_week:null);
+  var h='<div class="card card-locked"><div class="wk-head">';
+  if(ws.length>1){
+    h+='<div class="stepper" role="group" aria-label="Choose a week"><button type="button" class="stepper-btn" aria-label="Previous week" onclick="_weekStep(-1)"'+(idx<=0?' disabled':'')+'>'+Ui.icon("back",18)+'</button>';
+    h+='<select class="stepper-sel" aria-label="Week" onchange="_selectHistoryWeek(parseInt(this.value,10))">'+ws.map(function(w){return '<option value="'+w.week_no+'"'+(w.week_no===viewWk?' selected':'')+'>Week '+w.week_no+(w.is_current?' \u00B7 now':'')+'</option>';}).join('')+'</select>';
+    h+='<button type="button" class="stepper-btn" aria-label="Next week" onclick="_weekStep(1)"'+(idx<0||idx>=ws.length-1?' disabled':'')+'>'+Ui.icon("right",18)+'</button></div>';
+  } else h+='<span class="week-label" style="margin:0">Week '+viewWk+'</span>';
+  h+='<span class="badge-lock">'+(isCur?((_currentWeek<=1&&_lockIn())?'Not started':'\uD83D\uDD12 Locked'):'Final')+'</span>';
+  h+='<button class="btn btn-ghost btn-sm" onclick="_showRulesModal()">\uD83D\uDCD6 Scoring Rules</button></div>';
+  h+='<h3 class="section-title">'+(isCur?'\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span>':'Week '+viewWk+'\'s XI')+'</h3>';
+  if(row&&typeof row.week_pts==='number')h+='<p class="wk-pts"><b>'+row.week_pts+'</b> points '+(isCur?'so far':'that week')+'</p>';
   if(!tw||!tw.team||tw.team.length===0){
     if(_username&&!_historyData)h+=Ui.stateHtml("loading",{title:"Loading your team\u2026"});
-    else h+=Ui.stateHtml("empty",{title:"No XI locked for this week",message:(_currentWeek<=1?"Pick your team before the lock and it will appear here.":"You did not have a team locked this week."),retry:(_lockIn()?"switchTab('next')":""),retryLabel:"Pick your team"});
+    else h+=Ui.stateHtml("empty",{title:isCur?"No XI locked for this week":"No XI recorded for week "+viewWk,message:(isCur?(_currentWeek<=1?"Pick your team before the lock and it will appear here.":"You did not have a team locked this week."):"You did not have a team locked that week."),retry:(isCur&&_lockIn()?"switchTab('next')":""),retryLabel:"Pick your team"});
     return h+'</div>';
   }
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
@@ -505,7 +638,7 @@ function _buildNextWeekCard(){
   h+=_buildNwSquad();
   var _n=_nwDraft.team.length;
   h+='<button type="button" class="btn '+(_n>=XI_SIZE?'btn-ghost':'btn-teal')+' add-players only-narrow" onclick="_pickOpenLayer()">'+Ui.icon("plus",18)+(_n>=XI_SIZE?' Change players':' Add players ('+_n+'/'+XI_SIZE+')')+'</button>';
-  if(_nwDraft.team.length>0)h+='<div class="cap-hint"><span><span class="badge badge-c">C</span> \xd72 \u2014 tap C</span><span><span class="badge badge-vc">VC</span> \xd71.5 \u2014 tap V</span></div>';
+
   h+='</div>';
   return '<div class="nw-layout"><div class="nw-left">'+h+'</div><div class="nw-right'+(_pickOpen?' layer-open':'')+'">'+_buildPicker()+'</div></div>';
 }
@@ -608,15 +741,32 @@ function _buildAdminCompetitionsCard(){
   });
   h+='</div>';
   if(_imp.slug)h+=_buildImportPanel();
-  var ist='background:var(--sheet);color:var(--text);border:1px solid color-mix(in srgb, var(--gold-line) 48%, transparent);border-radius:7px;padding:6px 8px;font-size:12px;margin:2px 4px 2px 0';
-  h+='<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">';
-  h+='<p style="font-size:12px;color:var(--muted);margin-bottom:8px">New competition</p>';
-  h+='<input id="newcomp-slug" aria-label="Competition slug" placeholder="slug (e.g. sa20_2026)" style="'+ist+'">';
-  h+='<input id="newcomp-name" aria-label="Competition name" placeholder="name (e.g. SA20 2026)" style="'+ist+'">';
-  h+='<input id="newcomp-anchor" aria-label="Week-1 lock date (the Monday)" type="date" title="Week-1 date: the first Monday after the opening match" style="'+ist+'">';
-  h+='<button class="btn btn-teal btn-sm" onclick="_adminCreateComp()">Create</button>';
-  h+='</div></div>';
+  h+='<details class="pf newcomp" id="newcomp-box"'+(_newCompOpen?' open':'')+' ontoggle="_newCompOpen=this.open"><summary>'+Ui.icon("plus",18)+'<span>New competition</span>'+Ui.icon("down",16)+'</summary><div class="pf-body">';
+  h+='<div class="field"><label for="newcomp-name">Name</label><input id="newcomp-name" type="text" maxlength="40" autocomplete="off" placeholder="SA20 2027" oninput="_ncName(this.value)"><span class="hint">How it appears in the app, for example "SA20 2027".</span></div>';
+  h+='<div class="field"><label for="newcomp-slug">Short id (slug)</label><input id="newcomp-slug" type="text" maxlength="24" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sa20_2027" oninput="_ncSlug(this.value)"><span class="hint" id="nc-slug-h">Made from the name. Lower-case letters, numbers and _ only.</span></div>';
+  h+='<div class="field"><label for="newcomp-anchor">Week-1 date</label><input id="newcomp-anchor" type="date" oninput="_ncDate()" onchange="_ncDate()"><span class="hint" id="nc-date-h">The first Monday after the opening match. It sets every week\'s Monday lock and cannot be changed later.</span></div>';
+  h+='<button type="button" class="btn btn-teal" id="nc-create" onclick="_adminCreateComp()" disabled>Create competition</button>';
+  h+='</div></details></div>';
   return h;
+}
+var _newCompOpen=false,_ncSlugTouched=false;
+function _ncSlugify(s){return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,24);}
+function _ncName(v){if(!_ncSlugTouched){var s=document.getElementById("newcomp-slug");if(s)s.value=_ncSlugify(v);}_ncValidate();}
+function _ncSlug(v){_ncSlugTouched=true;var s=document.getElementById("newcomp-slug");if(s){var c=String(v).toLowerCase().replace(/[^a-z0-9_]/g,"");if(c!==s.value)s.value=c;}_ncValidate();}
+function _ncDate(){
+  var v=(document.getElementById("newcomp-anchor")||{}).value,h=document.getElementById("nc-date-h");if(!h)return;
+  if(!v){h.className="hint";h.textContent="The first Monday after the opening match. It sets every week's Monday lock and cannot be changed later.";return;}
+  var d=new Date(v+"T00:00:00Z"),days=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"],mon=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var label=days[d.getUTCDay()]+" "+d.getUTCDate()+" "+mon[d.getUTCMonth()]+" "+d.getUTCFullYear();
+  if(d.getUTCDay()!==1){h.className="hint err";h.textContent=label+" is not a Monday. Pick the Monday after the opening match.";}
+  else if(d.getTime()<Date.now()-86400000){h.className="hint warn";h.textContent=label+" is a Monday, but it is already in the past.";}
+  else{h.className="hint ok";h.textContent=label+" \u2713 a Monday, good.";}
+}
+function _ncValidate(){
+  var n=((document.getElementById("newcomp-name")||{}).value||"").trim(),s=(document.getElementById("newcomp-slug")||{}).value||"",h=document.getElementById("nc-slug-h"),b=document.getElementById("nc-create");
+  var taken=(_competitions||[]).some(function(c){return c.slug===s;}),ok=/^[a-z0-9_]{3,24}$/.test(s);
+  if(h){if(!s){h.className="hint";h.textContent="Made from the name. Lower-case letters, numbers and _ only.";}else if(taken){h.className="hint err";h.textContent="That id is already used.";}else if(!ok){h.className="hint err";h.textContent="Use 3 to 24 lower-case letters, numbers or _.";}else{h.className="hint ok";h.textContent="Looks good.";}}
+  if(b)b.disabled=!(n.length>=2&&ok&&!taken);
 }
 function _adminCompAction(action,slug){
   window.IplApi.adminCompetition({action:action,slug:slug}).then(function(d){
@@ -789,6 +939,7 @@ function _buildImportPanel(){
   return h;
 }
 
+function _adminSetFilter(v){_adminFilter=v;if(_state)render(_state);}
 function _adminNoLink(m){var u=m.scorecard_url||"",last=u.split("/").pop();return !last||last==="00000"||!/[1-9]/.test(last);}
 function _adminSections(){
   var noLink=_adminMatches?_adminMatches.filter(function(m){return m.status==="completed"&&_adminNoLink(m);}).length:null;
@@ -831,11 +982,9 @@ function _buildAdminMatchesCard(){
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMatches=null;_loadAdminMatches();if(_state)render(_state)">\u27F3 Refresh</button>';
   h+='</div>';
   h+='<p style="color:var(--muted);font-size:12px;margin-bottom:12px">Paste the Cricbuzz scorecard link for each match, then tap Save. Scores are collected by the scoring run on the admin PC (score_competition.py).</p>';
-  h+='<div class="admin-filter">';
-  [{v:"all",l:"All"},{v:"completed",l:"\uD83D\uDFE2 Completed"},{v:"upcoming",l:"\uD83D\uDD51 Upcoming"},{v:"no-id",l:"\u26A0 Missing IDs"}].forEach(function(f){
-    h+='<button class="admin-filter-btn'+(_adminFilter===f.v?' active':'')+'" onclick="_adminFilter=\''+f.v+'\';if(_state)render(_state)">'+f.l+'</button>';
-  });
-  h+='</div>';
+  var cnt={all:0,completed:0,upcoming:0,"no-id":0};
+  (_adminMatches||[]).forEach(function(m){cnt.all++;if(m.status==="completed")cnt.completed++;if(m.status==="upcoming")cnt.upcoming++;if(_adminNoLink(m))cnt["no-id"]++;});
+  h+=Ui.seg({id:"adm-filter",label:"Filter matches",value:_adminFilter,onSelect:"_adminSetFilter",cls:"sm adm-seg",options:[{v:"all",l:"All",n:cnt.all},{v:"completed",l:"Done",n:cnt.completed},{v:"upcoming",l:"Soon",n:cnt.upcoming},{v:"no-id",l:"No link",n:cnt["no-id"]}]});
   if(!_adminMatches){return h+'<p style="color:var(--muted);font-size:13px">Loading matches\u2026</p></div>';}
   var list=_adminMatches.filter(function(m){
     if(_adminFilter==="completed")return m.status==="completed";
@@ -883,7 +1032,7 @@ function _buildAdminMatchesCard(){
     // Meta row: internal ID + week + date
     h+='<div class="admin-match-meta">'+esc(m.id)+' \u00B7 '+esc(subLabel)+'</div>';
     h+='<div class="admin-url-row">';
-    h+='<input class="admin-url-input" id="'+inputId+'" type="url" placeholder="https://www.cricbuzz.com/live-cricket-scorecard/XXXXXX/..." value="'+esc(m.scorecard_url||'')+'">';
+    h+='<input class="admin-url-input" id="'+inputId+'" type="url" inputmode="url" autocapitalize="off" spellcheck="false" aria-label="Scorecard link for '+esc(displayTitle)+'" placeholder="https://www.cricbuzz.com/live-cricket-scorecard/XXXXXX/..." value="'+esc(m.scorecard_url||'')+'">';
     h+='<button class="admin-save-btn" id="btn-'+m.id+'" onclick="_adminSaveUrl(\''+escAttr(m.id)+"','"+inputId+"','"+statusId+'\')" >Save link</button>';
     h+='<span class="admin-save-status" id="'+statusId+'"></span>';
     h+='</div>';
@@ -907,9 +1056,9 @@ function _showPasscodePromptModal(name){
   if(existing)existing.remove();
   var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button onclick="_closePasscodePrompt()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button type="button" class="modal-x" aria-label="Close" onclick="_closePasscodePrompt()">×</button></div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your 4-digit passcode to sign in.</div>';
-  h+='<input id="passcode-input" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:24px;letter-spacing:14px;text-align:center;padding:14px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+=Ui.pin({id:"passcode-input",label:"4-digit passcode",describedby:"passcode-error"});
   h+='<div id="passcode-error" style="color:var(--danger-ink);font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
   h+='<button id="passcode-submit-btn" onclick="_submitPasscode(\''+escAttr(name)+'\')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Sign in</button>';
   h+='</div></div>';
@@ -937,7 +1086,7 @@ function _submitPasscode(name){
   var pc=inp?inp.value.trim():'';
   if(!/^\d{4}$/.test(pc)){
     if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';
-    if(inp){inp.value='';inp.focus();}
+    Ui.pinReset(inp,false);
     return;
   }
   if(btn){btn.disabled=true;btn.textContent='Signing in…';}
@@ -949,7 +1098,7 @@ function _submitPasscode(name){
   }).catch(function(e){
     var msg=(e&&e.serverMessage)?e.serverMessage:'Wrong passcode';
     if(errEl)errEl.textContent='⚠ '+msg;
-    if(inp){inp.value='';inp.focus();}
+    Ui.pinReset(inp,true);
     if(btn){btn.disabled=false;btn.textContent='Sign in';}
   });
 }
@@ -970,18 +1119,18 @@ function _showResetPasscodeModal(forced){
   var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">'+title+'</div>';
-  if(!forced)h+='<button onclick="_closeResetPasscode()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button>';
+  if(!forced)h+='<button type="button" class="modal-x" aria-label="Close" onclick="_closeResetPasscode()">×</button>';
   h+='</div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">'+sub+'</div>';
-  h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">New passcode</label>';
-  h+='<input id="rp-new" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;margin-bottom:10px;">';
-  h+='<label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Confirm new passcode</label>';
-  h+='<input id="rp-confirm" type="tel" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="••••" style="width:100%;font-size:22px;letter-spacing:12px;text-align:center;padding:12px;background:var(--field);border:1px solid var(--border);border-radius:10px;color:var(--text);font-weight:700;">';
+  h+='<label for="rp-new" class="pin-label">New passcode</label>';
+  h+=Ui.pin({id:"rp-new",label:"New passcode",describedby:"rp-error"})+'<div style="height:12px"></div>';
+  h+='<label for="rp-confirm" class="pin-label">Confirm new passcode</label>';
+  h+=Ui.pin({id:"rp-confirm",label:"Confirm new passcode",describedby:"rp-error"});
   h+='<div id="rp-error" style="color:var(--danger-ink);font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
   h+='<button id="rp-submit-btn" onclick="_submitResetPasscode('+(forced?'true':'false')+')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Save Passcode</button>';
   h+='</div></div>';
   var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
-  setTimeout(function(){var inp=document.getElementById('rp-new');if(inp)inp.focus();},50);
+  setTimeout(function(){var inp=document.getElementById('rp-new');if(inp){inp.focus();inp.addEventListener('input',function(){if(inp.value.length===4){var c=document.getElementById('rp-confirm');if(c)c.focus();}});}},50);
 }
 function _closeResetPasscode(){var m=document.getElementById('reset-passcode-modal');if(m)m.remove();}
 function _submitResetPasscode(forced){
@@ -989,7 +1138,7 @@ function _submitResetPasscode(forced){
   var errEl=document.getElementById('rp-error'),btn=document.getElementById('rp-submit-btn');
   var nv=n?n.value.trim():'',cv=c?c.value.trim():'';
   if(!/^\d{4}$/.test(nv)){if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';if(n)n.focus();return;}
-  if(nv!==cv){if(errEl)errEl.textContent='Passcodes do not match.';if(c){c.value='';c.focus();}return;}
+  if(nv!==cv){if(errEl)errEl.textContent='Passcodes do not match.';Ui.pinReset(c,true);return;}
   if(btn){btn.disabled=true;btn.textContent='Saving…';}
   if(errEl)errEl.textContent='';
   window.IplApi.changePasscode(nv).then(function(d){
@@ -1013,30 +1162,33 @@ function _submitResetPasscode(forced){
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
 function _showSwapModal(incomingId){
   var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
-  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-label="Swap a player" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
-  h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 32px;max-height:80vh;overflow-y:auto;">';
-  h+='<div style="font-size:13px;font-weight:700;color:var(--gold-ink);margin-bottom:3px;">\u21C4 Swap in: '+esc(inP.name)+(inP.price?' ('+inP.price.toFixed(1)+' CR)':'')+'</div>';
-  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:14px;">Select who to remove from your XI</div>';
+  var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-labelledby="swap-title" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  h+='<div class="swap-sheet" style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 28px;max-height:84vh;overflow-y:auto;">';
+  h+='<h2 id="swap-title" class="swap-title">'+Ui.icon("swap",22)+'<span>Swap in '+esc(inP.name)+'</span>'+(inP.price?'<span class="swap-price">'+inP.price.toFixed(1)+' CR</span>':'')+'</h2>';
+  h+='<p class="swap-sub">Your XI is full. Choose who leaves.</p><div role="group" aria-label="Choose who leaves your XI">';
   _nwDraft.team.forEach(function(id){
     var cur=resolvePlayer(id),avC=_avClass(cur.team),curPrice=cur.price||0;
     var diff=Math.round((inPrice-curPrice)*10)/10;
     var newRem=Math.round((_remaining()+curPrice-inPrice)*10)/10;
-    var canAfford=newRem>=-0.001;
-    var roleTeam=[cur.role,cur.team].filter(Boolean).join(' \u00B7 ')+(id===_nwDraft.cap?' \u00B7 C':(id===_nwDraft.vc?' \u00B7 VC':''));
-    var diffLabel=diff>0?'<span style="color:var(--danger-ink);font-size:10px;font-weight:600">\u2212'+diff.toFixed(1)+' CR</span>':diff<0?'<span style="color:var(--teal-ink);font-size:10px;font-weight:600">+'+Math.abs(diff).toFixed(1)+' CR</span>':'<span style="color:var(--muted);font-size:10px">Same cost</span>';
-    h+='<div onclick="'+(canAfford?'_doSwap(\''+escAttr(id)+'\',\''+escAttr(incomingId)+'\')':'')+'" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;background:var(--tint-1);border:1px solid var(--line);margin-bottom:7px;cursor:'+(canAfford?'pointer':'not-allowed')+';opacity:'+(canAfford?'1':'0.35')+'">';
-    h+='<div class="prow-avatar '+avC+'">'+esc(_initials(cur.name||id))+'</div>';
-    h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">'+esc(cur.name||id)+'</div><div style="font-size:10px;color:var(--muted)">'+esc(roleTeam)+'</div></div>';
-    h+='<div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--gold-ink)">'+(curPrice?curPrice.toFixed(1)+' CR':'')+'</div>'+diffLabel+'</div>';
-    h+='</div>';
+    var canAfford=newRem>=-0.001,need=Math.round(-newRem*10)/10;
+    var roleTeam=[cur.role,cur.team].filter(Boolean).join(' \u00B7 ')+(id===_nwDraft.cap?' \u00B7 Captain':(id===_nwDraft.vc?' \u00B7 Vice-captain':''));
+    var note=!canAfford?'<span class="swap-need">needs '+need.toFixed(1)+' CR more</span>':diff>0?'<span class="swap-up">\u2212'+diff.toFixed(1)+' CR</span>':diff<0?'<span class="swap-down">+'+Math.abs(diff).toFixed(1)+' CR back</span>':'<span class="swap-same">same cost</span>';
+    h+='<button type="button" class="swap-row'+(canAfford?'':' is-off')+'"'+(canAfford?' onclick="_doSwap(\''+escAttr(id)+'\',\''+escAttr(incomingId)+'\')"':' aria-disabled="true" onclick="Ui.warn(\'That swap needs '+need.toFixed(1)+' CR more.\')"')+'>';
+    h+='<span class="prow-avatar '+avC+'">'+esc(_initials(cur.name||id))+'</span>';
+    h+='<span class="swap-info"><span class="swap-name">'+esc(cur.name||id)+'</span><span class="swap-meta">'+esc(roleTeam)+'</span></span>';
+    h+='<span class="swap-cost"><b>'+(curPrice?curPrice.toFixed(1)+' CR':'')+'</b>'+note+'</span></button>';
   });
-  h+='<button onclick="_closeSwapModal()" style="margin-top:8px;width:100%;padding:10px;background:var(--tint-1);border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>';
-  h+='</div></div>';
+  h+='</div><button type="button" class="btn btn-ghost swap-cancel" onclick="_closeSwapModal()">Cancel</button></div></div>';
   var el=document.createElement('div');
   el.innerHTML=h;
   document.body.appendChild(el.firstChild);
+  _swapKey=function(e){if(e.key==='Escape'){e.preventDefault();_closeSwapModal();}};
+  document.addEventListener('keydown',_swapKey);
+  var first=document.querySelector('#swap-modal .swap-row:not(.is-off)')||document.querySelector('#swap-modal .swap-cancel');
+  if(first)first.focus();
 }
-function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.remove();}
+var _swapKey=null;
+function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.remove();if(_swapKey){document.removeEventListener('keydown',_swapKey);_swapKey=null;}}
 
 // ─── SCORING RULES MODAL ─────────────────────────────────────────────────────
 // Display copy — numbers must stay in sync with logic/scoring_engine.py (calc_pts).
@@ -1050,7 +1202,7 @@ function _showRulesModal(){
   var note='style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;"';
   var h ='<div id="rules-modal" role="dialog" aria-modal="true" aria-label="Scoring rules" onclick="if(event.target.id===\'rules-modal\')_closeRulesModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:560px;padding:18px 16px 32px;max-height:85vh;overflow-y:auto;">';
-  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">📖 Scoring Rules</div><button onclick="_closeRulesModal()" style="background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">×</button></div>';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">📖 Scoring Rules</div><button type="button" class="modal-x" aria-label="Close" onclick="_closeRulesModal()">×</button></div>';
   h+='<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">How fantasy points are calculated for each player, every match.</div>';
 
   h+='<div '+sec+'>🏏 Participation</div>';
@@ -1108,11 +1260,20 @@ function _showRulesModal(){
 function _closeRulesModal(){var m=document.getElementById('rules-modal');if(m)m.remove();}
 function _doSwap(removeId,addId){
   _closeSwapModal();
+  var at=_nwDraft.team.indexOf(removeId),wasCap=_nwDraft.cap===removeId,wasVc=_nwDraft.vc===removeId;
   _nwDraft.team=_nwDraft.team.filter(function(x){return x!==removeId;});
-  if(_nwDraft.cap===removeId)_nwDraft.cap=null;
-  if(_nwDraft.vc===removeId)_nwDraft.vc=null;
+  if(wasCap)_nwDraft.cap=null;
+  if(wasVc)_nwDraft.vc=null;
   _nwDraft.team.push(addId);
   if(_state)render(_state);
+  Ui.toast((resolvePlayer(addId).name||addId)+" in, "+(resolvePlayer(removeId).name||removeId)+" out",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){
+    if(_nwDraft.team.indexOf(addId)<0)return;
+    _nwDraft.team=_nwDraft.team.filter(function(x){return x!==addId;});
+    _nwDraft.team.splice(Math.min(at,_nwDraft.team.length),0,removeId);
+    if(wasCap)_nwDraft.cap=removeId;
+    if(wasVc)_nwDraft.vc=removeId;
+    if(_state)render(_state);
+  }}});
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
@@ -1231,7 +1392,7 @@ function _switchComp(slug){
   if(window.IplComp)IplComp.set(slug);
   _activeComp=slug;
   _players=null;_leaderboard=null;_historyData=null;
-  _nwDraft={team:[],cap:null,vc:null};
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;
   _bootstrap();
 }
 // UX-2: weekly deadline countdown + lock state (server provides _state.deadline)
@@ -1378,7 +1539,7 @@ function _bootstrap(){
           } else {
             clearUsername();render(_state||state);
           }
-        }).catch(function(){
+        },function(){   // second argument: only a failed whoami signs the user out, never an error thrown while rendering
           clearTimeout(_authGuard);_authPending=false;
           clearUsername();render(_state||state);
         });
@@ -1398,10 +1559,7 @@ function _bootstrap(){
     if(!state||_staleState(state))return;
     if(history&&history.ok){
       _historyData=history;_currentWeek=history.current_week;
-      if(_nwDraft.team.length===0){
-        var cur=_getCurrentWeekRow(history);
-        if(cur){var nw=cur.next_week,tw=cur.this_week;if(nw&&nw.team&&nw.team.length>0)_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};else if(tw&&tw.team&&tw.team.length>0)_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};}
-      }
+      if(_nwDraft.team.length===0)_nwInit(_getCurrentWeekRow(history));
     }
     render(state);
   }).catch(function(){});

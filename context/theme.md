@@ -41,3 +41,23 @@ as a 30% crayon fill with a darker ink of the same hue.
 
 * `node tools/gen_paper_mark.js` regenerates `mark-paper.svg` and `icon-paper.svg` (seeded, deterministic); `tools/make_brand_pngs.ps1` rasterises the PNG icons.
 * The sketch logo and the brush "BCL" wordmark are produced outside the repo (a raster illustration edited with scripts); only the exported PNGs live here.
+
+## Choosing a control (the kit in `paper.css` + `ui.js`)
+
+Pick the control by the job, not by habit. Everything below is accessible by keyboard, has a visible focus ring and a 44 px target on phones.
+
+| the job | the control | how |
+|---|---|---|
+| one choice from 2 to 5 short options (role, sort, filter) | **segmented control**, a radio group; arrow keys move the choice | `Ui.seg({id,label,value,options:[{v,l,n,cls}],onSelect:"fn"})`, `Ui.segSet(el,v)` |
+| one choice from many options (team, week) | **dropdown** (`<select>`, one custom arrow, 44 px) | plain `<select>` |
+| a value on a scale (maximum price) | **range slider** with a live value and a shortcut ("Fits my budget") | `<input class="range">`; `Ui.rangeFill` paints the track |
+| one role per person (regular / captain / vice-captain) | **radio rows in a bottom sheet** with a plain-language description | `Ui.sheet({title,subtitle,items:[{radio:true,label,desc,badge,checked,onClick}]})` |
+| a short secret (4-digit passcode) | **boxes drawn over one real input** (paste, autofill and the numeric keypad keep working), show/hide, shake on a wrong code | `Ui.pin({id,label})`, `Ui.pinReset(input,true)` |
+| moving through weeks | **stepper**: previous, dropdown, next | `.stepper` + `.stepper-btn` + `select.stepper-sel` |
+| a reversible but easy-to-misfire action (remove or swap a player) | do it, then offer **Undo** in the toast | `Ui.toast(msg,{action:{label:"Undo",onClick}})` |
+| a labelled input with help or an error | **field**: label, control, one line of hint (`.hint.ok / .warn / .err`) | `.field` |
+| what is left to do before saving | **one status line** (never a tooltip: phones have no hover) | `.nw-hint.todo / .bad / .good` |
+
+Filters that narrow a list update it **in place** (no page rebuild), so typing, slider drags and focus are never interrupted, and active filters show as removable chips with a live result count.
+
+Touch targets: buttons are 44 px on a phone (40 px for the compact kind), icon buttons 44 px, list-row buttons 40 px. Use the in-page fit sweep idea (overflow, clipped text, targets under 40 px) after adding a screen.

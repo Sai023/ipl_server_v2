@@ -151,17 +151,31 @@
   Ui.sheet = function (o) {
     var prev = document.activeElement;
     var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd";
+    /* items: {label, hint, icon, danger, checked, divider, onClick}  plus, for a radio choice: {radio:true, desc, badge}
+       (a radio item shows a round marker, a second line of description and an optional C / VC style badge) */
     var html = '<div class="ui-sheet" role="dialog" aria-modal="true" aria-label="' + esc(o.title || "Menu") + '">' +
-      '<div class="ui-sheet-grip" aria-hidden="true"></div>' + (o.title ? '<h2 class="ui-sheet-title">' + esc(o.title) + "</h2>" : "") + '<div class="ui-sheet-list">';
+      '<div class="ui-sheet-grip" aria-hidden="true"></div>' + (o.title ? '<h2 class="ui-sheet-title' + (o.subtitle ? " has-sub" : "") + '">' + esc(o.title) + "</h2>" : "") +
+      (o.subtitle ? '<p class="ui-sheet-sub">' + esc(o.subtitle) + "</p>" : "") + '<div class="ui-sheet-list"' + (o.items && o.items.some(function (x) { return x.radio; }) ? ' role="menu"' : "") + ">";
     (o.items || []).forEach(function (it, i) {
       if (it.divider) { html += '<div class="ui-sheet-div"></div>'; return; }
-      html += '<button type="button" class="ui-sheet-item' + (it.danger ? " danger" : "") + '" data-i="' + i + '">' + (it.icon ? Ui.icon(it.icon, 20) : "") + '<span class="t">' + esc(it.label) + "</span>" + (it.hint ? '<span class="h">' + esc(it.hint) + "</span>" : "") + (it.checked ? '<span class="ck" aria-label="current">' + Ui.icon("check", 18) + "</span>" : "") + "</button>";
+      var rad = it.radio ? ' role="menuitemradio" aria-checked="' + (it.checked ? "true" : "false") + '"' : "";
+      html += '<button type="button" class="ui-sheet-item' + (it.danger ? " danger" : "") + (it.radio ? " radio" + (it.checked ? " on" : "") : "") + '" data-i="' + i + '"' + rad + ">" +
+        (it.radio ? '<span class="rd" aria-hidden="true"></span>' : (it.icon ? Ui.icon(it.icon, 20) : "")) +
+        '<span class="tx"><span class="t">' + esc(it.label) + "</span>" + (it.desc ? '<span class="d">' + esc(it.desc) + "</span>" : "") + "</span>" +
+        (it.badge ? '<span class="bdg bdg-' + esc(String(it.badge).toLowerCase()) + '" aria-hidden="true">' + esc(it.badge) + "</span>" : "") +
+        (it.hint ? '<span class="h">' + esc(it.hint) + "</span>" : "") +
+        (!it.radio && it.checked ? '<span class="ck" aria-label="current">' + Ui.icon("check", 18) + "</span>" : "") + "</button>";
     });
     bd.innerHTML = html + "</div></div>";
     document.body.appendChild(bd);
     function close() { document.removeEventListener("keydown", onKey, true); if (bd.parentNode) bd.parentNode.removeChild(bd); try { if (prev && prev.focus) prev.focus(); } catch (e) {} }
     function onKey(e) {
       if (e.key === "Escape") { e.preventDefault(); close(); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {         // menu keys: move between the choices
+        var items = [].slice.call(bd.querySelectorAll(".ui-sheet-item")), at = items.indexOf(document.activeElement);
+        if (!items.length) return; e.preventDefault();
+        items[(at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
+      }
       else if (e.key === "Tab") {
         var f = bd.querySelectorAll("button"); if (!f.length) return;
         if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
@@ -173,7 +187,7 @@
     bd.querySelectorAll(".ui-sheet-item").forEach(function (b) {
       b.onclick = function () { var it = o.items[+b.getAttribute("data-i")]; close(); if (it && it.onClick) it.onClick(); };
     });
-    var first = bd.querySelector(".ui-sheet-item"); if (first) first.focus();
+    var first = bd.querySelector(".ui-sheet-item.on") || bd.querySelector(".ui-sheet-item"); if (first) first.focus();   // start on the current choice
     return close;
   };
 
@@ -247,4 +261,71 @@
     }
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", Ui.boot.start); else Ui.boot.start();
+
+  /* ---------- more icons ---------- */
+  ICON_PATHS.trash = '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>';
+  ICON_PATHS.eye = '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>';
+  ICON_PATHS.eyeoff = '<path d="M3 3l18 18"/><path d="M6.6 6.6C3.7 8.4 2 12 2 12s4 7 10 7c1.7 0 3.2-.5 4.5-1.2M10 5.1A9 9 0 0 1 12 5c6 0 10 7 10 7a16 16 0 0 1-2.5 3.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>';
+  ICON_PATHS.sliders = '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>';
+  ICON_PATHS.close = '<path d="M6 6l12 12M18 6 6 18"/>';
+  ICON_PATHS.swap = '<path d="M7 7h12l-3-3M17 17H5l3 3"/>';
+  ICON_PATHS.undo = '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>';
+
+  /* ---------- segmented control: a radio group drawn as joined buttons; arrow keys move the choice ----------
+     Ui.seg({id, label, value, options:[{v, l, n, cls, title}], onSelect:"fnName", cls}) -> html. onSelect is called with the option's value (a string).
+     Ui.segSet(el, value) changes the choice in place (the focused button stays where it is). */
+  Ui.seg = function (o) {
+    var h = '<div class="seg' + (o.cls ? " " + o.cls : "") + '"' + (o.id ? ' id="' + esc(o.id) + '"' : "") + ' role="radiogroup" aria-label="' + esc(o.label || "") + '">';
+    (o.options || []).forEach(function (op) {
+      var on = String(op.v) === String(o.value);
+      h += '<button type="button" role="radio" class="seg-opt' + (on ? " on" : "") + (op.cls ? " " + op.cls : "") + '" aria-checked="' + (on ? "true" : "false") + '" tabindex="' + (on ? 0 : -1) + '" data-v="' + esc(op.v) + '"' +
+        (op.title ? ' title="' + esc(op.title) + '"' : "") + ' onclick="' + o.onSelect + "(this.getAttribute('data-v'))\"><span class=\"seg-l\">" + esc(op.l) + "</span>" + (op.n != null ? '<span class="seg-n">' + esc(op.n) + "</span>" : "") + "</button>";
+    });
+    return h + "</div>";
+  };
+  Ui.segSet = function (el, value) {
+    if (!el) return;
+    [].forEach.call(el.querySelectorAll(".seg-opt"), function (b) { var on = b.getAttribute("data-v") === String(value); b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false"); b.tabIndex = on ? 0 : -1; });
+  };
+  document.addEventListener("keydown", function (e) {
+    var b = e.target; if (!b || !b.classList || !b.classList.contains("seg-opt")) return;
+    var step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }, opts = [].slice.call(b.parentNode.querySelectorAll(".seg-opt")), at = opts.indexOf(b), to = -1;
+    if (step[e.key]) to = (at + step[e.key] + opts.length) % opts.length; else if (e.key === "Home") to = 0; else if (e.key === "End") to = opts.length - 1;
+    if (to < 0) return; e.preventDefault(); opts[to].focus(); opts[to].click();
+  });
+
+  /* ---------- range slider: the filled part of the track follows the thumb (CSS reads --p) ---------- */
+  Ui.rangeFill = function (el) { var mn = +el.min || 0, mx = +el.max || 100, v = +el.value; el.style.setProperty("--p", (mx > mn ? (v - mn) / (mx - mn) * 100 : 0) + "%"); };
+  document.addEventListener("input", function (e) { var t = e.target; if (t && t.classList && t.classList.contains("range")) Ui.rangeFill(t); }, true);
+
+  /* ---------- passcode boxes: N boxes drawn over ONE real input, so paste, backspace, autofill and the numeric keypad all just work ----------
+     Ui.pin({id, label, length, describedby}) -> html; the real <input id> keeps its value, so callers read it as before.
+     Ui.pinReset(input, shake) clears it (and shakes the boxes on a wrong code). */
+  Ui.pin = function (o) {
+    var n = o.length || 4, cells = ""; for (var i = 0; i < n; i++) cells += '<span class="pin-cell"></span>';
+    return '<div class="pin" data-len="' + n + '"><div class="pin-box">' + cells +
+      '<input id="' + esc(o.id) + '" class="pin-input" type="tel" inputmode="numeric" pattern="\\d{' + n + '}" maxlength="' + n + '" autocomplete="off" aria-label="' + esc(o.label || "Passcode") + '"' + (o.describedby ? ' aria-describedby="' + esc(o.describedby) + '"' : "") + "></div>" +
+      '<button type="button" class="pin-eye" aria-label="Show digits" aria-pressed="false">' + Ui.icon("eye", 20) + "</button></div>";
+  };
+  function pinSync(inp) {
+    var p = inp.closest(".pin"); if (!p) return;
+    var v = inp.value.replace(/\D/g, "").slice(0, +p.getAttribute("data-len")); if (v !== inp.value) inp.value = v;
+    if (v) p.classList.remove("shake");                                  // typing again clears the error look
+    var reveal = p.classList.contains("reveal"), cells = p.querySelectorAll(".pin-cell"), focused = document.activeElement === inp;
+    /* masked digits are drawn as dots by CSS; the digit itself only appears while "show" is on */
+    [].forEach.call(cells, function (c, i) { c.textContent = v.charAt(i) && reveal ? v.charAt(i) : ""; c.classList.toggle("filled", !!v.charAt(i)); c.classList.toggle("cur", focused && i === Math.min(v.length, cells.length - 1)); });
+  }
+  Ui.pinSync = pinSync;
+  Ui.pinReset = function (inp, shake) {
+    if (!inp) return; inp.value = ""; pinSync(inp);
+    if (shake) { var p = inp.closest(".pin"); if (p) { p.classList.remove("shake"); void p.offsetWidth; p.classList.add("shake"); } }
+    inp.focus();
+  };
+  ["input", "focusin", "focusout"].forEach(function (ev) { document.addEventListener(ev, function (e) { if (e.target && e.target.classList && e.target.classList.contains("pin-input")) pinSync(e.target); }, true); });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest(".pin-eye"); if (!b) return;
+    var p = b.closest(".pin"), on = !p.classList.contains("reveal"), inp = p.querySelector(".pin-input");
+    p.classList.toggle("reveal", on); b.setAttribute("aria-pressed", on ? "true" : "false"); b.setAttribute("aria-label", on ? "Hide digits" : "Show digits"); b.innerHTML = Ui.icon(on ? "eyeoff" : "eye", 20);
+    pinSync(inp); inp.focus();
+  });
 })();
