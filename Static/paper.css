@@ -49,7 +49,8 @@ h2.page-title, .mc-tb-title, h3.section-title { background: linear-gradient(tran
 /* a second, slightly misplaced pencil line: the sketchy double stroke */
 .card::before, .mc-stat-box::before, .mc-week::before, .member-xi-card::before, .picker-shell::before, .admin-row::before, .comp-row::before, .pod::before, .action-banner::before {
   content: ""; position: absolute; inset: -3px -2px -2px -3px; pointer-events: none; z-index: 0;
-  border: 1px solid color-mix(in srgb, var(--pencil) 24%, transparent); border-radius: 18px 14px 17px 15px / 14px 18px 15px 17px; transform: rotate(-.16deg);
+  border: 1px solid color-mix(in srgb, var(--pencil) 24%, transparent); border-radius: 18px 14px 17px 15px / 14px 18px 15px 17px;
+  /* no rotate(): a tilt swings the far corners by (height x angle), so tall cards (a 74-row admin list) drifted 17px and scrolled sideways. The uneven radii and insets already look hand-drawn. */
 }
 .mc-week { overflow: visible; }
 .card-teal { border-color: var(--border-strong); }
@@ -418,6 +419,7 @@ button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text
 /* ---------- touch targets: 44px for buttons on a phone (40px for the compact kind), never a sliver ---------- */
 .range { height: 40px; }
 .admin-save-btn { min-height: 32px; padding: 6px 12px; }
+.admin-url-current a { padding: 6px 2px; }
 @media (max-width: 759px), (pointer: coarse) {
   .btn, .btn-refresh, .nw-budget-bar .btn { min-height: 44px; }
   .btn-sm, .nw-budget-bar .btn.btn-sm { min-height: 40px; }
@@ -425,7 +427,7 @@ button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text
   .seg.sm .seg-opt { min-height: 42px; }
   .admin-save-btn { min-height: 40px; padding: 8px 14px; }
   .admin-url-input { min-height: 44px; }
-  .admin-url-current a { display: inline-block; padding: 10px 2px; }
+  .admin-url-current a { display: inline-block; padding: 0 2px; line-height: 44px; }
 }
 
 /* ---------- the swap sheet ---------- */
@@ -449,7 +451,6 @@ button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text
 .modal-x, .mm-close { width: 44px; height: 44px; display: grid; place-items: center; flex-shrink: 0; background: transparent; border: 0; border-radius: 50%; color: var(--muted); font-size: 26px; line-height: 1; cursor: pointer; }
 .modal-x:hover, .mm-close:hover { background: var(--tint-2); color: var(--text-strong); }
 .mm-close { top: 8px; right: 8px; font-size: 22px; background: var(--tint-2); }
-.admin-url-current a { padding: 12px 2px; }
 #rules-modal button[onclick*="_closeRulesModal"] { min-height: 44px; }
 .icon-btn, .avatar-btn { width: 44px; height: 44px; flex-shrink: 0; }
 .swap-title, .swap-title span { font-family: var(--font-hand); letter-spacing: 0; }

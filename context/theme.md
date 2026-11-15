@@ -61,3 +61,5 @@ Pick the control by the job, not by habit. Everything below is accessible by key
 Filters that narrow a list update it **in place** (no page rebuild), so typing, slider drags and focus are never interrupted, and active filters show as removable chips with a live result count.
 
 Touch targets: buttons are 44 px on a phone (40 px for the compact kind), icon buttons 44 px, list-row buttons 40 px. Use the in-page fit sweep idea (overflow, clipped text, targets under 40 px) after adding a screen.
+
+Gotcha: never `rotate()` or `skew()` a box whose height is unbounded (a card with a 74-row list, the player picker). Its far corners swing sideways by about height x angle, so a 0.16 degree tilt on a 12,000 px card moved the outline 17 px and made the page scroll sideways. Tilt only small, fixed-size decorations (tape, stickers); the card outline gets its hand-drawn look from uneven corner radii and insets instead. When a fit check looks clean, still compare `documentElement.scrollWidth` with `clientWidth` on the longest screen once its data has loaded.
