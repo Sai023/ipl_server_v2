@@ -1,5 +1,5 @@
-// Renders the generated Android drawables (Static/brand/android/*.xml) as an HTML preview: the launcher masks a phone applies
-// (circle / squircle / rounded square), the safe-zone ring, the themed (monochrome) icon and the splash logo.
+// Renders the generated Android drawables (Static/brand/android/*.xml, made by tools/gen_android_paper_icon.js) as an HTML preview: the
+// launcher masks a phone applies (circle / squircle / rounded square), the safe-zone ring, the themed (monochrome) icon and the pencil line.
 //   node tools/preview_android_icon.js [out.html]     (default: a file in your temp folder; open it in a browser)
 // It parses the real XML files, so what you see is what the APK contains.
 const fs = require('fs'), path = require('path');
@@ -52,7 +52,7 @@ function pathSvg(p) {
   return `<path d="${p.d}" fill="${fill}" fill-opacity="${fill === 'none' ? 0 : fo}" stroke="${stroke}" stroke-opacity="${p.sa || 1}" stroke-width="${p.strokeWidth || 0}" stroke-linecap="${p.cap || 'butt'}"/>`;
 }
 const load = (n) => toSvg(fs.readFileSync(path.join(DIR, n), 'utf8'));
-const bg = load('ic_launcher_background.xml'), fg = load('ic_launcher_foreground.xml'), mono = load('ic_launcher_monochrome.xml'), spl = load('ic_splash_logo.xml');
+const bg = load('ic_launcher_background.xml'), fg = load('ic_launcher_foreground.xml'), mono = load('ic_launcher_monochrome.xml'), pen = load('pencil_line.xml');
 
 const layers = (extra = '') => `<defs>${bg.defs}${fg.defs}${extra}</defs>`;
 const shapes = {
@@ -71,8 +71,7 @@ ${Object.entries(shapes).map(([k, fn]) => tile(k, fn)).join('')}
 <figure><svg width="260" height="260" viewBox="0 0 108 108">${layers()}${bg.body}${fg.body}<circle cx="54" cy="54" r="33" fill="none" stroke="#fff" stroke-opacity=".7" stroke-dasharray="2 2" stroke-width=".6"/><circle cx="54" cy="54" r="36" fill="none" stroke="#ff5a5a" stroke-opacity=".8" stroke-width=".6"/></svg><figcaption>foreground + background</figcaption></figure>
 <h4>Android 13 themed icon (monochrome layer, tinted by the wallpaper)</h4>
 <figure class="light"><svg width="132" height="132" viewBox="18 18 72 72"><defs><clipPath id="mc"><circle cx="54" cy="54" r="36"/></clipPath></defs><g clip-path="url(#mc)"><rect width="108" height="108" fill="#cfe0ff"/><g style="filter:none">${mono.body.replace(/#000000/g, '#1f3a6d')}</g></g></svg><figcaption>themed</figcaption></figure>
-<h4>Splash / error-screen logo (rounded tile, drawn at 112dp)</h4>
-<figure><svg width="112" height="112" viewBox="0 0 108 108"><defs>${spl.defs}</defs>${spl.body}</svg><figcaption>splash</figcaption></figure>
-<figure style="background:#07111F;padding:18px;border-radius:12px"><svg width="84" height="84" viewBox="0 0 108 108" style="opacity:.6"><defs>${spl.defs}</defs>${spl.body}</svg><figcaption>error screen (alpha .6)</figcaption></figure>`;
+<h4>Pencil line under the native loading splash (190 x 14dp, on the paper colour)</h4>
+<figure style="background:#F3EBD8;padding:18px;border-radius:12px"><svg width="190" height="14" viewBox="0 0 190 14"><defs>${pen.defs}</defs>${pen.body}</svg><figcaption style="color:#4A4337">pencil line</figcaption></figure>`;
 fs.writeFileSync(OUT, html);
 console.log('preview written:', OUT);

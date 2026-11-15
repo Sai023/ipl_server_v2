@@ -83,7 +83,8 @@ function drawing(seed = 11) {
   let hatB = ''; for (let k = 0; k < 7; k++) { const x = bc[0] + 8 + k * 6, y0 = bc[1] + 20 + k * 2.3; hatB += `M${f(x)} ${f(y0)}l-9 12`; }
   body.push(`<g clip-path="url(#bclip)">${seamSvg}${stroke(hatB, 1.2, .38, PAL.seam)}<ellipse cx="${bc[0] - 15}" cy="${bc[1] - 17}" rx="8.5" ry="5.5" transform="rotate(-35 ${bc[0] - 15} ${bc[1] - 17})" fill="#fff" fill-opacity=".55"/></g>`);
   body.push(sketch(bp, true, R, 3.2));
-  return { defs: defs.join(''), body: body.join('') };
+  // `shapes` is the bare geometry (no pencil wobble) for tools that redraw the mark another way, e.g. tools/gen_android_paper_icon.js
+  return { defs: defs.join(''), body: body.join(''), shapes: { planks: planks.map((p) => p.poly), bail, ball: { c: bc, r: br, poly: bp } } };
 }
 
 // fit the drawing to a 256 viewBox (the bounding box is measured from the drawing's own control points)
@@ -101,4 +102,4 @@ if (require.main === module) {
   fs.writeFileSync(path.join(OUT, 'icon-paper.svg'), svgMark({ tile: true }));
   console.log('wrote Static/brand/mark-paper.svg and icon-paper.svg');
 }
-module.exports = { svgMark };
+module.exports = { svgMark, drawing, smooth, rng, wobble, PAL };
