@@ -349,9 +349,12 @@
   // ── 60-SECOND POLLING LOOP ─────────────────────────────────────────────
 
   function _pollCycle() {
+    var c0 = (window.IplComp && IplComp.get && IplComp.get()) || "";
+    var same = function () { return ((window.IplComp && IplComp.get && IplComp.get()) || "") === c0; };   // the competition can change while a request is in flight
     return _fetchJson("/api/poll")
       .then(function (poll) {
         _cancelOverlay();
+        if (!same()) return;
         var serverEtag = poll && poll.state_etag;
         if (!serverEtag || serverEtag === _lastStateEtag) return;
         // Also refresh /api/players on ETag change — the scraper adds new
@@ -366,6 +369,7 @@
           IplApi.getPlayers().catch(function () { return null; }),
         ])
           .then(function (results) {
+            if (!same()) return;
             var state = results[0]; var lb = results[1]; var pl = results[2];
             if (pl)    { window.dispatchEvent(new CustomEvent("ipl:players-updated", { detail: pl })); }
             if (state) { _lastStateEtag = state._saved || serverEtag; window.dispatchEvent(new CustomEvent("ipl:state-updated", { detail: state })); }

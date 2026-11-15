@@ -196,6 +196,7 @@
   Ui.accOpen = function (id, def) { return Object.prototype.hasOwnProperty.call(_acc, id) ? _acc[id] : !!def; };
   Ui.accToggle = function (el) { var id = el.getAttribute("data-acc"), def = el.getAttribute("data-def") === "1"; if (el.open === def) delete _acc[id]; else _acc[id] = el.open; };
   Ui.accAll = function (selector, open) { document.querySelectorAll(selector).forEach(function (d) { d.open = open; Ui.accToggle(d); }); };
+  Ui.accClear = function (prefix) { Object.keys(_acc).forEach(function (k) { if (k.indexOf(prefix) === 0) delete _acc[k]; }); };   // forget what was opened under a prefix (e.g. when the competition changes)
 
   /* ---------- status cards ---------- */
   Ui.stateHtml = function (kind, o) {

@@ -23,13 +23,22 @@
   'use strict';
 
   // ── Module state ──────────────────────────────────────────────────────
+  // The Match Centre answer is cached per competition: _mcComp says which one _mcData belongs to, and _mcSeq numbers the requests so an
+  // answer that arrives after a reset or a competition switch is dropped instead of being shown under the wrong competition.
   var _mcData    = null;
+  var _mcComp    = '';
+  var _mcUser    = '';
+  var _mcStale   = false;   // true: _mcData is still shown while a newer copy is fetched in the background
   var _mcLoading = false;
+  var _mcSeq     = 0;
 
-  window.addEventListener('ipl:state-updated', function () {
-    _mcData    = null;
-    _mcLoading = false;
-  });
+  function _curComp() { try { return (window.IplComp && IplComp.get && IplComp.get()) || ''; } catch (e) { return ''; } }
+  function _mcReset()     { _mcData = null; _mcComp = ''; _mcUser = ''; _mcStale = false; _mcLoading = false; _mcSeq++; }
+  // New scores or a refresh: keep showing what we have (no spinner flash) and fetch it again quietly.
+  function _mcMarkStale() { _mcStale = true; _mcLoading = false; _mcSeq++; }
+
+  window.addEventListener('ipl:state-updated', _mcMarkStale);
+  window.addEventListener('ipl:comp-changed',  _mcReset);   // switching competition must never leave the previous one's Match Centre on screen
 
   // ── Responsive tab nav (Phase 9.5) ───────────────────────────────────────
   /**
@@ -138,19 +147,33 @@
   // ── Hub renderer ────────────────────────────────────────────────────────
   function _renderHub(d) {
     var s = d.season || {};
+    var weeks = d.weeks || [];
     var h = '<div id="match-centre-tab">';
 
-    h += '<div class="mc-stats-bar">';
-    h += _statBox(s.total_pts     || 0, 'Total Pts',   false);
-    h += _statBox(s.matches_played|| 0, 'Matches',     false);
-    h += _statBox(s.avg_per_match || 0, 'Avg / Match', false);
-    var bestLbl = s.best_match
-      ? 'Best: ' + _esc(s.best_match.replace(/ vs .*/, '') || 'match')
-      : 'Best match';
-    h += _statBox(s.best_pts || 0, bestLbl, true);
-    h += '</div>';
+    // Before the first match there is nothing to total up: say so, instead of four zeros.
+    var started = (s.matches_played || 0) > 0 || weeks.some(function (w) { return (w.matches_played || 0) > 0; });
+    if (started) {
+      h += '<div class="mc-stats-bar">';
+      h += _statBox(s.total_pts     || 0, 'Total Pts',   false);
+      h += _statBox(s.matches_played|| 0, 'Matches',     false);
+      h += _statBox(s.avg_per_match || 0, 'Avg / Match', false);
+      var bestLbl = s.best_match
+        ? 'Best: ' + _esc(s.best_match.replace(/ vs .*/, '') || 'match')
+        : 'Best match';
+      h += _statBox(s.best_pts || 0, bestLbl, true);
+      h += '</div>';
+    } else if (weeks.length) {
+      var nMatches = 0, firstDate = '';
+      weeks.forEach(function (w) {
+        nMatches += w.total_matches || (w.matches || []).length;
+        if (!firstDate && w.matches && w.matches.length && w.matches[0].date_label) firstDate = w.matches[0].date_label;
+      });
+      h += '<div class="mc-preseason"><h3>The season hasn\u2019t started</h3><p>'
+         + (firstDate ? 'First match <b>' + _esc(firstDate) + '</b> \u00B7 ' : '')
+         + nMatches + ' matches over ' + weeks.length + (weeks.length === 1 ? ' week' : ' weeks')
+         + '. Your points will appear here as matches are played.</p></div>';
+    }
 
-    var weeks = d.weeks || [];
     if (!weeks.length) {
       h += (window.Ui ? Ui.stateHtml('empty', {title: 'No matches yet', message: 'Fixtures will appear here as soon as they are added.'}) : '<p class="empty">No matches yet.</p>');
     }
@@ -168,7 +191,7 @@
       h += '<details class="acc mc-week" data-acc="mcw-' + wk.week_no + '" data-def="' + (wk.week_no === openWk ? 1 : 0) + '" ontoggle="Ui.accToggle(this)"' + (open ? ' open' : '') + '>';
       h += '<summary class="mc-week-hdr">';
       h += '<span class="mc-week-lbl">Week ' + wk.week_no + '</span>';
-      h += '<span class="mc-week-meta"><span class="mc-week-pts">' + (wk.week_pts || 0) + ' pts</span>'
+      h += '<span class="mc-week-meta"><span class="mc-week-pts">' + (played ? (wk.week_pts || 0) + ' pts' : '\u2014') + '</span>'
          + '<span class="mc-week-prog">' + played + '/' + total + ' played</span>' + Ui.icon('down', 18) + '</span>';
       h += '</summary><div class="mc-week-body">';
 
@@ -388,26 +411,35 @@
       return '<div id="match-centre-tab" class="card">'
            + '<p class="empty">Log in to view your Match Centre.</p></div>';
     }
-    if (_mcData) return _renderHub(_mcData);
+    var comp = _curComp(), user = window._username;
+    if (_mcData && (_mcComp !== comp || _mcUser !== user)) _mcReset();   // another competition or member: never show it
+    if (_mcData && !_mcStale) return _renderHub(_mcData);
 
     if (!_mcLoading) {
       _mcLoading = true;
-      IplApi.getMatchCentre(window._username)
+      var seq = ++_mcSeq;
+      IplApi.getMatchCentre(user)
         .then(function (d) {
+          if (seq !== _mcSeq) return;   // reset or competition switch since this request was made: the answer is stale
           _mcLoading = false;
           if (d && d.ok) {
             _mcData = d;
+            _mcComp = comp;
+            _mcUser = user;
+            _mcStale = false;
             if (window._state && window._activeTab === 'match-centre') {
               render(window._state);
             }
           }
         })
         .catch(function (err) {
+          if (seq !== _mcSeq) return;
           _mcLoading = false;
           console.warn('[MC] fetch failed:', err && err.message ? err.message : err);
         });
     }
 
+    if (_mcData) return _renderHub(_mcData);   // a stale copy for this competition and member stays on screen while the fresh one loads
     return '<div id="match-centre-tab" class="card" style="min-height:160px">'
          + '<div class="mm-loading"><div class="ui-spinner" aria-hidden="true"></div>Loading Match Centre\u2026</div>'
          + '</div>';

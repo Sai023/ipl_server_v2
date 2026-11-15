@@ -455,3 +455,12 @@ button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text
 .icon-btn, .avatar-btn { width: 44px; height: 44px; flex-shrink: 0; }
 .swap-title, .swap-title span { font-family: var(--font-hand); letter-spacing: 0; }
 .swap-title .swap-price { font-family: var(--font); white-space: nowrap; flex-shrink: 0; }
+
+/* ---------- Match Centre before the first match: one sticky note instead of four zeros ---------- */
+.mc-preseason { margin: 0 0 18px; padding: 14px 16px 15px; background: color-mix(in srgb, var(--gold-wash) 30%, var(--sheet-2)); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand); box-shadow: 2px 3px 0 color-mix(in srgb, var(--pencil) 22%, transparent); }
+.mc-preseason h3 { margin: 0 0 4px; font: 700 28px/1.05 var(--font-hand); letter-spacing: 0; color: var(--text-strong); }
+.mc-preseason p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text); }
+.mc-preseason b { color: var(--text-strong); }
+
+/* the competition switcher in the app bar is a small text button: a 44px tap area with the layout unchanged (padding out, margin back in) */
+.brand-sub.as-btn { padding: 14px 10px; margin: -10px -10px -12px; }

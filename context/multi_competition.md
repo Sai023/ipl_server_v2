@@ -195,3 +195,23 @@ fallback (true until the first namespaced write for that competition).
 > status and the switcher lists `upcoming` competitions, so members can build
 > their week-1 XI as soon as a competition's players are seeded — before it is
 > activated or its first match is played.
+
+## Switching competitions in the browser (client-side state)
+
+The page can show any competition: `IplComp` (`Static/ipl_glue.js`) stores the slug and adds `?comp=` to every `/api/*` call made through
+`_fetchJson`. Everything the page keeps for ONE competition must be dropped when the selection changes, or the previous competition shows
+through (seen on a phone, 2026-11-15: the Matches tab kept IPL's totals and weeks under the SA20 header).
+
+- `_switchComp(slug)` (`templates/index.html`) bumps `_bootSeq`, calls `_resetCompScope()`, shows a loading card (`_renderSwitching`: the
+  app bar plus "Loading ...", never the old content) and runs `_bootstrap()`. A failed or hung (15 s) load becomes "Could not load ..."
+  with a Try again button (`_retrySwitch`).
+- `_resetCompScope()` is THE place that clears competition-scoped state: players, leaderboard, history and the selected week, the draft,
+  the picker filters, the admin match list, accordion memory (`Ui.accClear`); it also fires `ipl:comp-changed` for modules with their own
+  caches. **Any new competition-scoped client state must be reset there.**
+- Replies for a competition that is no longer selected are ignored: `_bootstrap` and the loaders compare `_bootSeq`, the glue's poll
+  compares the slug it started with, and `mc_hub.js` tags its cache with competition AND member and numbers its requests (`_mcSeq`).
+  New scores (`ipl:state-updated`) only mark the Match Centre stale: it keeps showing and refreshes quietly in the background.
+- A raw `fetch()` in the page must go through `_withComp(url)`; without `?comp=` the server answers for the ACTIVE competition. (This
+  is how the admin "Match links" list and "Save link" were pointing at IPL while SA20 was selected.)
+- Before the first match `mc_hub.js` shows a pre-season note instead of four zero totals, and a week with nothing played shows a dash.
+- Regression test: `node tests/js/mc_hub_cache.test.js` (also run by `python -m unittest discover -s tests`; skipped when Node is missing).

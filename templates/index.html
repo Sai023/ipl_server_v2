@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper1">
-  <link rel="stylesheet" href="/static/style.css?v=paper1">
-  <link rel="stylesheet" href="/static/ui.css?v=paper1">
-  <link rel="stylesheet" href="/static/screens.css?v=paper1">
-  <link rel="stylesheet" href="/static/paper.css?v=paper1">
+  <link rel="stylesheet" href="/static/theme.css?v=paper2">
+  <link rel="stylesheet" href="/static/style.css?v=paper2">
+  <link rel="stylesheet" href="/static/ui.css?v=paper2">
+  <link rel="stylesheet" href="/static/screens.css?v=paper2">
+  <link rel="stylesheet" href="/static/paper.css?v=paper2">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper1"></script>
+<script src="/static/ui.js?v=paper2"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -41,6 +41,7 @@ var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (sign
 var _pickerNotice=null,_pickerNoticeTimer=null;
 var _adminMatches=null,_adminFilter="all";
 var _adminMembersList=null;
+var _switching=false,_switchFailed=false,_swGuard=null,_weekKnown=false,_bootSeq=0;   // competition switch state (see _switchComp); _weekKnown: _currentWeek belongs to the competition on screen; _bootSeq: bumped on every switch so late replies for the old competition are dropped
 var members={},matches=[];
 var $app=document.getElementById("app"),$loading=document.getElementById("app-loading"),$errorBanner=document.getElementById("error-banner");
 
@@ -137,9 +138,10 @@ function switchTab(tab){
 // ─── HISTORY ────────────────────────────────────────────────────────────────
 function _loadHistory(){
   if(!_username||!window.IplApi)return;
+  var sq=_bootSeq;   // ignore a reply that arrives after the competition was switched
   window.IplApi.getHistory(_username).then(function(data){
-    if(!data||!data.ok)return;
-    _historyData=data;_currentWeek=data.current_week;
+    if(!data||!data.ok||sq!==_bootSeq)return;
+    _historyData=data;_currentWeek=data.current_week;_weekKnown=true;
     _nwInit(_getCurrentWeekRow(data));
     if(_state)render(_state);
   }).catch(function(e){console.error("[IPL] history:",e);});
@@ -147,9 +149,11 @@ function _loadHistory(){
 
 // ─── ADMIN MATCHES ────────────────────────────────────────────────────────────
 function _loadAdminMatches(){
-  fetch("/api/matches-status")
+  var sq=_bootSeq;   // ignore a reply that arrives after the competition was switched
+  fetch(_withComp("/api/matches-status"))   // without ?comp= the server answers for the ACTIVE competition (IPL), whatever is selected
     .then(function(r){return r.ok?r.json():null;})
     .then(function(d){
+      if(sq!==_bootSeq)return;
       if(d&&d.ok){_adminMatches=d.matches;}
       if(_state&&_activeTab==="admin")render(_state);
     }).catch(function(){});
@@ -162,7 +166,7 @@ function _adminSaveUrl(matchId,inputId,statusId){
   var btn=document.getElementById("btn-"+matchId);
   if(btn)btn.disabled=true;
   if(statusEl){statusEl.textContent="Saving\u2026";statusEl.className="admin-save-status";}
-  fetch("/api/update-match-url",{
+  fetch(_withComp("/api/update-match-url"),{
     method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+(localStorage.getItem("ipl_session_token")||"")},
     body:JSON.stringify({match_id:matchId,url:url})
   }).then(function(r){return r.json();})
@@ -326,7 +330,7 @@ function _doStateRefresh(onDone){
   Promise.all([stP,lbP,hP,plP]).then(function(results){
     var state=results[0],lb=results[1],history=results[2],players=results[3];
     if(state&&!_staleState(state)){
-      if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;}
+      if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;_weekKnown=true;}
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
       if(players&&players.ok!==false){_players=players;}
       window.dispatchEvent(new CustomEvent('ipl:state-updated'));
@@ -1293,7 +1297,7 @@ function _statusChip(c){
   return '<span class="chip done">🏁 Finished'+(c.champion?' · '+esc(c.champion):'')+'</span>';
 }
 function _buildAppBar(){
-  var c=_activeCompObj(),sub=(c.name?esc(c.name)+' \u00B7 ':'')+'Week '+_currentWeek;
+  var c=_activeCompObj(),sub=(c.name?esc(c.name):'')+(_weekKnown?(c.name?' \u00B7 ':'')+'Week '+_currentWeek:'');
   var subHtml=(_competitions&&_competitions.length>=2)
     ?'<button type="button" class="brand-sub as-btn" onclick="_openCompMenu()" aria-haspopup="dialog" aria-label="Competition: '+esc(c.name||"")+'. Tap to switch.">'+sub+Ui.icon("down",14)+'</button>'
     :'<div class="brand-sub">'+sub+'</div>';
@@ -1337,6 +1341,7 @@ function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
   if(_authPending)return;   // keep the loader up until we know which screen to show
   hideLoading();hideErrorBanner();
+  if(_switching){_renderSwitching();return;}   // a competition switch is in flight: the app bar and a loading card, never the previous competition's content
   var _preserveSearchFocus=false,_preserveSearchPos=0;
   if(_activeTab==="next"){
     var _prevInp=document.getElementById("picker-search-input");
@@ -1387,13 +1392,38 @@ function _withComp(url){
   if(!c||url.indexOf("comp=")!==-1)return url;
   return url+(url.indexOf("?")===-1?"?":"&")+"comp="+encodeURIComponent(c);
 }
+// Everything that belongs to ONE competition is reset here, so a switch can never show the previous competition's players, history,
+// draft, filters, admin lists or Match Centre under the new name. Modules with their own caches (mc_hub.js) listen for "ipl:comp-changed".
+// RULE: any new competition-scoped client state must be reset in this function.
+function _resetCompScope(){
+  _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_adminMatches=null;_adminFilter="all";
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;
+  _pickerSearch="";_pickerRole="All";_pickerTeam="All";_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;
+  _weekKnown=false;
+  if(window.Ui&&Ui.accClear){Ui.accClear("mcw-");Ui.accClear("mem-");}
+  window.dispatchEvent(new CustomEvent("ipl:comp-changed",{detail:{slug:_activeComp}}));
+}
 function _switchComp(slug){
   if(!slug||slug===_activeComp)return;
   if(window.IplComp)IplComp.set(slug);
   _activeComp=slug;
-  _players=null;_leaderboard=null;_historyData=null;
-  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;
+  _bootSeq++;   // answers to requests made for the previous competition are ignored from here on
+  _resetCompScope();
+  _startSwitching();
   _bootstrap();
+}
+function _startSwitching(){
+  _switching=true;_switchFailed=false;
+  clearTimeout(_swGuard);_swGuard=setTimeout(function(){if(_switching){_switchFailed=true;if(_state)render(_state);}},15000);   // never leave the loading card up for ever
+  if(_state)render(_state);
+}
+function _retrySwitch(){_bootSeq++;_startSwitching();_bootstrap();}
+function _renderSwitching(){
+  var c=_activeCompObj(),nm=c.name||"this competition";
+  var body=_switchFailed
+    ?Ui.stateHtml("error",{title:"Could not load "+nm,message:"Check your connection and try again.",retry:"_retrySwitch()",retryLabel:"Try again"})
+    :Ui.stateHtml("loading",{title:"Loading "+nm+"\u2026"});
+  $app.innerHTML=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1" aria-busy="'+(_switchFailed?"false":"true")+'"><div class="page-strip">'+_statusChip(c)+'</div>'+body+'</main>'+(_username?_buildBottomNav():"");
 }
 // UX-2: weekly deadline countdown + lock state (server provides _state.deadline)
 function _deadlineLocked(){
@@ -1505,6 +1535,7 @@ var _bootTries=0;
 function _bootRetry(){if(!$loading||_bootTries>=12)return;_bootTries++;setTimeout(function(){if(!_state)_bootstrap();},Math.min(2000*_bootTries,10000));}
 window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();});
 function _bootstrap(){
+  var seq=_bootSeq;   // replies that arrive after a competition switch belong to the old competition: every handler below drops them
   var savedUser=getSavedUsername();
   var compP=(window.IplApi&&window.IplApi.getCompetitions)?window.IplApi.getCompetitions().catch(function(){return null;}):Promise.resolve(null);
   var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
@@ -1513,6 +1544,7 @@ function _bootstrap(){
   var lbP=fetch(_withComp("/api/leaderboard"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   var wkP=fetch(_withComp("/api/current-week"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   compP.then(function(c){
+    if(seq!==_bootSeq)return;
     if(c&&c.ok){
       _competitions=c.competitions||[];
       _championship=c.championship||[];
@@ -1524,7 +1556,9 @@ function _bootstrap(){
     }
   });
   stP.then(function(state){
-    if(_staleState(state))return;
+    if(seq!==_bootSeq||_staleState(state))return;
+    if(_switching){_switching=false;clearTimeout(_swGuard);}   // the new competition's state is here: leave the loading card
+    if(_activeTab==="admin"&&_adminView==="matches"&&!_adminMatches)_loadAdminMatches();   // the Match links list was cleared by the switch: load the new competition's
     if(!_username){
       var savedTok=(window.IplAuth&&window.IplAuth.getToken)?window.IplAuth.getToken():null;
       if(savedUser&&savedTok&&state.members&&state.members[savedUser]&&window.IplApi){
@@ -1550,22 +1584,24 @@ function _bootstrap(){
     }
     render(state);
   }).catch(function(err){
+    if(seq!==_bootSeq)return;
     console.error("[IPL] bootstrap:",err);
+    if(_switching){_switchFailed=true;clearTimeout(_swGuard);if(_state)render(_state);}   // offer "Try again" instead of a card that never finishes
     showErrorBanner("Could not reach server \u2014 retrying\u2026");
     _bootRetry();
   });
   Promise.all([stP,hP]).then(function(results){
     var state=results[0],history=results[1];
-    if(!state||_staleState(state))return;
+    if(seq!==_bootSeq||!state||_staleState(state))return;
     if(history&&history.ok){
-      _historyData=history;_currentWeek=history.current_week;
+      _historyData=history;_currentWeek=history.current_week;_weekKnown=true;
       if(_nwDraft.team.length===0)_nwInit(_getCurrentWeekRow(history));
     }
     render(state);
   }).catch(function(){});
-  plP.then(function(pl){if(pl&&pl.ok!==false){setPlayers(pl);window.dispatchEvent(new CustomEvent("ipl:players-updated",{detail:pl}));}});
-  lbP.then(function(lb){if(lb){var norm=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;renderLeaderboard(norm);}});
-  wkP.then(function(d){if(d&&d.ok&&d.week_no!==_currentWeek){_currentWeek=d.week_no;if(_state)render(_state);}});
+  plP.then(function(pl){if(seq!==_bootSeq)return;if(pl&&pl.ok!==false){setPlayers(pl);window.dispatchEvent(new CustomEvent("ipl:players-updated",{detail:pl}));}});
+  lbP.then(function(lb){if(seq!==_bootSeq)return;if(lb){var norm=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;renderLeaderboard(norm);}});
+  wkP.then(function(d){if(seq!==_bootSeq)return;if(d&&d.ok){var ch=d.week_no!==_currentWeek||!_weekKnown;_currentWeek=d.week_no;_weekKnown=true;if(ch&&_state)render(_state);}});
 }
 
 var _glueReady=false;
@@ -1583,7 +1619,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper1"></script>
-<script src="/static/mc_hub.js?v=paper1"></script>
+<script src="/static/ipl_glue.js?v=paper2"></script>
+<script src="/static/mc_hub.js?v=paper2"></script>
 </body>
 </html>

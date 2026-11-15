@@ -22,5 +22,7 @@ for (const fam of ['gold', 'teal', 'danger', 'success', 'info', 'violet', 'orang
   for (const t of [0.3, 0.46]) check(`--${fam}-ink on ${fam} tint ${t * 100}% over --sheet`, ink, over(wash, surfaces.sheet, t));
   check(`--on-fill on --${fam}-fill`, hex(need('on-fill')), fill, 7);
 }
+// the Match Centre pre-season note: text on the butter tint it sits on
+for (const t of ['text', 'text-strong']) check(`--${t} on gold tint 30% over --sheet-2 (pre-season note)`, hex(need(t)), over(hex(need('gold-wash')), surfaces['sheet-2'], 0.3));
 console.log(`${checks} checks, ${fails} failing`);
 process.exit(fails ? 1 : 0);
