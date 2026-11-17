@@ -46,7 +46,7 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.13.1"
+APP_VERSION = "2.14.0"
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
@@ -64,7 +64,7 @@ ROUTES_VER       = "1.10.0" # UI redesign: /api/state carries "competition"; pap
                             #           passcode + admin surface only; rest of API unchanged.
 DB_VER           = "6.3"    # get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
                             # Phase 12: members + sessions tables (passcode hash + bearer tokens)
-SCRAPER_VER      = "11.0"   # Phase 9: FIX-020/021/022/023 — schedule.json consumer,
+SCRAPER_VER      = "11.1"   # SA20 scoring: persist_player hook so score_competition.py can add players in Postgres (legacy SQLite path unchanged). Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
 INIT_DB_VER      = "1.1.0"  # Phase 12: _auto_seed_members_if_needed backfill (1234 + must_change=1)
 TASKS_VER        = "2.0.0"  # Phase 9: APScheduler daily 23:55 IST + run_discovery_and_scrape
@@ -73,8 +73,8 @@ SEED_MATCHES_VER = "4.1"    # Phase 10: populate teams_json from title; always r
 # logic/ engine versions
 SCORING_ENGINE_VER      = "1.1.0"  # Phase 6: debug_calc_pts() added       (unchanged)
 ROLLOVER_ENGINE_VER     = "1.0.0"  # (unchanged)
-FUZZY_MATCH_VER         = "1.1.0"  # Resilience: _generate_dynamic_player()  (unchanged)
-CRICBUZZ_DISCOVERY_VER  = "1.2.0"  # Phase 9: title-keyed merge, multi-URL scrape,
+FUZZY_MATCH_VER         = "1.2.0"  # SA20 scoring: _index_players() shared with the Postgres runner (behaviour unchanged). Resilience: _generate_dynamic_player()
+CRICBUZZ_DISCOVERY_VER  = "1.3.0"  # SA20 scoring: resolve_series_id(slug=) for other competitions. Phase 9: title-keyed merge, multi-URL scrape,
                                    #          IPL 2026 series ID corrected to 9241
 
 VERSION_MAP = {

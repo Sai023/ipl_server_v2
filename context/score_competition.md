@@ -27,3 +27,17 @@ first scored match's "Auto-added" lines.
 
 **Tests.** `tests/test_score_competition.py` (pure helpers); end-to-end (throwaway Postgres schema, real IPL scorecard
 #149618 as stand-in, incl. wrong-scorecard guard + idempotency) passed 2026-11-13.
+
+## Status and what is still to do (2026-11-17)
+
+**Deployed.** Shipped to `main` as app 2.14.0 (`SCRAPER_VER` 11.1, `FUZZY_MATCH_VER` 1.2.0, `CRICBUZZ_DISCOVERY_VER` 1.3.0). Render redeploys with the
+code, but the runner itself is never run there: it lives in the repo, so any checkout of `main` on the admin's PC has it. The live app only imports
+`fuzzy_match` for its `_SEMANTIC_MAP`; the edits to `scraper.py`, `fuzzy_match._index_players` and `resolve_series_id(slug=)` keep the old behaviour as
+the default. Nothing is scheduled, and no SA20 match has a Cricbuzz link yet, so a run today does nothing.
+
+**Before and during the season (Jan 2027).**
+1. When Cricbuzz lists SA20 fixtures on `/cricket-series/12791/sa20-2027`, rehearse with `--dry-run` (the discovery line says how many fixtures matched; nothing is written).
+2. Check the team short names on the first real scorecards (expected DSG/JSK/MICT/PC/PR/SEC). A match skipped for team codes needs an alias; the link is never changed.
+3. Decide how it is scheduled: Windows Task Scheduler on the PC, every ~30 minutes on match days. Not set up: it is a standing task and needs the owner's go-ahead.
+4. After the first scored match read the "Auto-added" lines: a roster spelling variant would be added as an `ext_` duplicate that scores but cannot be picked.
+5. Every run without `--dry-run` writes to the production database: get the owner's go-ahead for the first real run.
