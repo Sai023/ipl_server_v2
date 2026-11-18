@@ -24,6 +24,12 @@ class BrowserSideRegressions(unittest.TestCase):
         already in the XI takes him out (with Undo) instead of sending you back to the squad screen."""
         self.run_script("picker_team_chips.test.js")
 
+    def test_edit_team_flow_keeps_picks_locks_cleanly_and_stays_usable(self):
+        """The Pick tab (UX pass, 2026-11-18): unsaved picks survive a reload, a locked week is read-only and says why, Save cannot be
+        double-fired or fail silently (offline / 'too late' / slow server), the hint line says what is left to do, and keyboard focus
+        survives a redraw."""
+        self.run_script("team_edit_ux.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

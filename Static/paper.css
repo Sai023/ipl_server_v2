@@ -370,7 +370,7 @@ select:focus-visible { border-color: var(--info-line); }
 .tchip-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: rgb(var(--tcr, 130, 124, 112)); border: 1px solid color-mix(in srgb, var(--pencil) 50%, transparent); }
 
 /* ---------- "Your XI" inside the picker (phones): the header line opens it, so a player can be taken out without leaving ---------- */
-button.lh-xi { display: inline-flex; align-items: center; gap: 4px; margin: -6px 0; padding: 6px 8px 6px 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button.lh-xi { display: inline-flex; align-items: center; gap: 4px; margin: -13px 0; padding: 13px 8px 13px 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button.lh-xi .ui-icon { color: var(--teal-ink); transition: transform .2s var(--ease); }
 button.lh-xi.open .ui-icon { transform: rotate(180deg); }
 button.lh-xi:focus-visible { outline: 2px solid var(--info-line); outline-offset: 1px; border-radius: 6px; }
@@ -409,8 +409,6 @@ button.nw-player-row:active { transform: translateY(1px); }
 /* ---------- supporting rules for the rebuilt draft and passcode markup ---------- */
 .pin-label { display: block; margin: 0 0 8px; font-size: 12.5px; font-weight: 800; color: var(--text); text-align: center; }
 .nw-player-info, .nw-player-name { display: block; min-width: 0; }
-button.nw-add-slot { width: 100%; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
-button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text); }
 .picker-row.over-budget { opacity: .62; }
 .padd-btn.p-over { color: var(--danger-ink); border-color: var(--danger-line); background: color-mix(in srgb, var(--danger-fill) 40%, var(--sheet-2)); font-size: 10.5px; }
 #passcode-prompt-modal > div { border-width: 1.5px !important; background: var(--sheet-2) !important; border-radius: 22px 20px 0 0 !important; box-shadow: var(--shadow-2); }
@@ -490,3 +488,36 @@ button.nw-add-slot:hover { border-color: var(--border-strong); color: var(--text
 
 /* the competition switcher in the app bar is a small text button: a 44px tap area with the layout unchanged (padding out, margin back in) */
 .brand-sub.as-btn { padding: 14px 10px; margin: -10px -10px -12px; }
+
+/* ---------- the draft screen: the main action stays put, a locked week cannot be edited, targets fit a thumb ---------- */
+.nw-left .add-players { margin: 0 0 14px; }
+.nw-hint > span { flex: 1; min-width: 0; }
+.nw-hint-btn { position: relative; flex: none; min-height: 36px; padding: 6px 14px; border: 1.25px solid var(--pencil); border-radius: var(--r-hand-sm); background: var(--gold-fill); color: var(--on-fill); font: 800 12.5px var(--font); cursor: pointer; box-shadow: 1.5px 2px 0 color-mix(in srgb, var(--pencil) 34%, transparent); -webkit-tap-highlight-color: transparent; }
+.nw-hint-btn::after { content: ""; position: absolute; inset: -4px; }   /* 44px hit area, 36px look */
+.nw-squad-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.nw-squad-head .nw-squad-label { margin: 0; }
+.nw-discard { flex: none; min-height: 44px; margin: -10px 0; padding: 4px 2px; }
+.nw-empty { margin: 0 0 10px; padding: 14px; border: 1.25px dashed var(--border-strong); border-radius: var(--r-hand-sm); text-align: center; font-size: 13px; font-weight: 700; color: var(--muted); }
+.nw-player-row.is-static { min-height: 58px; padding: 8px 10px; cursor: default; }
+.nw-lockbar { display: flex; align-items: flex-start; gap: 12px; margin: 4px 0 14px; padding: 12px 14px; border: 1.5px solid var(--danger-line); border-radius: var(--r-hand-sm); background: color-mix(in srgb, var(--danger-wash) 20%, var(--sheet-2)); color: var(--danger-ink); }
+.nw-lockbar .ui-icon { flex: none; margin-top: 1px; }
+.nw-lockbar b { display: block; font: 700 22px/1.1 var(--font-hand); letter-spacing: 0; }
+.nw-lockbar span { display: block; margin-top: 3px; font-size: 13px; font-weight: 700; line-height: 1.4; color: var(--text); }
+.nw-lockbar .nw-lock-warn { margin-top: 6px; color: var(--danger-ink); }
+.nw-locked.nw-layout { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1000px) { .nw-locked.nw-layout { grid-template-columns: minmax(0, 560px); } .nw-locked .nw-left { position: static; } }
+.bn-item { position: relative; }
+.nav-dot { position: absolute; top: 2px; left: calc(50% + 8px); width: 11px; height: 11px; border-radius: 50%; background: var(--gold-fill); border: 1.5px solid var(--pencil); }
+.nav-tab .nav-dot { position: static; flex: none; margin: 0 0 0 -3px; }
+/* touch targets on the draft + picker screens: 44px for what a thumb has to hit */
+.tchip { min-height: 44px; }
+.xi-x { width: 40px; height: 40px; }
+.fchip button { position: relative; }
+.fchip button::after { content: ""; position: absolute; inset: -9px; }
+@media (max-width: 759px), (pointer: coarse) {
+  .layer-head .btn.btn-sm, .nw-rules { min-height: 44px; }
+  .picker-results .link-btn, .pf-scale .link-btn { min-height: 44px; padding: 4px 6px; }
+}
+/* the deadline: big enough to read at a glance, red in the last hour */
+.nw-countdown { display: inline-flex; align-items: center; padding: 3px 10px; border: 1.25px solid var(--border); border-radius: 999px; background: var(--sheet-2); font: 800 12px/1.2 var(--font); letter-spacing: 0; text-transform: none; color: var(--text); }
+.nw-countdown.urgent { border-color: var(--danger-line); background: color-mix(in srgb, var(--danger-wash) 20%, var(--sheet-2)); color: var(--danger-ink); }

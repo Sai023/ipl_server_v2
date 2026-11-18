@@ -124,6 +124,37 @@ cell and a cross that takes the player out, for a player the current filters hid
 draws one toggle chip per team with `Ui.chips` (team colour dot; the leading "All" chip clears); `_pickerToggleTeam` flips one team; the
 results bar shows a removable chip per team. Reset on a competition switch (`_resetCompScope`). Tests: `tests/js/picker_team_chips.test.js`.
 
+**Edit-team UX pass (2026-11-18)** - the Pick tab, found by testing it task by task on a 375 px phone and at 1280 px. Tests: `tests/js/team_edit_ux.test.js`.
+- *Picks are never lost.* Every change to the draft goes through `_nwChanged()` (keep + redraw). `_draftStore()` writes the unsaved draft to
+  `localStorage` as `ipl_draft:<competition>:<member>` = `{wk, base, team, cap, vc}`; `_nwInit()` -> `_draftRestore()` brings it back after a reload / closed
+  app / dropped connection, but only for the same week (`wk`) and the same saved XI (`base` = signature of what the server held when the edit was made),
+  so a draft made before the server moved on (saved from another phone, a rollover) is dropped. The competition comes from `IplComp.get()` first (as the API
+  calls do): `_activeComp` is only set once `/api/competitions` has answered. `_nwInit(null)` still restores (a new member / before the first week has no
+  history row). Storage that throws (private mode) is swallowed: the draft just stays in memory. `_nwHasUnsaved()` (non-empty AND different from saved)
+  drives the dot on the Pick tab (`_navDot`), the hint "Restored your unsaved picks", the action banner ("not saved yet" + a one-tap **Save XI**) and
+  `Discard changes` (`_nwDiscard`, with Undo). `_nwNewWeek()` restarts the draft when the rollover ran while the app was open (`_doStateRefresh`).
+- *A locked week is read-only.* `_deadlineLocked()` = clock past `next_lock_utc` OR season over OR the server answered 423 for this week
+  (`_lockedWeek === _currentWeek`, set by `_nwTooLate()`; the server is the authority, the device clock can be wrong). The 1-second tick flips the screen
+  when the countdown runs out (`_lockSeen`) and, while locked, asks `/api/current-week` every 20 s (`_checkWeek`) so the draft reopens by itself after the
+  rollover. Locked view: `_nwShown()` (the XI the server holds, never an unsaved edit), `.nw-lockbar` with the reason, rows as static `div`s, no budget bar,
+  no Add players, no picker (`.nw-locked`, one column). The unsaved draft is NOT thrown away (a wrong clock must not eat it). The countdown is a pill
+  (`.nw-countdown`) that turns red in the last hour (`_lockUrgent`).
+- *Save.* `_nwSave(force)`: one request at a time (`_nwSaving`; the button shows `Saving...`, `aria-busy`), after 4 s the hint says the free server may have been
+  asleep (`_nwSlow`); no captain -> `Ui.confirm` ("Save anyway" / "Choose captain", `focusCancel`: Enter and Escape never save without one); 423 -> locked view;
+  no HTTP status (offline) -> the toast says "Your picks are kept on this phone". `Ui.confirm` gained the `focusCancel` option.
+- *Hint line* (`_buildBudgetBar`): says what is left and the one button that does it: "Pick 4 more players. About 8.6 CR each keeps you in budget", a dead-end
+  warning when the CR left cannot fill the spots (`rem < k * cheapest`), "Choose" -> `_nwPickRole('cap'|'vc')` (the whole XI in one list, best scorers
+  first; the vice-captain list follows the captain's when none is set), over budget, unsaved, restored, saved.
+- *Layout.* The empty "+ pick a player" slots are gone (11 identical buttons pushed the real Add players button below the fold on a phone); one stable
+  `Add players (n/11)` button sits right under the hint, above the list. The over-budget notice in the picker is now a toast (`Ui.warn`), not a banner
+  that re-rendered the page after 2.8 s. A second tap on the same picker row within 400 ms is ignored (`_lastTap`): on a slow phone it is a re-tap, and it
+  used to undo the add. While `/api/players` has not arrived the list says "Loading the players" instead of "No players match these filters".
+- *Keyboard and screen readers.* `render()` rebuilds the page, which used to drop focus to the top after every tap. Controls that matter carry `data-fk`
+  (`pk:<id>` picker row, `sq:<id>` squad row, `xx:<id>` Your XI cross, `nw-save`, `nw-cta`, `pk-done` ...); `_focusKey()` reads it before the rebuild and
+  `_focusFind()` restores it after, falling back to the nearest working control (a removed player's row -> Add players; a Save that just became disabled ->
+  the hint button / Add players; closing the picker -> the button that opened it). The picker moves focus in on open; the swap sheet and Scoring Rules give
+  focus back to what opened them. Tap targets on this screen are 44 px (`Done`, team chips, `Your XI` toggle, filter chip crosses via a pseudo-element hit area).
+
 ### 3. The Save Draft button is gated client-side
 [index.html:368](../templates/index.html:368):
 `canSave = count === XI_SIZE && rem >= -0.001`. The 0.001 epsilon
@@ -235,7 +266,7 @@ Direct 1:1 with [user_capabilities.md](user_capabilities.md):
 | Points-tab supporting state and loader: `_ptsData`, `_ptsLoading`, `_loadPoints()`, plus `switchTab("points")` reference at line 101 | 25, 122–133 (~12 lines) | **DEAD.** Only consumer is `_buildPointsTab`. Already tracked. |
 | `_buildMatchesCard(matchList)` | 552–560 (~9 lines) | **DEAD.** This is a *different* renderer from `_buildMatchesTab` (D24, in ipl_glue.js) — it's a simpler list view that's also not called from anywhere. Added to register as **D28**. |
 | Inline `BUDGET_TOTAL=100.0, XI_SIZE=11` at line 17 | 17 | **Duplicate constants.** `/api/ping` returns the server's values via `IplConfig.budget` / `xi_size` and the rest of the app already uses those. The inline hardcoded values are a fallback in case the bootstrap fails. Worth keeping — the failure mode would otherwise be a silently mis-sized picker. Not dead. |
-| `_pickerNoticeTimer` global | 24 | **Live.** Used in `_pickerShowNotice`. |
+| `_pickerNoticeTimer` global / `_pickerShowNotice` | - | **Removed (2026-11-18).** The over-budget notice is a `Ui.warn` toast now. |
 | `_buildXiGrid()` | 323–334 | **Live.** Used by `_buildHistoryTab` (dead), `_buildMembersCard` (live, line 526), and `_buildLeaderboardCard` (live). Live because of the members card. |
 | The inline `<script>` block 15–820 | — | **Mostly live.** The bulk of renderers, mutators, and the bootstrap. Dead items are the three tabs above. |
 | **UI bug — not dead code, but a defect** | 491 | The Next Week panel says `"Locks Mon 14:00 IST"`. The actual deadline is 14:00 UTC (= 19:30 IST). Tracked as **S3**. |

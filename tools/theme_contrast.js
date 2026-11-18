@@ -29,5 +29,12 @@ const butter = (t) => over(hex(need('gold-fill')), surfaces['sheet-2'], t);
 check('--on-fill on butter 70% over --sheet-2 (team chip, on)', hex(need('on-fill')), butter(0.70), 7);
 check('--on-fill on butter 38% over --sheet-2 (Your XI cell: name, price)', hex(need('on-fill')), butter(0.38), 7);
 check('--muted on butter 38% over --sheet-2 (Your XI cell: role line)', hex(need('muted')), butter(0.38));
+// the draft screen: the locked-week bar and the hint lines (text on the tints they sit on), and the unsaved dot (a graphite ring on the paper must stand out: 3:1)
+const tint = (fam, t) => over(hex(need(fam + '-wash')), surfaces['sheet-2'], t);
+check('--text on danger tint 20% over --sheet-2 (locked-week bar)', hex(need('text')), tint('danger', 0.2));
+check('--danger-ink on danger tint 20% over --sheet-2 (locked-week bar, hint)', hex(need('danger-ink')), tint('danger', 0.2));
+check('--gold-ink on gold tint 22% over --sheet-2 (hint: to do)', hex(need('gold-ink')), tint('gold', 0.22));
+check('--teal-ink on teal tint 20% over --sheet-2 (hint: saved)', hex(need('teal-ink')), tint('teal', 0.2));
+check('--pencil ring on --paper (unsaved dot on the Pick tab)', hex(need('pencil')), surfaces.paper, 3);
 console.log(`${checks} checks, ${fails} failing`);
 process.exit(fails ? 1 : 0);

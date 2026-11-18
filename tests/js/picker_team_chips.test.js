@@ -34,7 +34,7 @@ const PLAYERS = [
 ];
 
 function load() {
-  const ctx = { toasts: [], swaps: [], renders: 0 };
+  const ctx = { toasts: [], swaps: [], warns: [], renders: 0 };
   ctx.window = ctx; ctx.console = console;
   ctx.addEventListener = () => {}; ctx.removeEventListener = () => {};
   ctx.setTimeout = setTimeout; ctx.clearTimeout = clearTimeout; ctx.navigator = {}; ctx.location = {};
@@ -45,14 +45,17 @@ function load() {
   ctx._nwDraft = { team: [], cap: null, vc: null };
   ctx._pickerSearch = ''; ctx._pickerRole = 'All'; ctx._pickerTeams = []; ctx._pickerSort = 'season'; ctx._pickerMaxPrice = null;
   ctx._state = null;                                                          // render() is only called when there is a state: keep it quiet
+  vm.runInContext('var __clock = 0; Date.now = function () { return (__clock += 1000); };', ctx);   // every tap a second later than the last: the re-tap guard (400 ms) stays out of the way
+  ctx._lastTap = { id: '', t: 0 };
+  ctx._username = null; ctx._nwRestored = false;                              // no signed-in member: nothing is kept on the phone in these cases
   ctx.Ui.toast = (msg, o) => ctx.toasts.push({ msg, o });
-  ctx.Ui.warn = () => {};
+  ctx.Ui.warn = (m) => { ctx.warns.push(m); };
   ctx._allPlayers = () => PLAYERS;
   ctx.resolvePlayer = (id) => PLAYERS.find((p) => p.id === id || p.name === id) || { name: id };
   ctx._showSwapModal = (id) => ctx.swaps.push(id);
   ctx._pickerUpdate = () => {};
   ctx._pickerShowNotice = (m, t) => { ctx.notice = { m, t }; };
-  for (const n of ['_teamCost', '_remaining', '_priceBounds', '_pickerToggleTeam', '_pickerView', '_pickerActive', '_pickerClear', '_pickerRowClick', '_nwRemove', '_nwToggle'])
+  for (const n of ['_teamCost', '_remaining', '_priceBounds', '_pickerToggleTeam', '_pickerView', '_pickerActive', '_pickerClear', '_pickerRowClick', '_nwChanged', '_draftStore', '_nwRemove', '_nwToggle'])
     vm.runInContext(fnSource(n), ctx, { filename: n });
   ctx.escAttr = (s) => String(s); ctx.esc = (s) => String(s);
   return ctx;
@@ -102,10 +105,28 @@ test('a player stored by NAME in a saved draft is still recognised as picked and
   c._nwDraft.team = ['Virat Kohli']; c._pickerRowClick('p1');
   assert.deepStrictEqual(c._nwDraft.team, []);
 });
+test('a second tap on the same row a heartbeat later is a re-tap and does nothing (it must not undo the add)', (c) => {
+  vm.runInContext('Date.now = function () { return 5000; };', c);                    // the clock stands still: both taps in the same instant
+  c._pickerRowClick('p1'); c._pickerRowClick('p1');
+  assert.deepStrictEqual(c._nwDraft.team, ['p1']);
+  vm.runInContext('Date.now = function () { return 5500; };', c);                    // 500 ms later it is a real second tap
+  c._pickerRowClick('p1');
+  assert.deepStrictEqual(c._nwDraft.team, []);
+});
+test('a re-tap guard is per row: two different rows in quick succession both count', (c) => {
+  vm.runInContext('Date.now = function () { return 5000; };', c);
+  c._pickerRowClick('p1'); c._pickerRowClick('p2');
+  assert.deepStrictEqual(c._nwDraft.team, ['p1', 'p2']);
+});
 test('removing frees the budget, so a dearer player can then be added', (c) => {
   c._pickerRowClick('p1'); c._pickerRowClick('p3'); c._pickerRowClick('p5');       // 15 + 12 + 13 = 40
   assert.strictEqual(c._remaining(), 60);
   c._pickerRowClick('p5'); assert.strictEqual(c._remaining(), 73);
+});
+test('over budget: a toast says by how much (visible wherever the thumb is), nothing is added', (c) => {
+  c.BUDGET_TOTAL = 20; c._pickerRowClick('p1'); c._pickerRowClick('p2');           // 15, then +11 = 26 > 20
+  assert.deepStrictEqual(c._nwDraft.team, ['p1']);
+  assert.strictEqual(c.warns.length, 1); assert.match(c.warns[0], /Over budget by 6\.0 CR/);
 });
 test('with a full XI, tapping someone outside it still opens the swap sheet (unchanged)', (c) => {
   c.XI_SIZE = 2; vm.runInContext('var XI_SIZE = 2;', c);

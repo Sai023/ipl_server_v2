@@ -159,16 +159,32 @@ The Admin tab is gated client-side on `_isAdmin` (set from
 - Hard constraints enforced client-side:
   - **Squad size = 11** (`XI_SIZE`)
   - **Budget = 100.0 CR** (`BUDGET_TOTAL`)
-  - Over-budget rows are dimmed; over-budget adds are blocked with a notice.
+  - Over-budget rows are dimmed and say by how much ("+1.0 over"); tapping one shows a toast and adds nobody.
 
 ### 5.2 Assign Captain / Vice-Captain
-- Each draft row has C / V / × buttons.
+- Tap a draft row -> a sheet: Regular / Captain (x2) / Vice-captain (x1.5) / Remove from XI.
+- While a role is still empty the hint line has a **Choose** button: the whole XI in one list (best scorers first), one tap each; after the captain
+  the vice-captain list follows.
 - Picking C clears any existing C; same player as both C and VC is prevented.
 
 ### 5.3 Save the draft
 - "Save Draft" button is disabled until `team.length === 11` and `remaining ≥ 0`.
 - Calls `IplApi.saveNextWeek(_username, _nwDraft)` → `POST /api/save-next-week/<n>`.
 - On success, fires `ipl:saved` which re-bootstraps the whole app state.
+- No captain chosen -> asks first ("Save anyway" / "Choose captain"); closing the question saves nothing.
+- One request at a time; the button reads "Saving...", and after 4 s the hint says the free server may have been asleep (up to a minute).
+- Offline / server unreachable: the message says the picks are kept on this phone; the Save button comes back.
+
+### 5.3b Picks are never lost
+- The unsaved draft is also kept on the phone (per member, competition and week). Closing the app, a reload or a dropped connection brings it back
+  ("Restored your unsaved picks"), as long as the saved XI has not changed in the meantime.
+- A dot on the **Pick** tab (and "not saved yet" in the banner on the other tabs, with a one-tap **Save XI** when the XI is complete) while anything
+  would be lost at the deadline. **Discard changes** goes back to the saved XI (Undo).
+
+### 5.3c The deadline
+- The countdown is a pill at the top of the draft; it turns red in the last hour.
+- When it runs out (or the server says "too late" on a Save) the screen becomes read-only: the XI that counts, a note explaining why, no Add
+  players / picker. It reopens by itself after the weekly rollover.
 
 ### 5.4 Season-points scouting badges
 - Each draft row shows the player's `season_pts` next to the price

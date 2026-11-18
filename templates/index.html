@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper3">
-  <link rel="stylesheet" href="/static/style.css?v=paper3">
-  <link rel="stylesheet" href="/static/ui.css?v=paper3">
-  <link rel="stylesheet" href="/static/screens.css?v=paper3">
-  <link rel="stylesheet" href="/static/paper.css?v=paper3">
+  <link rel="stylesheet" href="/static/theme.css?v=paper4">
+  <link rel="stylesheet" href="/static/style.css?v=paper4">
+  <link rel="stylesheet" href="/static/ui.css?v=paper4">
+  <link rel="stylesheet" href="/static/screens.css?v=paper4">
+  <link rel="stylesheet" href="/static/paper.css?v=paper4">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper3"></script>
+<script src="/static/ui.js?v=paper4"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -38,7 +38,7 @@ var _nwDraft={team:[],cap:null,vc:null};
 var _pickerSearch="",_pickerRole="All",_pickerTeams=[],_pickerSort="season";   // _pickerTeams: the teams switched on (several at once); empty = every team
 var _pickerMaxPrice=null,_pickerFiltersOpen=false,_pickerXiOpen=false;   // null = no price limit; _pickerXiOpen: the "Your XI" strip under the picker header is open
 var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (signature), and whether that is last week's XI carried over
-var _pickerNotice=null,_pickerNoticeTimer=null;
+var _nwRestored=false,_lockedWeek=null;   // _nwRestored: the draft on screen came back from this phone; _lockedWeek: the week for which the server refused a save as too late
 var _adminMatches=null,_adminFilter="all";
 var _adminMembersList=null;
 var _switching=false,_switchFailed=false,_swGuard=null,_weekKnown=false,_bootSeq=0;   // competition switch state (see _switchComp); _weekKnown: _currentWeek belongs to the competition on screen; _bootSeq: bumped on every switch so late replies for the old competition are dropped
@@ -122,7 +122,7 @@ function logout(){
   if(window.IplApi&&IplApi.logoutClearToken)IplApi.logoutClearToken();
   _username=null;_isAdmin=false;_mustChange=false;
   clearUsername();_historyData=null;_historyViewWk=null;
-  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_adminMatches=null;_adminMembersList=null;
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwRestored=false;_lockedWeek=null;_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
 }
 function switchTab(tab){
@@ -201,25 +201,41 @@ function _getThisWeekData(){
   return null;
 }
 function _selectHistoryWeek(wkNo){_historyViewWk=(wkNo===_currentWeek)?null:wkNo;if(_state)render(_state);}
-function _nwSetCap(id){_nwDraft.cap=(_nwDraft.cap===id)?null:id;_nwDraft.vc=(_nwDraft.vc===id)?null:_nwDraft.vc;if(_state)render(_state);}
-function _nwSetVc(id){_nwDraft.vc=(_nwDraft.vc===id)?null:id;_nwDraft.cap=(_nwDraft.cap===id)?null:_nwDraft.cap;if(_state)render(_state);}
+// Every change to the draft goes through _nwChanged: the draft is also kept on this phone (a reload, a closed app or a dropped connection cannot lose it) and the screen redraws.
+function _nwChanged(){_nwRestored=false;_draftStore();if(_state)render(_state);}
+function _nwSetCap(id){_nwDraft.cap=(_nwDraft.cap===id)?null:id;_nwDraft.vc=(_nwDraft.vc===id)?null:_nwDraft.vc;_nwChanged();}
+function _nwSetVc(id){_nwDraft.vc=(_nwDraft.vc===id)?null:id;_nwDraft.cap=(_nwDraft.cap===id)?null:_nwDraft.cap;_nwChanged();}
 // One player, one role: regular, captain (x2) or vice-captain (x1.5). Choosing a new captain / vice-captain replaces the old one.
 function _nwSetRole(id,role){
   if(role==="cap"){_nwDraft.cap=id;if(_nwDraft.vc===id)_nwDraft.vc=null;}
   else if(role==="vc"){_nwDraft.vc=id;if(_nwDraft.cap===id)_nwDraft.cap=null;}
   else{if(_nwDraft.cap===id)_nwDraft.cap=null;if(_nwDraft.vc===id)_nwDraft.vc=null;}
-  if(_state)render(_state);
+  _nwChanged();
 }
 // Tapping a player in the draft opens a radio choice (regular / captain / vice-captain) with room for a thumb, plus Remove.
 function _nwOpenPlayer(id){
+  if(_deadlineLocked())return;
   var p=resolvePlayer(id),nm=p.name||id,cur=_nwDraft.cap===id?"cap":_nwDraft.vc===id?"vc":"none";
-  Ui.sheet({title:nm,subtitle:[p.role,p.team,p.price?p.price.toFixed(1)+" CR":"",p.season_pts!=null?p.season_pts+" pts":""].filter(Boolean).join(" · "),items:[
+  Ui.sheet({title:nm,subtitle:[p.role,p.team,p.price?p.price.toFixed(1)+" CR":"",p.season_pts!=null?p.season_pts+" pts":""].filter(Boolean).join(" \xb7 "),items:[
     {radio:true,label:"Regular player",desc:"Earns normal points.",checked:cur==="none",onClick:function(){_nwSetRole(id,"none");}},
     {radio:true,label:"Captain",desc:"Earns double points (\xd72).",badge:"C",checked:cur==="cap",onClick:function(){_nwSetRole(id,"cap");}},
     {radio:true,label:"Vice-captain",desc:"Earns \xd71.5 points.",badge:"VC",checked:cur==="vc",onClick:function(){_nwSetRole(id,"vc");}},
     {divider:true},
     {icon:"trash",label:"Remove from XI",danger:true,onClick:function(){_nwRemove(id);}}
   ]});
+}
+// "Choose your captain / vice-captain": the whole XI in one list, one tap. The hint line offers it while a role is still empty.
+function _nwPickRole(which){
+  if(_deadlineLocked()||!_nwDraft.team.length)return;
+  var cap=which==="cap",cur=cap?_nwDraft.cap:_nwDraft.vc,other=cap?_nwDraft.vc:_nwDraft.cap;
+  var ids=_nwDraft.team.slice().sort(function(a,b){return(resolvePlayer(b).season_pts||0)-(resolvePlayer(a).season_pts||0);});   // best scorers first
+  Ui.sheet({title:cap?"Choose your captain":"Choose your vice-captain",subtitle:cap?"Earns double points (\xd72).":"Earns \xd71.5 points.",items:ids.map(function(id){
+    var p=resolvePlayer(id);
+    return {radio:true,label:p.name||id,desc:[p.role,p.team,p.season_pts!=null?p.season_pts+" pts":"",id===other?(cap?"now vice-captain":"now captain"):""].filter(Boolean).join(" \xb7 "),checked:id===cur,onClick:function(){
+      _nwSetRole(id,which);
+      if(cap&&!_nwDraft.vc)setTimeout(function(){_nwPickRole("vc");},60);   // captain done: offer the vice-captain straight away (Escape skips it)
+    }};
+  })});
 }
 // Removing a player is easy to do by accident, so it can always be undone (for a few seconds) from the toast.
 function _nwRemove(id,quiet){
@@ -228,7 +244,7 @@ function _nwRemove(id,quiet){
   _nwDraft.team=_nwDraft.team.filter(function(x){return x!==id;});
   if(wasCap)_nwDraft.cap=null;
   if(wasVc)_nwDraft.vc=null;
-  if(_state)render(_state);
+  _nwChanged();
   if(quiet)return;
   Ui.toast((resolvePlayer(id).name||id)+" removed",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){
     if(_nwDraft.team.indexOf(id)>=0||_nwDraft.team.length>=XI_SIZE)return;
@@ -236,7 +252,7 @@ function _nwRemove(id,quiet){
     _nwDraft.team.splice(Math.min(at,_nwDraft.team.length),0,id);
     if(wasCap)_nwDraft.cap=id;
     if(wasVc)_nwDraft.vc=id;
-    if(_state)render(_state);
+    _nwChanged();
   }}});
 }
 function _nwToggle(id){
@@ -246,24 +262,54 @@ function _nwToggle(id){
   var p=resolvePlayer(id),cost=_teamCost(_nwDraft.team)+(p.price||0);
   if(cost>BUDGET_TOTAL)return;
   _nwDraft.team.push(id);
-  if(_state)render(_state);
+  _nwChanged();
 }
-function _nwSave(){
-  if(!_username)return;
-  if(_nwDraft.team.length!==XI_SIZE){Ui.warn("Select exactly 11 players first.");return;}
-  var btn=document.getElementById("nw-save-btn"),sent=_nwSig(_nwDraft);
-  if(btn){btn.disabled=true;btn.textContent="Saving…";}
+// Back to what is saved (the saved draft, or last week's XI): for when a draft has gone the wrong way. Undo brings the edits back.
+function _nwDiscard(){
+  var before={team:_nwDraft.team.slice(),cap:_nwDraft.cap,vc:_nwDraft.vc};
+  if(!_nwLoadSaved(_getCurrentWeekRow()))_nwDraft={team:[],cap:null,vc:null};
+  _nwChanged();
+  Ui.toast("Changes discarded",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){_nwDraft=before;_nwChanged();}}});
+}
+var _nwSaving=false,_nwSlow=false,_nwSlowT=null;
+function _nwSave(force){
+  if(!_username||_nwSaving)return;
+  if(_deadlineLocked()){Ui.warn("Picks are locked. Your last saved XI is the one that counts.");return;}
+  if(_nwDraft.team.length!==XI_SIZE){Ui.warn("Select exactly "+XI_SIZE+" players first.");return;}
+  // The captain scores double, so forgetting one is the costliest slip in the game: ask once before saving without. Closing the question saves nothing.
+  if(force!==true&&!_nwDraft.cap){
+    Ui.confirm({title:"No captain yet",message:"Your captain earns double points. Save this XI without one?",confirmText:"Save anyway",cancelText:"Choose captain",focusCancel:true})
+      .then(function(go){if(go)_nwSave(true);else _nwPickRole("cap");});
+    return;
+  }
+  var sent=_nwSig(_nwDraft);
+  _nwSaving=true;_nwSlow=false;if(_state)render(_state);
+  clearTimeout(_nwSlowT);_nwSlowT=setTimeout(function(){if(_nwSaving){_nwSlow=true;if(_state)render(_state);}},4000);
   window.IplApi.saveNextWeek(_username,_nwDraft)
     .then(function(){
-      _nwSaved=sent;_nwCarry=false;        // what we sent is now what the server holds
+      _nwSaving=false;_nwSlow=false;clearTimeout(_nwSlowT);
+      _nwSaved=sent;_nwCarry=false;_nwRestored=false;        // what we sent is now what the server holds
+      _draftStore();                                          // ...so the copy kept on this phone is no longer needed (unless it was edited again meanwhile)
       Ui.success("Team saved");
       window.dispatchEvent(new CustomEvent("ipl:saved"));
       if(_state)render(_state);
     }).catch(function(e){
-      if(btn){btn.disabled=false;btn.textContent="Save Draft";}
-      Ui.fail(e,"Could not save your team");
+      _nwSaving=false;_nwSlow=false;clearTimeout(_nwSlowT);
+      if(e&&e.status===423){_nwTooLate();return;}
+      var offline=!(e&&e.status);   // no HTTP status = the request never got an answer
+      if(offline)Ui.toast("Could not save your team: "+Ui.errorMessage(e)+" Your picks are kept on this phone.",{type:"error",duration:7000});
+      else Ui.fail(e,"Could not save your team");
+      if(_state)render(_state);
     });
 }
+// The deadline has passed (the server says so, or the countdown ran out): the screen becomes read-only and says what counts.
+function _nwTooLate(){
+  _lockedWeek=_currentWeek;
+  _nwCloseLayer();
+  if(_state)render(_state);
+  Ui.warn("Picks have just locked, so that could not be saved. Your last saved XI is the one that counts.",{duration:7000});
+}
+function _nwCloseLayer(){if(!_pickOpen)return;_pickOpen=false;try{if(history.state&&history.state.ui==="pick")history.back();}catch(e){}}
 
 // ─── PICKER: filters update the list in place (no page rebuild), so typing, dragging the slider and keyboard focus are never interrupted ───
 var _psTimer=null;
@@ -297,14 +343,13 @@ function _pickerFitBudget(){_pickerSetPrice(Math.max(_priceBounds().min,Math.flo
 function _pickerSetSearch(v){_pickerSearch=v;_pickerUpdate();}
 function _pickerSearchInput(v){_pickerSearch=v;var c=document.getElementById("ps-clear");if(c)c.hidden=!v;clearTimeout(_psTimer);_psTimer=setTimeout(_pickerUpdate,90);}
 function _pickerClear(){_pickerRole="All";_pickerTeams=[];_pickerSearch="";_pickerMaxPrice=null;var i=document.getElementById("picker-search-input");if(i)i.value="";_pickerUpdate();}
-function _pickerShowNotice(msg,type){
-  _pickerNotice={msg:msg,type:type||"info"};
-  if(_pickerNoticeTimer)clearTimeout(_pickerNoticeTimer);
-  _pickerNoticeTimer=setTimeout(function(){_pickerNotice=null;if(_state&&_activeTab==="next")render(_state);},2800);
-  if(_state&&_activeTab==="next")render(_state);
-}
+var _lastTap={id:"",t:0};
 function _pickerRowClick(id){
   if(!id)return;
+  // On a slow phone a member taps again because nothing seems to have happened: that second tap must not undo the first (add, then straight out again).
+  var now=Date.now();
+  if(_lastTap.id===id&&now-_lastTap.t<400)return;
+  _lastTap={id:id,t:now};
   var p=resolvePlayer(id);
   // A player who is already in the XI is taken OUT by tapping again (the Undo toast covers a slip): no trip back to the squad screen.
   var inXi=_nwDraft.team.indexOf(id)!==-1?id:(p.name&&_nwDraft.team.indexOf(p.name)!==-1?p.name:null);
@@ -315,7 +360,7 @@ function _pickerRowClick(id){
   }
   var cost=_teamCost(_nwDraft.team)+(p.price||0);
   if(cost>BUDGET_TOTAL+0.001){
-    _pickerShowNotice("Over budget — free up "+((cost-BUDGET_TOTAL).toFixed(1))+" CR first","warn");
+    Ui.warn("Over budget by "+((cost-BUDGET_TOTAL).toFixed(1))+" CR. Take someone out first, or pick a cheaper player.");
     return;
   }
   _nwToggle(id);
@@ -334,7 +379,11 @@ function _doStateRefresh(onDone){
   Promise.all([stP,lbP,hP,plP]).then(function(results){
     var state=results[0],lb=results[1],history=results[2],players=results[3];
     if(state&&!_staleState(state)){
-      if(history&&history.ok){_historyData=history;_currentWeek=history.current_week;_weekKnown=true;}
+      if(history&&history.ok){
+        var _wasWk=_currentWeek,_hadWk=_weekKnown;
+        _historyData=history;_currentWeek=history.current_week;_weekKnown=true;
+        if(_hadWk&&_currentWeek!==_wasWk)_nwNewWeek(_getCurrentWeekRow(history));
+      }
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
       if(players&&players.ok!==false){_players=players;}
       window.dispatchEvent(new CustomEvent('ipl:state-updated'));
@@ -389,36 +438,77 @@ function _buildXiGrid(teamArr,capId,vcId){
 // ─── DRAFT STATE: "saved" means what the server will use at the rollover (the saved draft, or last week's XI when nothing was saved) ───
 function _nwSig(d){return JSON.stringify({t:((d&&d.team)||[]).slice().sort(),c:(d&&d.cap)||null,v:(d&&d.vc)||null});}
 function _nwDirty(){return _nwSig(_nwDraft)!==_nwSaved;}
+function _nwHasUnsaved(){return _nwDraft.team.length>0&&_nwDirty();}   // picks that would be lost: an empty draft has nothing to lose
+// The draft = what the server holds (the saved draft, or last week's XI when nothing was saved). False when the member has neither yet.
+function _nwLoadSaved(row){
+  var nw=row&&row.next_week,tw=row&&row.this_week;
+  if(nw&&nw.team&&nw.team.length>0){_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=false;return true;}
+  if(tw&&tw.team&&tw.team.length>0){_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=true;return true;}
+  return false;
+}
+// The rollover ran while the app was open: the old week's draft is history, the new one starts from what the server holds for it.
+function _nwNewWeek(row){
+  _nwRestored=false;
+  if(!_nwLoadSaved(row)){_nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;}
+  _draftStore();
+}
 function _nwInit(row){
-  if(!row)return;
-  var nw=row.next_week,tw=row.this_week;
-  if(nw&&nw.team&&nw.team.length>0){_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=false;}
-  else if(tw&&tw.team&&tw.team.length>0){_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=true;}
+  _nwLoadSaved(row);   // row is null for a member with no history yet (a new member, or before the first week): nothing saved, but picks may still be waiting on this phone
+  if(!_nwHasUnsaved())_draftRestore();   // picks that were never saved come back after a reload, a closed app or a dropped connection
+}
+// ─── THE UNSAVED DRAFT IS ALSO KEPT ON THIS PHONE (per member, competition and week; thrown away once saved, or once the server's copy has moved on) ───
+// The competition is read the way the API calls read it (the stored selection is there from the first instant; _activeComp is only set once the competition list has arrived).
+function _draftKey(){return "ipl_draft:"+((window.IplComp&&IplComp.get&&IplComp.get())||_activeComp||"")+":"+(_username||"");}
+function _draftStore(){
+  try{
+    if(!_username)return;
+    if(!_nwHasUnsaved()){localStorage.removeItem(_draftKey());return;}
+    localStorage.setItem(_draftKey(),JSON.stringify({wk:_currentWeek,base:_nwSaved,team:_nwDraft.team,cap:_nwDraft.cap,vc:_nwDraft.vc}));
+  }catch(e){}   // private mode / storage full: the draft simply stays in memory, as before
+}
+function _draftRestore(){
+  try{
+    if(!_username)return false;
+    var k=_draftKey(),raw=localStorage.getItem(k);if(!raw)return false;
+    var d=JSON.parse(raw);
+    var team=(d&&Array.isArray(d.team))?d.team.filter(function(x){return typeof x==="string"&&x;}):[];
+    // only a draft made against what the server holds NOW, in this same week, is worth bringing back
+    if(!d||d.wk!==_currentWeek||d.base!==_nwSaved||!team.length||team.length>XI_SIZE||new Set(team).size!==team.length){localStorage.removeItem(k);return false;}
+    var cap=team.indexOf(d.cap)>=0?d.cap:null,vc=(team.indexOf(d.vc)>=0&&d.vc!==cap)?d.vc:null;
+    var keep=_nwDraft;_nwDraft={team:team,cap:cap,vc:vc};
+    if(!_nwDirty()){_nwDraft=keep;localStorage.removeItem(k);return false;}   // the same as what is saved: nothing to bring back
+    _nwRestored=true;return true;
+  }catch(e){return false;}
 }
 function _focusPickerSearch(){var i=document.getElementById("picker-search-input");if(i){i.focus();try{i.scrollIntoView({block:"center",behavior:"smooth"});}catch(e){}}}
 
+// The squad as it is shown: the draft, or - once picks are locked - the XI the server actually holds (an unsaved edit does not count any more).
+function _nwShown(){
+  if(!_deadlineLocked()||!_nwHasUnsaved())return _nwDraft;
+  var row=_getCurrentWeekRow(),src=row&&((row.next_week&&row.next_week.team&&row.next_week.team.length)?row.next_week:row.this_week);
+  return(src&&src.team&&src.team.length)?{team:src.team,cap:src.cap,vc:src.vc}:{team:[],cap:null,vc:null};
+}
 function _buildNwSquad(){
-  var team=_nwDraft.team,cap=_nwDraft.cap,vc=_nwDraft.vc;
-  var h='<div class="nw-squad-label">YOUR DRAFT XI <span style="font-size:10px;color:var(--muted);font-weight:400">· '+team.length+'/'+XI_SIZE+' selected</span></div>';
-  if(team.length>0)h+='<p class="nw-tip">Tap a player to make them <span class="badge badge-c">C</span> captain \xd72 or <span class="badge badge-vc">VC</span> vice-captain \xd71.5</p>';
-  h+='<div class="nw-squad">';
+  var locked=_deadlineLocked(),shown=_nwShown(),team=shown.team,cap=shown.cap,vc=shown.vc;
+  var h='<div class="nw-squad-head"><div class="nw-squad-label">'+(locked?'YOUR XI':'YOUR DRAFT XI')+' <span style="font-size:10px;color:var(--muted);font-weight:400">\u00b7 '+team.length+'/'+XI_SIZE+(locked?'':' selected')+'</span></div>'+
+    (!locked&&_nwHasUnsaved()?'<button type="button" class="link-btn nw-discard" data-fk="nw-discard" onclick="_nwDiscard()">Discard changes</button>':'')+'</div>';
+  if(team.length>0&&!locked)h+='<p class="nw-tip">Tap a player to make them <span class="badge badge-c">C</span> captain \xd72 or <span class="badge badge-vc">VC</span> vice-captain \xd71.5</p>';
+  if(!team.length)h+='<p class="nw-empty">'+(locked?'No XI was saved for this week.':(_wide()?'Nobody yet. Choose players from the list on the right.':'Nobody yet. Your XI will appear here as you add players.'))+'</p>';
+  h+='<div class="nw-squad"'+(locked?' role="list"':'')+'>';
   team.forEach(function(id){
     var p=resolvePlayer(id),nm=p.name||id,iC=(id===cap),iV=(id===vc);
     var cls="nw-player-row"+(iC?" is-cap":iV?" is-vc":"");
     var pts=p.season_pts!=null?p.season_pts:"";
     var word={WK:"keeper",BAT:"batter",AR:"all-rounder",BOWL:"bowler"}[(p.role||"").toUpperCase()]||"";
-    var say=nm+(word?", "+word:"")+(iC?", captain":iV?", vice-captain":"")+". Change role or remove.";
-    h+='<button type="button" class="'+cls+'" onclick="_nwOpenPlayer(\''+escAttr(id)+'\')" aria-haspopup="dialog" aria-label="'+esc(say)+'">';
-    h+='<span class="xi-avatar '+_avClass(p.team)+'">'+esc(_initials(nm))+'</span>';
-    h+='<span class="nw-player-info"><span class="nw-player-name">'+esc(nm)+'</span>';
-    h+='<span class="nw-player-sub">'+_roleBadge(p.role)+(p.team?' '+esc(p.team):'')+(p.price?' · '+p.price.toFixed(1)+'CR':'')+'</span></span>';
-    h+='<span class="nw-player-pts">'+pts+'</span>';
-    h+=iC?'<span class="badge badge-c" aria-hidden="true">C</span>':iV?'<span class="badge badge-vc" aria-hidden="true">VC</span>':'<span class="row-go" aria-hidden="true">'+Ui.icon("right",18)+'</span>';
-    h+='</button>';
+    var say=nm+(word?", "+word:"")+(iC?", captain":iV?", vice-captain":"");
+    var inner='<span class="xi-avatar '+_avClass(p.team)+'">'+esc(_initials(nm))+'</span>'+
+      '<span class="nw-player-info"><span class="nw-player-name">'+esc(nm)+'</span>'+
+      '<span class="nw-player-sub">'+_roleBadge(p.role)+(p.team?' '+esc(p.team):'')+(p.price?' \u00b7 '+p.price.toFixed(1)+'CR':'')+'</span></span>'+
+      '<span class="nw-player-pts">'+pts+'</span>'+
+      (iC?'<span class="badge badge-c" aria-hidden="true">C</span>':iV?'<span class="badge badge-vc" aria-hidden="true">VC</span>':(locked?'':'<span class="row-go" aria-hidden="true">'+Ui.icon("right",18)+'</span>'));
+    if(locked)h+='<div class="'+cls+' is-static" role="listitem" aria-label="'+esc(say)+'">'+inner+'</div>';
+    else h+='<button type="button" class="'+cls+'" data-fk="sq:'+esc(id)+'" onclick="_nwOpenPlayer(\''+escAttr(id)+'\')" aria-haspopup="dialog" aria-label="'+esc(say+'. Change role or remove.')+'">'+inner+'</button>';
   });
-  for(var i=team.length;i<XI_SIZE;i++){
-    h+='<button type="button" class="nw-add-slot" onclick="_wide()?_focusPickerSearch():_pickOpenLayer()">'+Ui.icon("plus",16)+' pick a player</button>';
-  }
   h+='</div>';
   return h;
 }
@@ -431,17 +521,21 @@ function _buildBudgetBar(){
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
   var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001;
   var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
-  // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone)
-  var hint,hcls,hico,k=XI_SIZE-count;
-  if(locked){hint="Picks are locked until the Monday rollover.";hcls="bad";hico="lock";}
-  else if(count<XI_SIZE){hint="Pick "+k+" more player"+(k===1?"":"s")+" to complete your XI.";hcls="todo";hico="plus";}
+  // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone), with the one button that does it
+  var hint,hcls,hico,act="",k=XI_SIZE-count,pbMin=_priceBounds().min,back=(dirty&&_nwRestored)?"Restored your unsaved picks. ":"";   // back: said once, in front of whatever is left to do
+  if(locked){hint="Picks are locked until the next rollover.";hcls="bad";hico="lock";}
+  else if(_nwSaving){hint=_nwSlow?"Still saving. The server may have been asleep, so this can take up to a minute. Keep this screen open.":"Saving your team…";hcls="todo";hico="clock";}
   else if(rem<-0.001){hint="Over budget by "+Math.abs(rem).toFixed(1)+" CR. Swap someone for a cheaper player.";hcls="bad";hico="swap";}
-  else if(!_nwDraft.cap||!_nwDraft.vc){hint="Choose your "+(!_nwDraft.cap&&!_nwDraft.vc?"captain (\xd72) and vice-captain (\xd71.5).":!_nwDraft.cap?"captain (\xd72 points).":"vice-captain (\xd71.5 points).");hcls="todo";hico="team";}
+  else if(count<XI_SIZE&&rem<k*pbMin-0.001){hint="Only "+rem.toFixed(1)+" CR left for "+k+" more player"+(k===1?"":"s")+" (the cheapest costs "+pbMin.toFixed(1)+"). Swap someone for a cheaper player.";hcls="bad";hico="swap";}
+  else if(count<XI_SIZE){hint=back+(count===0?"Pick your "+XI_SIZE+" players":"Pick "+k+" more player"+(k===1?"":"s"))+(k===1?". You have "+rem.toFixed(1)+" CR left.":". About "+(rem/k).toFixed(1)+" CR each keeps you in budget.");hcls="todo";hico="plus";}
+  else if(!_nwDraft.cap){hint=back+"Choose your captain"+(_nwDraft.vc?"":" and vice-captain")+". The captain earns double points (\xd72).";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'cap\')">Choose</button>';}
+  else if(!_nwDraft.vc){hint=back+"Choose your vice-captain (\xd71.5 points).";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'vc\')">Choose</button>';}
+  else if(dirty&&_nwRestored){hint="Restored your unsaved picks. Save to keep them.";hcls="todo";hico="pick";}
   else if(dirty){hint="You have unsaved changes.";hcls="todo";hico="pick";}
   else if(_nwCarry){hint="Same XI as last week. It carries over unless you change it.";hcls="good";hico="check";}
   else{hint="Saved. You can keep editing until picks lock.";hcls="good";hico="check";}
-  var lbl=saved?"Saved ✓":(_nwCarry&&!dirty?"Keep this XI":"Save Draft");
-  var cls="btn "+(saved?"btn-ghost is-saved":(dirty||!_nwCarry?"btn-gold":"btn-ghost"));
+  var lbl=_nwSaving?"Saving…":locked?"Locked":saved?"Saved ✓":(_nwCarry&&!dirty?"Keep this XI":"Save Draft");
+  var cls="btn "+(saved||locked?"btn-ghost is-saved":(dirty||!_nwCarry?"btn-gold":"btn-ghost"));
   var h='<div class="nw-budget-bar">';
   h+='<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>';
   h+='<div class="nw-budget-track"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>';
@@ -449,9 +543,9 @@ function _buildBudgetBar(){
   ['WK','BAT','AR','BOWL'].forEach(function(r){h+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
   h+='</div>';
   h+='<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>';
-  h+='<button id="nw-save-btn" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved)?' disabled':'')+'>'+lbl+'</button>';
+  h+='<button id="nw-save-btn" data-fk="nw-save" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved||_nwSaving)?' disabled':'')+(_nwSaving?' aria-busy="true"':'')+'>'+lbl+'</button>';
   h+='</div>';
-  h+='<div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span></div>';
+  h+='<div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span>'+act+'</div>';
   return h;
 }
 
@@ -488,6 +582,7 @@ function _pickerView(){
 }
 function _pickerActive(V){return(_pickerTeams.length?1:0)+(V.maxP!==null?1:0);}   // narrowing filters hidden in the panel (the team chips count as one)
 function _pickerRowsHtml(V){
+  if(!_allPlayers().length)return '<li class="picker-empty">Loading the players\u2026<br><button type="button" class="btn btn-ghost btn-sm" onclick="_refreshData()">Try again</button></li>';
   if(V.filtered.length===0)return '<li class="picker-empty">No players match these filters.<br><button type="button" class="btn btn-ghost btn-sm" onclick="_pickerClear()">Clear filters</button></li>';
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
   var n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining(),h="";
@@ -502,7 +597,7 @@ function _pickerRowsHtml(V){
       '<div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+
       '<div class="prow-info"><div class="prow-name">'+esc(p.name)+'</div><div class="prow-sub">'+_roleBadge(p.role)+' '+esc(p.team||"")+' · '+spts+' pts</div></div>'+
       '<div class="prow-price">'+(p.price?p.price.toFixed(1):"—")+'<small> CR</small></div>'+
-      '<button type="button" class="'+btnCls+'"'+(over?' aria-disabled="true"':'')+' aria-label="'+(isSel?"Take out of your XI: ":isFull?"Swap in ":over?"Over budget: ":"Add ")+esc(p.name)+'"'+(isSel?' title="In your XI. Tap to take out"':'')+' onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
+      '<button type="button" class="'+btnCls+'" data-fk="pk:'+esc(key)+'"'+(over?' aria-disabled="true"':'')+' aria-label="'+(isSel?"Take out of your XI: ":isFull?"Swap in ":over?"Over budget by "+((p.price||0)-rem).toFixed(1)+" CR: ":"Add ")+esc(p.name)+'"'+(isSel?' title="In your XI. Tap to take out"':'')+' onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
   });
   return h;
 }
@@ -515,11 +610,6 @@ function _pickerResultsHtml(V){
 }
 function _pickerToolbarHtml(V){
   var h='<div class="picker-toolbar">';
-  if(_pickerNotice){
-    var ncolor=_pickerNotice.type==="warn"?"var(--danger-ink)":"var(--teal-ink)";
-    var nbg=_pickerNotice.type==="warn"?"var(--danger-bg)":"var(--ipl-teal-soft)";
-    h+='<div class="picker-notice" role="status" style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:'+nbg+';border:1px solid '+ncolor+';color:'+ncolor+';font-size:12px;font-weight:600">'+esc(_pickerNotice.msg)+'</div>';
-  }
   h+='<div class="picker-search">'+Ui.icon("search",16)+'<input id="picker-search-input" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search players" placeholder="Search players…" value="'+esc(_pickerSearch)+'" oninput="_pickerSearchInput(this.value)">';
   h+='<button type="button" class="ps-clear" id="ps-clear" aria-label="Clear search" onclick="_pickerSetSearch(\'\');var i=document.getElementById(\'picker-search-input\');if(i){i.value=\'\';i.focus();}"'+(_pickerSearch?'':' hidden')+'>'+Ui.icon("close",16)+'</button></div>';
   h+='<div class="picker-roles">'+Ui.seg({id:"pr-seg",label:"Filter by role",value:_pickerRole,onSelect:"_pickerSetRole",options:[
@@ -547,7 +637,7 @@ function _pickerXiHtml(){
   order.forEach(function(r){groups[r].forEach(function(it){
     var nm=it.p.name||it.id,tag=it.id===_nwDraft.cap?'<span class="xi-tag">C</span>':(it.id===_nwDraft.vc?'<span class="xi-tag">VC</span>':'');
     h+='<span class="xi-cell"><span class="xi-main"><span class="xi-name">'+esc(nm)+'</span><span class="xi-sub">'+_roleBadge(it.p.role)+(it.p.price?'<b>'+it.p.price.toFixed(1)+'</b>':'')+tag+'</span></span>'+
-      '<button type="button" class="xi-x" aria-label="Take '+esc(nm)+' out of your XI" onclick="_nwRemove(\''+escAttr(it.id)+'\')">'+Ui.icon("close",16)+'</button></span>';
+      '<button type="button" class="xi-x" data-fk="xx:'+esc(it.id)+'" aria-label="Take '+esc(nm)+' out of your XI" onclick="_nwRemove(\''+escAttr(it.id)+'\')">'+Ui.icon("close",16)+'</button></span>';
   });});
   return h;
 }
@@ -560,7 +650,7 @@ function _pickerToggleXi(){
 function _buildPicker(){
   var V=_pickerView(),n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
   var h='<div class="picker-shell">';
-  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><button type="button" class="lh-sub lh-xi'+(_pickerXiOpen?' open':'')+'" id="lh-xi" aria-expanded="'+(_pickerXiOpen?'true':'false')+'" aria-controls="picker-xi" onclick="_pickerToggleXi()">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left'+Ui.icon("down",14)+'</button></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
+  h+='<div class="layer-head"><button type="button" class="icon-btn" data-fk="pk-back" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><button type="button" class="lh-sub lh-xi'+(_pickerXiOpen?' open':'')+'" id="lh-xi" data-fk="pk-xi" aria-expanded="'+(_pickerXiOpen?'true':'false')+'" aria-controls="picker-xi" onclick="_pickerToggleXi()">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left'+Ui.icon("down",14)+'</button></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" data-fk="pk-done" onclick="_pickClose()">Done</button></div>';
   h+='<div class="picker-xi" id="picker-xi" role="region" aria-label="Your XI"'+(_pickerXiOpen?'':' hidden')+'>'+_pickerXiHtml()+'</div>';
   h+=_pickerToolbarHtml(V)+_pickerFiltersHtml(V);
   h+='<div class="picker-results" id="picker-results">'+_pickerResultsHtml(V)+'</div>';
@@ -658,13 +748,20 @@ function _buildThisWeekCard(){
 }
 function _buildNextWeekCard(){
   if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
+  var locked=_deadlineLocked();
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" style="font-size:10px;color:var(--muted);font-weight:400">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  if(locked){
+    // Past the deadline nothing on this screen can change the XI, so nothing here pretends it can: the XI that counts, and why.
+    h+='<div class="nw-lockbar" role="status">'+Ui.icon("lock",22)+'<div><b>Picks are locked</b><span>The deadline has passed, so your XI is set. New picks open again after the next rollover.</span>'+(_nwHasUnsaved()?'<span class="nw-lock-warn">Changes you had not saved cannot be saved now. The XI below is your last saved one.</span>':'')+'</div></div>';
+    h+=_buildNwSquad()+'</div>';
+    return '<div class="nw-layout nw-locked"><div class="nw-left">'+h+'</div></div>';
+  }
   h+=_buildBudgetBar();
-  h+=_buildNwSquad();
   var _n=_nwDraft.team.length;
-  h+='<button type="button" class="btn '+(_n>=XI_SIZE?'btn-ghost':'btn-teal')+' add-players only-narrow" onclick="_pickOpenLayer()">'+Ui.icon("plus",18)+(_n>=XI_SIZE?' Change players':' Add players ('+_n+'/'+XI_SIZE+')')+'</button>';
-
+  // the main action sits right under the hint, where it stays put however long the list grows
+  h+='<button type="button" class="btn '+(_n>=XI_SIZE?'btn-ghost':'btn-teal')+' add-players only-narrow" data-fk="nw-cta" onclick="_pickOpenLayer()">'+Ui.icon("plus",18)+(_n>=XI_SIZE?' Change players':' Add players ('+_n+'/'+XI_SIZE+')')+'</button>';
+  h+=_buildNwSquad();
   h+='</div>';
   return '<div class="nw-layout"><div class="nw-left">'+h+'</div><div class="nw-right'+(_pickOpen?' layer-open':'')+'">'+_buildPicker()+'</div></div>';
 }
@@ -1187,7 +1284,7 @@ function _submitResetPasscode(forced){
 
 // ─── SWAP MODAL ───────────────────────────────────────────────────────────────
 function _showSwapModal(incomingId){
-  var inP=resolvePlayer(incomingId),inPrice=inP.price||0;
+  var prevFocus=document.activeElement,inP=resolvePlayer(incomingId),inPrice=inP.price||0;
   var h='<div id="swap-modal" role="dialog" aria-modal="true" aria-labelledby="swap-title" onclick="if(event.target.id===\'swap-modal\')_closeSwapModal()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div class="swap-sheet" style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 28px;max-height:84vh;overflow-y:auto;">';
   h+='<h2 id="swap-title" class="swap-title">'+Ui.icon("swap",22)+'<span>Swap in '+esc(inP.name)+'</span>'+(inP.price?'<span class="swap-price">'+inP.price.toFixed(1)+' CR</span>':'')+'</h2>';
@@ -1210,16 +1307,24 @@ function _showSwapModal(incomingId){
   document.body.appendChild(el.firstChild);
   _swapKey=function(e){if(e.key==='Escape'){e.preventDefault();_closeSwapModal();}};
   document.addEventListener('keydown',_swapKey);
+  _swapPrev=prevFocus;
   var first=document.querySelector('#swap-modal .swap-row:not(.is-off)')||document.querySelector('#swap-modal .swap-cancel');
   if(first)first.focus();
 }
-var _swapKey=null;
-function _closeSwapModal(){var m=document.getElementById('swap-modal');if(m)m.remove();if(_swapKey){document.removeEventListener('keydown',_swapKey);_swapKey=null;}}
+var _swapKey=null,_swapPrev=null;
+function _closeSwapModal(){
+  var m=document.getElementById('swap-modal');if(m)m.remove();
+  if(_swapKey){document.removeEventListener('keydown',_swapKey);_swapKey=null;}
+  var p=_swapPrev;_swapPrev=null;
+  if(p&&document.body.contains(p)){try{p.focus({preventScroll:true});}catch(e){}}   // back to the row that opened it
+}
 
 // ─── SCORING RULES MODAL ─────────────────────────────────────────────────────
 // Display copy — numbers must stay in sync with logic/scoring_engine.py (calc_pts).
+var _rulesPrev=null;
 function _showRulesModal(){
   if(document.getElementById('rules-modal'))return;
+  _rulesPrev=document.activeElement;
   var sec='style="font-size:12px;font-weight:700;color:var(--gold-ink);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;"';
   var li ='style="font-size:13px;color:var(--text);line-height:1.55;padding:3px 0;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--hair);"';
   var lbl='style="color:var(--text);flex:1;"';
@@ -1282,8 +1387,13 @@ function _showRulesModal(){
   h+='<button onclick="_closeRulesModal()" style="margin-top:18px;width:100%;padding:11px;background:var(--gold-fill);border:none;border-radius:8px;color:var(--on-fill);font-size:13px;font-weight:700;cursor:pointer;">Got it</button>';
   h+='</div></div>';
   var el=document.createElement('div');el.innerHTML=h;document.body.appendChild(el.firstChild);
+  var gb=document.querySelector('#rules-modal button[onclick*="_closeRulesModal"]:last-of-type');if(gb)gb.focus();
 }
-function _closeRulesModal(){var m=document.getElementById('rules-modal');if(m)m.remove();}
+function _closeRulesModal(){
+  var m=document.getElementById('rules-modal');if(m)m.remove();
+  var p=_rulesPrev;_rulesPrev=null;
+  if(p&&document.body.contains(p)){try{p.focus({preventScroll:true});}catch(e){}}
+}
 function _doSwap(removeId,addId){
   _closeSwapModal();
   var at=_nwDraft.team.indexOf(removeId),wasCap=_nwDraft.cap===removeId,wasVc=_nwDraft.vc===removeId;
@@ -1291,14 +1401,14 @@ function _doSwap(removeId,addId){
   if(wasCap)_nwDraft.cap=null;
   if(wasVc)_nwDraft.vc=null;
   _nwDraft.team.push(addId);
-  if(_state)render(_state);
+  _nwChanged();
   Ui.toast((resolvePlayer(addId).name||addId)+" in, "+(resolvePlayer(removeId).name||removeId)+" out",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){
     if(_nwDraft.team.indexOf(addId)<0)return;
     _nwDraft.team=_nwDraft.team.filter(function(x){return x!==addId;});
     _nwDraft.team.splice(Math.min(at,_nwDraft.team.length),0,removeId);
     if(wasCap)_nwDraft.cap=removeId;
     if(wasVc)_nwDraft.vc=removeId;
-    if(_state)render(_state);
+    _nwChanged();
   }}});
 }
 
@@ -1332,14 +1442,16 @@ function _buildAppBar(){
   h+='</div>';
   if(_username){
     h+='<nav class="nav-tabs" aria-label="Main">';
-    _tabList().forEach(function(t){h+='<button type="button" class="nav-tab" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,18)+'<span>'+esc(t.label)+'</span></button>';});
+    _tabList().forEach(function(t){h+='<button type="button" class="nav-tab" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,18)+'<span>'+esc(t.label)+'</span>'+_navDot(t)+'</button>';});
     h+='</nav>';
   }
   return h+'</header>';
 }
+// A small dot on "Pick" while there are picks that have not been saved (they would be lost at the deadline), whichever tab is open.
+function _navDot(t){return(t.id==="next"&&_username&&_nwHasUnsaved()&&!_deadlineLocked())?'<span class="nav-dot" aria-hidden="true"></span><span class="ui-sr-only">unsaved changes</span>':'';}
 function _buildBottomNav(){
   var h='<nav class="bottom-nav" aria-label="Main">';
-  _TAB_DEFS.slice(0,4).forEach(function(t){h+='<button type="button" class="bn-item" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,22)+'<span>'+esc(t.short)+'</span></button>';});
+  _TAB_DEFS.slice(0,4).forEach(function(t){h+='<button type="button" class="bn-item" onclick="switchTab(\''+t.id+'\')"'+(_activeTab===t.id?' aria-current="page"':'')+'>'+Ui.icon(t.icon,22)+'<span>'+esc(t.short)+'</span>'+_navDot(t)+'</button>';});
   var moreOn=(_activeTab==="members"||_activeTab==="admin");
   h+='<button type="button" class="bn-item" onclick="_openMoreMenu()" aria-haspopup="dialog"'+(moreOn?' aria-current="page"':'')+'>'+Ui.icon("more",22)+'<span>More</span></button>';
   return h+'</nav>';
@@ -1373,6 +1485,7 @@ function render(state){
     }
   }
   var _lay=document.querySelector(".nw-right.layer-open"),_layTop=_lay?_lay.scrollTop:0;   // keep the open picker where it was
+  var _fk=_focusKey();   // ...and the control that had keyboard focus
   var memberNames=Object.keys(members).sort();
   if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
   var html=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1">';
@@ -1401,7 +1514,19 @@ function render(state){
   if(_activeTab==="next"&&_preserveSearchFocus){
     var inp=document.getElementById("picker-search-input");
     if(inp){inp.focus();try{inp.selectionStart=inp.selectionEnd=_preserveSearchPos;}catch(e){}}
-  }
+  }else if(_fk){var _fe=_focusFind(_fk);if(_fe){try{_fe.focus({preventScroll:true});}catch(e){}}}
+}
+// Rebuilding the page drops keyboard focus. The control that had it (marked data-fk) gets it back, so keyboard and screen-reader users keep their place.
+function _focusKey(){var a=document.activeElement;return(a&&a!==document.body&&a.getAttribute&&$app&&$app.contains(a))?a.getAttribute("data-fk"):null;}
+function _focusFind(k){
+  if(!k||!$app)return null;
+  function by(key){var e=$app.querySelector('[data-fk="'+String(key).split("\\").join("\\\\").split('"').join('\\"')+'"]');return(e&&!e.disabled&&e.offsetParent!==null)?e:null;}   // only something that can really take focus
+  var e=by(k);
+  if(e)return e;
+  // it is gone, or cannot be used any more (a player taken out, Save now done): land on the nearest sensible control instead of the top of the page
+  var next=k.indexOf("sq:")===0?["nw-cta"]:k.indexOf("xx:")===0?["pk-xi"]:{"nw-save":["nw-hintbtn","nw-cta"],"nw-hintbtn":["nw-save","nw-cta"],"nw-discard":["nw-save","nw-cta"],"pk-done":["nw-cta"],"pk-back":["nw-cta"]}[k]||[];   // closing the picker: back on the button that opened it
+  for(var i=0;i<next.length;i++){e=by(next[i]);if(e)return e;}
+  return null;
 }
 
 function renderLeaderboard(lb){_leaderboard=lb;if(_state&&(_activeTab==="leaderboard"||!_username))render(_state);}
@@ -1419,7 +1544,7 @@ function _withComp(url){
 // RULE: any new competition-scoped client state must be reset in this function.
 function _resetCompScope(){
   _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_adminMatches=null;_adminFilter="all";
-  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwRestored=false;_lockedWeek=null;
   _pickerSearch="";_pickerRole="All";_pickerTeams=[];_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;_pickerXiOpen=false;
   _weekKnown=false;
   if(window.Ui&&Ui.accClear){Ui.accClear("mcw-");Ui.accClear("mem-");}
@@ -1451,12 +1576,20 @@ function _renderSwitching(){
 function _deadlineLocked(){
   var dl=_state&&_state.deadline; if(!dl)return false;
   if(dl.status==='completed')return true;
+  if(_lockedWeek!==null&&_lockedWeek===_currentWeek)return true;   // the server refused a save as too late: it is the authority, whatever this clock says
   if(!dl.next_lock_utc)return false;
   return Date.now()>=new Date(dl.next_lock_utc).getTime();
+}
+// The last hour before the deadline: the countdown turns red (a draft saved at the last minute is the one that matters most).
+function _lockUrgent(){
+  var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc||dl.status==='completed')return false;
+  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();
+  return ms>0&&ms<=3600000;
 }
 function _deadlineText(){
   var dl=_state&&_state.deadline; if(!dl)return '';
   if(dl.status==='completed')return '🏁 Season complete';
+  if(_deadlineLocked())return '🔒 Locked — awaiting rollover';
   if(!dl.next_lock_utc)return '';
   var ms=new Date(dl.next_lock_utc).getTime()-Date.now();
   if(ms<=0)return '🔒 Locked — awaiting rollover';
@@ -1468,8 +1601,19 @@ setInterval(function(){
   document.querySelectorAll('.js-lockin').forEach(function(e){e.textContent=_lockIn()||'now';});
   var el=document.getElementById('nw-countdown'); if(!el)return;
   el.textContent=_deadlineText();
-  if(_deadlineLocked()){var b=document.getElementById('nw-save-btn');if(b){b.disabled=true;b.title='Locked — the weekly deadline has passed';}}
+  el.classList.toggle('urgent',_lockUrgent());
+  if(_deadlineLocked()&&!_lockSeen){_lockSeen=true;_nwCloseLayer();if(_state)render(_state);}   // the deadline just passed while this screen was open: lock it for real and say so
+  else if(!_deadlineLocked()&&_lockSeen)_lockSeen=false;
+  if(_deadlineLocked()&&!document.hidden&&Date.now()-_lockPoll>20000){_lockPoll=Date.now();_checkWeek();}
 },1000);
+var _lockSeen=false,_lockPoll=0;
+function _checkWeek(){
+  var sq=_bootSeq;
+  fetch(_withComp("/api/current-week"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(sq!==_bootSeq||!d||!d.ok||d.week_no===_currentWeek)return;
+    _doStateRefresh();   // the rollover has run: fetch the new week (the draft reopens with it)
+  }).catch(function(){});
+}
 function _buildCompSwitcher(){
   if(!_competitions||_competitions.length<2)return '';
   var h='<div class="comp-switcher" style="margin:0 0 14px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">';
@@ -1506,7 +1650,12 @@ document.addEventListener("keydown",function(e){            // Escape closes the
   if(typeof _closeMatchModal==="function"&&document.querySelector(".match-modal-backdrop"))_closeMatchModal();
 });
 var _rsz=null;window.addEventListener("resize",function(){clearTimeout(_rsz);_rsz=setTimeout(function(){if(_state&&(_activeTab==="admin"||_pickOpen))render(_state);},200);});
-function _pickOpenLayer(){_pickOpen=true;_pushLayer("pick");if(_state)render(_state);var l=document.querySelector(".nw-right.layer-open");if(l)l.scrollTop=0;}
+function _pickOpenLayer(){
+  if(_deadlineLocked())return;
+  _pickOpen=true;_pushLayer("pick");if(_state)render(_state);
+  var l=document.querySelector(".nw-right.layer-open");if(l)l.scrollTop=0;
+  var bk=document.querySelector('[data-fk="pk-back"]');if(bk){try{bk.focus({preventScroll:true});}catch(e){}}   // focus moves into the page that just opened
+}
 function _pickClose(){if(!_pickOpen)return;if(!_popLayer("pick")){_pickOpen=false;if(_state)render(_state);}}
 
 function _lockIn(){
@@ -1521,10 +1670,11 @@ function _buildActionBanner(){
   if(!_lockIn()||_deadlineLocked())return "";
   var n=_nwDraft.team.length;
   if(!n&&!_historyData)return "";                       // do not claim "no team" before the saved team has loaded
-  var full=n>=XI_SIZE,pre=_currentWeek<=1;
-  var sub=full?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it":(n?n+"/"+XI_SIZE+" players picked \u2014 finish your XI":"You haven\u0027t picked a team yet");
-  return '<div class="action-banner'+(full?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'
-    +'<button type="button" class="btn '+(full?"btn-ghost":"btn-gold")+' btn-sm" onclick="switchTab(\'next\')">'+(full?"Edit team":"Pick team")+'</button></div>';
+  var full=n>=XI_SIZE,pre=_currentWeek<=1,unsaved=_nwHasUnsaved(),ready=full&&!unsaved;   // "ready" only once it is SAVED: a full XI that was never saved is the one that gets lost at the deadline
+  var sub=ready?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it":(full?"Your XI is complete but not saved yet":(n?n+"/"+XI_SIZE+" players picked"+(unsaved?", not saved yet":"")+" \u2014 finish your XI":"You haven\u0027t picked a team yet"));
+  var btn=(full&&unsaved)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwSave()"'+(_nwSaving?' disabled aria-busy="true"':'')+'>'+(_nwSaving?'Saving…':'Save XI')+'</button>'
+    :'<button type="button" class="btn '+(ready?"btn-ghost":"btn-gold")+' btn-sm" onclick="switchTab(\'next\')">'+(ready?"Edit team":"Pick team")+'</button>';
+  return '<div class="action-banner'+(ready?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'+btn+'</div>';
 }
 function _openCompMenu(){
   var items=(_competitions||[]).map(function(c){
@@ -1641,7 +1791,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper3"></script>
-<script src="/static/mc_hub.js?v=paper3"></script>
+<script src="/static/ipl_glue.js?v=paper4"></script>
+<script src="/static/mc_hub.js?v=paper4"></script>
 </body>
 </html>
