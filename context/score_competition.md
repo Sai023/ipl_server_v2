@@ -48,7 +48,7 @@ number and confirmed, real write, second run a no-op, a wrong link refused with 
 **Deployed.** Shipped to `main` as app 2.14.0 (`SCRAPER_VER` 11.1, `FUZZY_MATCH_VER` 1.2.0, `CRICBUZZ_DISCOVERY_VER` 1.3.0). Render redeploys with the
 code, but the runner itself is never run there: it lives in the repo, so any checkout of `main` on the admin's PC has it. The live app only imports
 `fuzzy_match` for its `_SEMANTIC_MAP`; the edits to `scraper.py`, `fuzzy_match._index_players` and `resolve_series_id(slug=)` keep the old behaviour as
-the default. Nothing is scheduled. The links for SA20 matches 1-5 were stored in production on 2026-11-18 (see below); the other 29 matches have none yet.
+the default. The runner is scheduled on the owner's PC since 2026-11-18 (see "Scheduling" below). The links for SA20 matches 1-5 were stored in production on 2026-11-18 (see below); the other 29 matches have none yet.
 
 **Match by number (v1.1.0, app 2.14.1).** The 2.14.0 rehearsal found that Cricbuzz lists SA20 fixtures with no team codes
 ("1St Match Sa20 2027"), so team-pair discovery linked none. Discovery now also matches the Nth Cricbuzz match to our
@@ -68,8 +68,26 @@ exactly those five rows. Undo: set those five rows' `scorecard_url` back to
 Cricbuzz's header field `year` is 0 on these fixtures: identify the series by `seriesId` 12791 / `seriesName` "SA20, 2027".
 
 **Before and during the season (Jan 2027).**
-1. Matches 1-5 are linked (2026-11-18). Whenever Cricbuzz lists more fixtures, run `--dry-run` first (each line says "by match number" and whether the teams were confirmed), then a real run (it writes to production: needs the owner's go-ahead).
+1. Matches 1-5 are linked (2026-11-18). The scheduled full run (below) links further fixtures by itself as Cricbuzz lists them, teams-confirmed only; it logs what it linked, and a refused link raises the attention flag.
 2. Check the team short names on the first real scorecards: the header names already equal our codes, the innings-level names are what the match-day check reads. A match skipped for team codes needs an alias; the link is never changed.
-3. Decide how it is scheduled: Windows Task Scheduler on the PC, every ~30 minutes on match days. Not set up: it is a standing task and needs the owner's go-ahead.
+3. Scheduling is set up (2026-11-18, the owner's go-ahead): see "Scheduling" below. It does not alert anyone: look at `state\ATTENTION.txt` and the log after the first real match.
 4. After the first scored match read the "Auto-added" lines: a roster spelling variant would be added as an `ext_` duplicate that scores but cannot be picked.
-5. Every run without `--dry-run` writes to the production database: get the owner's go-ahead for the first real run.
+5. Every run without `--dry-run` writes to the production database. The scheduled runs do so under the owner's standing go-ahead for scheduling; any other production write (series id/slug on the competition row, the week-1 team copy, Activate) still needs a fresh yes.
+
+## Scheduling (installed 2026-11-18)
+
+Two per-user Windows tasks, installed by `scripts/scheduled_runner/install_tasks.ps1` (full details, check/pause/remove commands
+and gotchas in `scripts/scheduled_runner/README.md`):
+
+* `SA20 full run`: 09:00 and 13:15 daily until 1 Mar 2027 → `runner.py --mode full` (discovery + a scoring pass).
+* `SA20 scoring pass`: every 30 minutes 14:00-23:00 from 17 Jan to 22 Feb 2027 → `runner.py --mode score` (scoring only).
+
+`runner.py` is the unattended entry point (tests: `tests/test_scheduled_runner.py`): it runs `score_competition.score()` for
+`sa20_2027` (series 12791 / `sa20-2027` come from its config because the production competition row has neither), without
+the app's schema-init step, storing only teams-confirmed links, one run at a time, with a time limit and a redacted log. It runs
+from a frozen copy of the live code in `C:\Users\<owner>\BCLFantasyRunner\app` (refresh it by re-running the installer after a
+release), as the logged-on user (a standard Windows user cannot run a task whether logged on or not without a password), and
+needs the PC on, awake and online. Verified 2026-11-18: both tasks started by the Task Scheduler end with result 0, and
+production's table fingerprints are unchanged by them. **Two traps:** the runner folder must not be under `AppData` (the Claude
+desktop app is a packaged app: its writes there are redirected to a private copy the Task Scheduler cannot see → `0x8007010B`)
+nor inside OneDrive (sync/locks/dehydration); the installer refuses both.
