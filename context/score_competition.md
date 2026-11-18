@@ -48,7 +48,7 @@ number and confirmed, real write, second run a no-op, a wrong link refused with 
 **Deployed.** Shipped to `main` as app 2.14.0 (`SCRAPER_VER` 11.1, `FUZZY_MATCH_VER` 1.2.0, `CRICBUZZ_DISCOVERY_VER` 1.3.0). Render redeploys with the
 code, but the runner itself is never run there: it lives in the repo, so any checkout of `main` on the admin's PC has it. The live app only imports
 `fuzzy_match` for its `_SEMANTIC_MAP`; the edits to `scraper.py`, `fuzzy_match._index_players` and `resolve_series_id(slug=)` keep the old behaviour as
-the default. Nothing is scheduled, and no SA20 match has a Cricbuzz link in production yet.
+the default. Nothing is scheduled. The links for SA20 matches 1-5 were stored in production on 2026-11-18 (see below); the other 29 matches have none yet.
 
 **Match by number (v1.1.0, app 2.14.1).** The 2.14.0 rehearsal found that Cricbuzz lists SA20 fixtures with no team codes
 ("1St Match Sa20 2027"), so team-pair discovery linked none. Discovery now also matches the Nth Cricbuzz match to our
@@ -56,10 +56,19 @@ match N, confirmed against the teams in Cricbuzz's own scorecard header before t
 check now needs every scorecard team to be one of the fixture's two (see Flow and Safety above). Rehearsed against live
 Cricbuzz on the throwaway database: 5 of 5 fixtures matched and confirmed. What it does not do: playoff matches
 (Qualifier 1, Eliminator, Qualifier 2, Final have no teams until the league ends) are linked by hand in Admin → Match
-links; and nothing has been run against production, so those five links are not stored there yet.
+links.
+
+**First production run (2026-11-18).** After a dry run on production in a session the database itself forced to read-only
+(the five fixtures matched by number, each confirmed from Cricbuzz's header, then checked independently against our
+schedule file: teams, match number, series, exact start time), the five links were stored: sa20_2027_m01..m05 ←
+Cricbuzz #168411 / 168417 / 168427 / 168437 / 168451. Table fingerprints before and after differ only in `matches`, in
+exactly those five rows. Undo: set those five rows' `scorecard_url` back to
+`https://www.cricbuzz.com/live-cricket-scorecard/00000`. The production `sa20_2027` row has no `series_id` /
+`series_slug`, so pass `--series-id 12791 --series-slug sa20-2027` on every run (or store them on the competition).
+Cricbuzz's header field `year` is 0 on these fixtures: identify the series by `seriesId` 12791 / `seriesName` "SA20, 2027".
 
 **Before and during the season (Jan 2027).**
-1. Run the runner without `--dry-run` once (needs the owner's go-ahead: it writes to production) to store the five links, then again whenever Cricbuzz lists more fixtures; a `--dry-run` first shows what it would link (each line says "by match number" and whether the teams were confirmed).
+1. Matches 1-5 are linked (2026-11-18). Whenever Cricbuzz lists more fixtures, run `--dry-run` first (each line says "by match number" and whether the teams were confirmed), then a real run (it writes to production: needs the owner's go-ahead).
 2. Check the team short names on the first real scorecards: the header names already equal our codes, the innings-level names are what the match-day check reads. A match skipped for team codes needs an alias; the link is never changed.
 3. Decide how it is scheduled: Windows Task Scheduler on the PC, every ~30 minutes on match days. Not set up: it is a standing task and needs the owner's go-ahead.
 4. After the first scored match read the "Auto-added" lines: a roster spelling variant would be added as an `ext_` duplicate that scores but cannot be picked.
