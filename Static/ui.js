@@ -295,6 +295,29 @@
     if (to < 0) return; e.preventDefault(); opts[to].focus(); opts[to].click();
   });
 
+  /* ---------- toggle chips: a multi-choice group (several can be on at once; none on = no restriction, e.g. "all teams") ----------
+     Ui.chips({id, label, values:[...on...], onToggle:"fnName", allLabel:"All", options:[{v, l, dot}]}) -> html.
+     onToggle is called with the option's value (a string); the leading "All" chip (drawn when allLabel is given) calls it with "" and means "clear the group".
+     dot = a class (e.g. a team colour class) that paints a small colour dot before the label.
+     Ui.chipsSet(el, values) changes what is on in place (the focused chip stays where it is). */
+  Ui.chips = function (o) {
+    var vals = o.values || [], h = '<div class="tchips"' + (o.id ? ' id="' + esc(o.id) + '"' : "") + ' role="group" aria-label="' + esc(o.label || "") + '">';
+    function chip(v, l, dot, on) {
+      return '<button type="button" class="tchip' + (on ? " on" : "") + '" aria-pressed="' + (on ? "true" : "false") + '" data-v="' + esc(v) + '" onclick="' + o.onToggle + "(this.getAttribute('data-v'))\">" +
+        (dot ? '<i class="tchip-dot ' + esc(dot) + '" aria-hidden="true"></i>' : "") + "<span>" + esc(l) + "</span></button>";
+    }
+    if (o.allLabel) h += chip("", o.allLabel, "", vals.length === 0);
+    (o.options || []).forEach(function (op) { h += chip(op.v, op.l == null ? op.v : op.l, op.dot, vals.indexOf(op.v) !== -1); });
+    return h + "</div>";
+  };
+  Ui.chipsSet = function (el, values) {
+    if (!el) return;
+    [].forEach.call(el.querySelectorAll(".tchip"), function (b) {
+      var v = b.getAttribute("data-v"), on = v === "" ? values.length === 0 : values.indexOf(v) !== -1;
+      b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  };
+
   /* ---------- range slider: the filled part of the track follows the thumb (CSS reads --p) ---------- */
   Ui.rangeFill = function (el) { var mn = +el.min || 0, mx = +el.max || 100, v = +el.value; el.style.setProperty("--p", (mx > mn ? (v - mn) / (mx - mn) * 100 : 0) + "%"); };
   document.addEventListener("input", function (e) { var t = e.target; if (t && t.classList && t.classList.contains("range")) Ui.rangeFill(t); }, true);

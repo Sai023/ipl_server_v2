@@ -361,6 +361,32 @@ select:focus-visible { border-color: var(--info-line); }
 .fchip button { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--tint-3); color: inherit; cursor: pointer; }
 .picker-empty .btn { margin-top: 10px; }
 
+/* ---------- toggle chips (Ui.chips): several can be on at once, e.g. the team filter. Same hand-drawn language as the segmented control ---------- */
+.tchips { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 0 6px; }
+.tchip { display: inline-flex; align-items: center; gap: 7px; min-height: 42px; padding: 4px 14px; border: 1.25px solid var(--border-strong); border-radius: 999px; background: var(--sheet-2); color: var(--muted); font: 800 13px/1 var(--font); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background .15s var(--ease), border-color .15s var(--ease); }
+.tchip:hover:not(.on) { background: var(--tint-2); }
+.tchip.on { color: var(--on-fill); background: color-mix(in srgb, var(--gold-fill) 70%, var(--sheet-2)); border-color: var(--pencil); box-shadow: 1.5px 2px 0 color-mix(in srgb, var(--pencil) 34%, transparent); }
+.tchip:focus-visible { outline: 2px solid var(--info-line); outline-offset: 1px; }
+.tchip-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: rgb(var(--tcr, 130, 124, 112)); border: 1px solid color-mix(in srgb, var(--pencil) 50%, transparent); }
+
+/* ---------- "Your XI" inside the picker (phones): the header line opens it, so a player can be taken out without leaving ---------- */
+button.lh-xi { display: inline-flex; align-items: center; gap: 4px; margin: -6px 0; padding: 6px 8px 6px 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button.lh-xi .ui-icon { color: var(--teal-ink); transition: transform .2s var(--ease); }
+button.lh-xi.open .ui-icon { transform: rotate(180deg); }
+button.lh-xi:focus-visible { outline: 2px solid var(--info-line); outline-offset: 1px; border-radius: 6px; }
+.picker-xi { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 52vh; overflow-y: auto; overscroll-behavior: contain; margin: 10px 12px 0; padding: 10px; border: 1.5px solid var(--border); border-radius: var(--r-hand-sm); background: var(--sheet-2); }
+.picker-xi[hidden] { display: none; }
+.xi-cell { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 6px 5px 6px 10px; border: 1.25px solid var(--pencil); border-radius: 12px; background: color-mix(in srgb, var(--gold-fill) 38%, var(--sheet-2)); color: var(--on-fill); }
+.xi-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.xi-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 800 13px/1.15 var(--font); }
+.xi-sub { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.xi-sub b { font-weight: 800; color: var(--on-fill); font-variant-numeric: tabular-nums; }
+.xi-sub .xi-tag { font-size: 10px; }
+.xi-x { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--tint-3); color: inherit; cursor: pointer; }
+.xi-tag { padding: 2px 5px; border: 1px solid var(--pencil); border-radius: 6px; background: var(--gold-fill); color: var(--on-fill); font-weight: 800; line-height: 1; }
+.xi-empty { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); }
+@media (min-width: 1000px) { .picker-xi { display: none !important; } }
+
 /* ---------- squad rows are one big tap target now (the C / VC / remove choices live in a sheet) ---------- */
 button.nw-player-row { width: 100%; min-height: 58px; padding: 8px 10px; text-align: left; font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button.nw-player-row:hover { border-color: var(--border-strong); }

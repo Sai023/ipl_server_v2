@@ -24,5 +24,10 @@ for (const fam of ['gold', 'teal', 'danger', 'success', 'info', 'violet', 'orang
 }
 // the Match Centre pre-season note: text on the butter tint it sits on
 for (const t of ['text', 'text-strong']) check(`--${t} on gold tint 30% over --sheet-2 (pre-season note)`, hex(need(t)), over(hex(need('gold-wash')), surfaces['sheet-2'], 0.3));
+// the picker's team chips (Ui.chips) and "Your XI" cells: dark text on the butter tints they sit on
+const butter = (t) => over(hex(need('gold-fill')), surfaces['sheet-2'], t);
+check('--on-fill on butter 70% over --sheet-2 (team chip, on)', hex(need('on-fill')), butter(0.70), 7);
+check('--on-fill on butter 38% over --sheet-2 (Your XI cell: name, price)', hex(need('on-fill')), butter(0.38), 7);
+check('--muted on butter 38% over --sheet-2 (Your XI cell: role line)', hex(need('muted')), butter(0.38));
 console.log(`${checks} checks, ${fails} failing`);
 process.exit(fails ? 1 : 0);

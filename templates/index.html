@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper2">
-  <link rel="stylesheet" href="/static/style.css?v=paper2">
-  <link rel="stylesheet" href="/static/ui.css?v=paper2">
-  <link rel="stylesheet" href="/static/screens.css?v=paper2">
-  <link rel="stylesheet" href="/static/paper.css?v=paper2">
+  <link rel="stylesheet" href="/static/theme.css?v=paper3">
+  <link rel="stylesheet" href="/static/style.css?v=paper3">
+  <link rel="stylesheet" href="/static/ui.css?v=paper3">
+  <link rel="stylesheet" href="/static/screens.css?v=paper3">
+  <link rel="stylesheet" href="/static/paper.css?v=paper3">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper2"></script>
+<script src="/static/ui.js?v=paper3"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -35,8 +35,8 @@ var _isAdmin=false,_mustChange=false;
 var _authPending=false;   // true while a saved session is being verified: render() holds back so a returning member never sees the login screen flash by
 var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
-var _pickerSearch="",_pickerRole="All",_pickerTeam="All",_pickerSort="season";
-var _pickerMaxPrice=null,_pickerFiltersOpen=false;   // null = no price limit
+var _pickerSearch="",_pickerRole="All",_pickerTeams=[],_pickerSort="season";   // _pickerTeams: the teams switched on (several at once); empty = every team
+var _pickerMaxPrice=null,_pickerFiltersOpen=false,_pickerXiOpen=false;   // null = no price limit; _pickerXiOpen: the "Your XI" strip under the picker header is open
 var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (signature), and whether that is last week's XI carried over
 var _pickerNotice=null,_pickerNoticeTimer=null;
 var _adminMatches=null,_adminFilter="all";
@@ -272,7 +272,7 @@ function _pickerUpdate(){
   el=document.getElementById("pr-seg");
   if(el){Ui.segSet(el,_pickerRole);[].forEach.call(el.querySelectorAll(".seg-opt"),function(b){var c=b.querySelector(".seg-n");if(c)c.textContent=V.counts[b.getAttribute("data-v")];});}
   el=document.getElementById("pf-sort");if(el)Ui.segSet(el,V.sv);
-  el=document.getElementById("pf-team");if(el&&el.value!==_pickerTeam)el.value=_pickerTeam;
+  Ui.chipsSet(document.getElementById("pf-team"),_pickerTeams);
   var cur=V.maxP!==null?V.maxP:V.pb.max,txt=V.maxP!==null?"Up to "+cur.toFixed(1)+" CR":"Any price";
   el=document.getElementById("pf-price");
   if(el){if(parseFloat(el.value)!==cur)el.value=cur;Ui.rangeFill(el);el.setAttribute("aria-valuetext",txt);}
@@ -284,13 +284,19 @@ function _pickerUpdate(){
   el=document.getElementById("plist");if(el)el.innerHTML=_pickerRowsHtml(V);
 }
 function _pickerSetRole(r){_pickerRole=r;_pickerUpdate();}
-function _pickerSetTeam(t){_pickerTeam=t;_pickerUpdate();}
+// A team chip switches that team on or off; several can be on together. "" (the "All" chip) switches them all off = every team.
+function _pickerToggleTeam(t){
+  if(!t)_pickerTeams=[];
+  else if(_pickerTeams.indexOf(t)<0)_pickerTeams=_pickerTeams.concat([t]);
+  else _pickerTeams=_pickerTeams.filter(function(x){return x!==t;});
+  _pickerUpdate();
+}
 function _pickerSetSort(s){_pickerSort=s;_pickerUpdate();}
 function _pickerSetPrice(v){v=parseFloat(v);if(isNaN(v))return;_pickerMaxPrice=(v>=_priceBounds().max-0.001)?null:v;_pickerUpdate();}
 function _pickerFitBudget(){_pickerSetPrice(Math.max(_priceBounds().min,Math.floor(_remaining()*2)/2));}
 function _pickerSetSearch(v){_pickerSearch=v;_pickerUpdate();}
 function _pickerSearchInput(v){_pickerSearch=v;var c=document.getElementById("ps-clear");if(c)c.hidden=!v;clearTimeout(_psTimer);_psTimer=setTimeout(_pickerUpdate,90);}
-function _pickerClear(){_pickerRole="All";_pickerTeam="All";_pickerSearch="";_pickerMaxPrice=null;var i=document.getElementById("picker-search-input");if(i)i.value="";_pickerUpdate();}
+function _pickerClear(){_pickerRole="All";_pickerTeams=[];_pickerSearch="";_pickerMaxPrice=null;var i=document.getElementById("picker-search-input");if(i)i.value="";_pickerUpdate();}
 function _pickerShowNotice(msg,type){
   _pickerNotice={msg:msg,type:type||"info"};
   if(_pickerNoticeTimer)clearTimeout(_pickerNoticeTimer);
@@ -300,11 +306,9 @@ function _pickerShowNotice(msg,type){
 function _pickerRowClick(id){
   if(!id)return;
   var p=resolvePlayer(id);
-  var nm=p.name||id;
-  if(_nwDraft.team.indexOf(id)!==-1){
-    _pickerShowNotice(nm+" is already in your XI","info");
-    return;
-  }
+  // A player who is already in the XI is taken OUT by tapping again (the Undo toast covers a slip): no trip back to the squad screen.
+  var inXi=_nwDraft.team.indexOf(id)!==-1?id:(p.name&&_nwDraft.team.indexOf(p.name)!==-1?p.name:null);
+  if(inXi!==null){_nwRemove(inXi);return;}
   if(_nwDraft.team.length>=XI_SIZE){
     _showSwapModal(id);
     return;
@@ -466,7 +470,7 @@ function _pickerView(){
   var maxP=(_pickerMaxPrice!==null&&_pickerMaxPrice<pb.max-0.001)?_pickerMaxPrice:null;
   function pass(p,withRole){
     if(withRole&&_pickerRole!=="All"&&p.role!==_pickerRole)return false;
-    if(_pickerTeam!=="All"&&p.team!==_pickerTeam)return false;
+    if(_pickerTeams.length&&_pickerTeams.indexOf(p.team)===-1)return false;
     if(q&&(p.name+" "+(p.team||"")).toLowerCase().indexOf(q)===-1)return false;
     if(maxP!==null&&(p.price||0)>maxP+0.001)return false;
     return true;
@@ -482,7 +486,7 @@ function _pickerView(){
   });
   return{teams:teams,filtered:filtered,counts:counts,pb:pb,maxP:maxP,q:q,sv:sv};
 }
-function _pickerActive(V){return(_pickerTeam!=="All"?1:0)+(V.maxP!==null?1:0);}   // narrowing filters hidden in the panel
+function _pickerActive(V){return(_pickerTeams.length?1:0)+(V.maxP!==null?1:0);}   // narrowing filters hidden in the panel (the team chips count as one)
 function _pickerRowsHtml(V){
   if(V.filtered.length===0)return '<li class="picker-empty">No players match these filters.<br><button type="button" class="btn btn-ghost btn-sm" onclick="_pickerClear()">Clear filters</button></li>';
   var selSet={};_nwDraft.team.forEach(function(n){selSet[n]=true;});
@@ -498,13 +502,13 @@ function _pickerRowsHtml(V){
       '<div class="prow-avatar '+_avClass(p.team)+'">'+esc(_initials(p.name))+'</div>'+
       '<div class="prow-info"><div class="prow-name">'+esc(p.name)+'</div><div class="prow-sub">'+_roleBadge(p.role)+' '+esc(p.team||"")+' · '+spts+' pts</div></div>'+
       '<div class="prow-price">'+(p.price?p.price.toFixed(1):"—")+'<small> CR</small></div>'+
-      '<button type="button" class="'+btnCls+'"'+(over?' aria-disabled="true"':'')+' aria-label="'+(isSel?"In your XI: ":isFull?"Swap in ":over?"Over budget: ":"Add ")+esc(p.name)+'" onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
+      '<button type="button" class="'+btnCls+'"'+(over?' aria-disabled="true"':'')+' aria-label="'+(isSel?"Take out of your XI: ":isFull?"Swap in ":over?"Over budget: ":"Add ")+esc(p.name)+'"'+(isSel?' title="In your XI. Tap to take out"':'')+' onclick="event.stopPropagation();_pickerRowClick(\''+escAttr(key)+'\')">'+btnLbl+'</button></li>';
   });
   return h;
 }
 function _pickerResultsHtml(V){
   var h='<span aria-live="polite"><b>'+V.filtered.length+'</b> player'+(V.filtered.length===1?'':'s')+'</span>';
-  if(_pickerTeam!=="All")h+='<span class="fchip">'+esc(_pickerTeam)+'<button type="button" aria-label="Remove the team filter" onclick="_pickerSetTeam(\'All\')">'+Ui.icon("close",14)+'</button></span>';
+  _pickerTeams.forEach(function(t){h+='<span class="fchip">'+esc(t)+'<button type="button" aria-label="Remove the '+esc(t)+' filter" onclick="_pickerToggleTeam(\''+escAttr(t)+'\')">'+Ui.icon("close",14)+'</button></span>';});
   if(V.maxP!==null)h+='<span class="fchip">Up to '+V.maxP.toFixed(1)+' CR<button type="button" aria-label="Remove the price filter" onclick="_pickerSetPrice('+V.pb.max+')">'+Ui.icon("close",14)+'</button></span>';
   if(_pickerActive(V)||V.q||_pickerRole!=="All")h+='<button type="button" class="link-btn" onclick="_pickerClear()">Clear all</button>';
   return h;
@@ -524,22 +528,40 @@ function _pickerToolbarHtml(V){
   return h+'</div>';
 }
 function _pickerFiltersHtml(V){
-  function opt(v,l,cur){return '<option value="'+esc(v)+'"'+(cur===v?" selected":"")+'>'+esc(l)+'</option>';}
   var rem=_remaining(),act=_pickerActive(V),cur=V.maxP!==null?V.maxP:V.pb.max,pc=(V.pb.max>V.pb.min)?((cur-V.pb.min)/(V.pb.max-V.pb.min)*100):100;
   var txt=V.maxP!==null?"Up to "+cur.toFixed(1)+" CR":"Any price";
   var h='<details class="pf" id="picker-filters"'+(_pickerFiltersOpen?' open':'')+' ontoggle="_pickerFiltersOpen=this.open">';
   h+='<summary>'+Ui.icon("sliders",18)+'<span>Filters</span><span class="pf-badge" id="pf-badge"'+(act?'':' hidden')+'>'+act+'</span>'+Ui.icon("down",16)+'</summary><div class="pf-body">';
-  h+='<div class="field"><label for="pf-team">Team</label><select id="pf-team" onchange="_pickerSetTeam(this.value)">'+opt("All","All teams",_pickerTeam)+V.teams.map(function(t){return opt(t,t,_pickerTeam);}).join("")+'</select></div>';
+  h+='<div class="field"><span class="field-l">Teams</span>'+Ui.chips({id:"pf-team",label:"Filter by team (pick as many as you like)",values:_pickerTeams,onToggle:"_pickerToggleTeam",allLabel:"All",options:V.teams.map(function(t){return{v:t,l:t,dot:_avClass(t)};})})+'</div>';
   h+='<div class="field"><span class="field-l">Sort by</span>'+Ui.seg({id:"pf-sort",label:"Sort players by",value:V.sv,onSelect:"_pickerSetSort",cls:"sm",options:[{v:"season",l:"Points"},{v:"price",l:"Price"},{v:"name",l:"A–Z"}]})+'</div>';
   h+='<div class="field"><label for="pf-price"><span>Max price</span><output id="pf-price-out" for="pf-price">'+txt+'</output></label>';
   h+='<input id="pf-price" class="range" type="range" min="'+V.pb.min+'" max="'+V.pb.max+'" step="0.5" value="'+cur+'" style="--p:'+pc+'%" aria-valuetext="'+txt+'" oninput="_pickerSetPrice(this.value)">';
   h+='<div class="pf-scale"><span>'+V.pb.min.toFixed(1)+'</span><button type="button" class="link-btn" id="pf-fit" onclick="_pickerFitBudget()"'+((_nwDraft.team.length<XI_SIZE&&rem>=V.pb.min)?'':' hidden')+'>Fits my budget</button><span>'+V.pb.max.toFixed(1)+' CR</span></div></div>';
   return h+'</div></details>';
 }
+// "Your XI" under the picker header (phones): the 11 as chips, a cross takes a player out, so nobody has to go back to the squad screen to do it.
+function _pickerXiHtml(){
+  if(!_nwDraft.team.length)return '<p class="xi-empty">Nobody picked yet. Tap a player below to add them.</p>';
+  var order=["WK","BAT","AR","BOWL"],groups={WK:[],BAT:[],AR:[],BOWL:[]},h="";
+  _nwDraft.team.forEach(function(id){var p=resolvePlayer(id),r=(p.role||"BAT").toUpperCase();if(!groups[r])r="BAT";groups[r].push({id:id,p:p});});
+  order.forEach(function(r){groups[r].forEach(function(it){
+    var nm=it.p.name||it.id,tag=it.id===_nwDraft.cap?'<span class="xi-tag">C</span>':(it.id===_nwDraft.vc?'<span class="xi-tag">VC</span>':'');
+    h+='<span class="xi-cell"><span class="xi-main"><span class="xi-name">'+esc(nm)+'</span><span class="xi-sub">'+_roleBadge(it.p.role)+(it.p.price?'<b>'+it.p.price.toFixed(1)+'</b>':'')+tag+'</span></span>'+
+      '<button type="button" class="xi-x" aria-label="Take '+esc(nm)+' out of your XI" onclick="_nwRemove(\''+escAttr(it.id)+'\')">'+Ui.icon("close",16)+'</button></span>';
+  });});
+  return h;
+}
+function _pickerToggleXi(){
+  _pickerXiOpen=!_pickerXiOpen;
+  var b=document.getElementById("lh-xi"),p=document.getElementById("picker-xi");
+  if(b){b.classList.toggle("open",_pickerXiOpen);b.setAttribute("aria-expanded",_pickerXiOpen?"true":"false");}
+  if(p)p.hidden=!_pickerXiOpen;
+}
 function _buildPicker(){
   var V=_pickerView(),n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
   var h='<div class="picker-shell">';
-  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><div class="lh-sub">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
+  h+='<div class="layer-head"><button type="button" class="icon-btn" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><button type="button" class="lh-sub lh-xi'+(_pickerXiOpen?' open':'')+'" id="lh-xi" aria-expanded="'+(_pickerXiOpen?'true':'false')+'" aria-controls="picker-xi" onclick="_pickerToggleXi()">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left'+Ui.icon("down",14)+'</button></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" onclick="_pickClose()">Done</button></div>';
+  h+='<div class="picker-xi" id="picker-xi" role="region" aria-label="Your XI"'+(_pickerXiOpen?'':' hidden')+'>'+_pickerXiHtml()+'</div>';
   h+=_pickerToolbarHtml(V)+_pickerFiltersHtml(V);
   h+='<div class="picker-results" id="picker-results">'+_pickerResultsHtml(V)+'</div>';
   h+='<ul class="plist" id="plist">'+_pickerRowsHtml(V)+'</ul></div>';
@@ -1398,7 +1420,7 @@ function _withComp(url){
 function _resetCompScope(){
   _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_adminMatches=null;_adminFilter="all";
   _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;
-  _pickerSearch="";_pickerRole="All";_pickerTeam="All";_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;
+  _pickerSearch="";_pickerRole="All";_pickerTeams=[];_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;_pickerXiOpen=false;
   _weekKnown=false;
   if(window.Ui&&Ui.accClear){Ui.accClear("mcw-");Ui.accClear("mem-");}
   window.dispatchEvent(new CustomEvent("ipl:comp-changed",{detail:{slug:_activeComp}}));
@@ -1619,7 +1641,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper2"></script>
-<script src="/static/mc_hub.js?v=paper2"></script>
+<script src="/static/ipl_glue.js?v=paper3"></script>
+<script src="/static/mc_hub.js?v=paper3"></script>
 </body>
 </html>

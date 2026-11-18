@@ -114,6 +114,16 @@ When the XI is full and the user clicks a new player, `_pickerRowClick`
 opens the **swap modal** ([index.html:686](../templates/index.html:686))
 asking which existing player to remove.
 
+**In and out from inside the picker (2026-11-18).** `_pickerRowClick` on a player who is already in the draft now takes him OUT
+(`_nwRemove`: clears a captain / vice-captain flag, shows the 6-second Undo toast) instead of the old "already in your XI" notice, so nobody
+has to go back to the squad screen to remove someone. On phones the header line "9/11 picked · 12.5 CR left" is a button
+(`_pickerToggleXi`, state `_pickerXiOpen`) that opens **Your XI** (`_pickerXiHtml`): the draft as a two-column grid, role / price / C-VC on each
+cell and a cross that takes the player out, for a player the current filters hide. It is hidden at >= 1000 px, where the squad is on screen anyway.
+
+**Team filter = several teams at once.** `_pickerTeams` (array, empty = every team) replaced the single `_pickerTeam` dropdown. The Filters panel
+draws one toggle chip per team with `Ui.chips` (team colour dot; the leading "All" chip clears); `_pickerToggleTeam` flips one team; the
+results bar shows a removable chip per team. Reset on a competition switch (`_resetCompScope`). Tests: `tests/js/picker_team_chips.test.js`.
+
 ### 3. The Save Draft button is gated client-side
 [index.html:368](../templates/index.html:368):
 `canSave = count === XI_SIZE && rem >= -0.001`. The 0.001 epsilon

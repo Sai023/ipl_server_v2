@@ -151,9 +151,10 @@ The Admin tab is gated client-side on `_isAdmin` (set from
 ## 5. Next Week ✏️ (`next` tab)
 
 ### 5.1 Build a draft XI
-- Player picker table — sort by Season pts / Price / Name; filter by team and
-  role; live search box.
-- Click a row to add. If the XI is already full, the **swap modal** opens
+- Player picker table — sort by Season pts / Price / Name; filter by **one or more teams at once** (toggle
+  chips in the Filters panel; none on = every team) and by role; live search box.
+- Click a row to add. Click a player who is already in your XI to take him **out** again (Undo toast), without leaving the picker; on a phone the
+  "n/11 picked" line in the header opens **Your XI** to remove someone the filters hide. If the XI is already full, the **swap modal** opens
   asking who to remove ([index.html:686](../templates/index.html:686)).
 - Hard constraints enforced client-side:
   - **Squad size = 11** (`XI_SIZE`)
