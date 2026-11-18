@@ -63,8 +63,10 @@ links.
 schedule file: teams, match number, series, exact start time), the five links were stored: sa20_2027_m01..m05 ←
 Cricbuzz #168411 / 168417 / 168427 / 168437 / 168451. Table fingerprints before and after differ only in `matches`, in
 exactly those five rows. Undo: set those five rows' `scorecard_url` back to
-`https://www.cricbuzz.com/live-cricket-scorecard/00000`. The production `sa20_2027` row has no `series_id` /
-`series_slug`, so pass `--series-id 12791 --series-slug sa20-2027` on every run (or store them on the competition).
+`https://www.cricbuzz.com/live-cricket-scorecard/00000`. The production `sa20_2027` row had no `series_id` /
+`series_slug`; they were stored on 2026-11-18 (`'12791'` / `'sa20-2027'`, text like the IPL row's, one guarded UPDATE that only
+fills them while both are empty, as the admin import does), so the runner needs no `--series-id/--series-slug` flags any more
+(explicit flags still win). Undo: set both columns back to NULL.
 Cricbuzz's header field `year` is 0 on these fixtures: identify the series by `seriesId` 12791 / `seriesName` "SA20, 2027".
 
 **Before and during the season (Jan 2027).**
@@ -83,7 +85,7 @@ and gotchas in `scripts/scheduled_runner/README.md`):
 * `SA20 scoring pass`: every 30 minutes 14:00-23:00 from 17 Jan to 22 Feb 2027 → `runner.py --mode score` (scoring only).
 
 `runner.py` is the unattended entry point (tests: `tests/test_scheduled_runner.py`): it runs `score_competition.score()` for
-`sa20_2027` (series 12791 / `sa20-2027` come from its config because the production competition row has neither), without
+`sa20_2027` (series 12791 / `sa20-2027`: its config passes them explicitly, and since 2026-11-18 the competition row stores them too), without
 the app's schema-init step, storing only teams-confirmed links, one run at a time, with a time limit and a redacted log. It runs
 from a frozen copy of the live code in `C:\Users\<owner>\BCLFantasyRunner\app` (refresh it by re-running the installer after a
 release), as the logged-on user (a standard Windows user cannot run a task whether logged on or not without a password), and
