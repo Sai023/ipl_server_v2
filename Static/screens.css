@@ -184,10 +184,9 @@ input[type=text], input[type=tel], input[type=password], select { font-family: v
 
 /* ---------- Next Week / This Week ---------- */
 .nw-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (min-width: 1000px) { .nw-layout { grid-template-columns: 420px minmax(0, 1fr); } .nw-left { position: sticky; top: 112px; } }
+@media (min-width: 1000px) { .nw-layout { grid-template-columns: 420px minmax(0, 1fr); } .nw-left { position: sticky; top: calc(var(--app-bar-h, 112px) + 8px); } }   /* a clear step under the app bar, never touching it */
 .nw-right .picker-shell { margin-top: 0; }
-.nw-budget-bar { position: sticky; top: 64px; z-index: 5; backdrop-filter: blur(8px); background: color-mix(in srgb, var(--sheet) 92%, transparent); }
-@media (min-width: 760px) { .nw-budget-bar { position: static; } }
+.nw-budget-bar { background: color-mix(in srgb, var(--sheet) 92%, transparent); }   /* it floats via its wrapper (.nw-stick / .pb-wrap, see paper.css), not by itself */
 .picker-shell { border-radius: var(--radius); border-color: var(--border); }
 .picker-list { max-height: 520px; }
 .pitch-ground { border-radius: var(--radius); }
@@ -284,10 +283,10 @@ body.layer-open { overflow: hidden; }
 @media (max-width: 999px) {
   .nw-right { display: none; }
   .nw-right.layer-open { display: block; position: fixed; inset: 0; z-index: 90; background: var(--bg); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom, 0px); }
-  .nw-right.layer-open .picker-shell { border: 0; border-radius: 0; margin: 0; background: transparent; min-height: 100%; }
-  .layer-head { display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 3; padding: 10px 14px; background: var(--paper); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+  .nw-right.layer-open .picker-shell { border: 0; border-radius: 0; margin: 0; background: transparent; min-height: 100%; overflow: visible; }   /* overflow: hidden here switched every sticky part off (the header and the summary scrolled away with the list) */
+  .layer-head { display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 3; box-sizing: border-box; height: var(--lh-h, 64px); padding: 0 14px; background: var(--paper); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
   .lh-text { flex: 1; min-width: 0; } .lh-title { font-size: 16px; font-weight: 800; color: var(--text-strong); } .lh-sub { font-size: 12px; color: var(--muted); }
-  .nw-right.layer-open .picker-toolbar { position: sticky; top: 62px; z-index: 2; background: var(--sheet); }
+  .nw-right.layer-open .picker-toolbar { background: var(--sheet); }   /* scrolls with the list: header + summary are what stay in view */
 }
 @media (min-width: 1000px) { .only-narrow { display: none !important; } .layer-head { display: none; } .nw-right { display: block; } }
 @media (max-width: 380px) { .picker-selects { grid-template-columns: 1fr 1fr; } .picker-selects select:last-child { grid-column: 1 / -1; } }

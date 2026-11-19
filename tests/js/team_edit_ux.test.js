@@ -39,7 +39,7 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 
 const LOADED = ['_teamCost', '_remaining', '_priceBounds', '_nwSig', '_nwDirty', '_nwHasUnsaved', '_getCurrentWeekRow', '_nwLoadSaved', '_nwNewWeek', '_nwInit',
   '_draftKey', '_draftStore', '_draftRestore', '_nwChanged', '_nwSetRole', '_nwSetCap', '_nwSetVc', '_nwRemove', '_nwToggle', '_nwDiscard', '_nwSave', '_nwTooLate', '_nwCloseLayer',
-  '_nwPickRole', '_nwOpenPlayer', '_deadlineLocked', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_buildBudgetBar', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
+  '_nwPickRole', '_nwOpenPlayer', '_deadlineLocked', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
 
 function load(o = {}) {
   const c = { toasts: [], warns: [], fails: [], events: [], confirms: [], sheets: [], sent: [], timers: [], renders: 0, backs: 0, saveImpl: () => Promise.resolve({ ok: true }), store: o.store || new Map(), storeBroken: false };
@@ -59,6 +59,7 @@ function load(o = {}) {
   Object.assign(c, {
     BUDGET_TOTAL: 100, XI_SIZE: 11, _username: 'Sai', _activeComp: 'sa20_2027', _currentWeek: 3, _weekKnown: true,
     _nwDraft: { team: [], cap: null, vc: null }, _nwSaved: null, _nwCarry: false, _nwRestored: false, _lockedWeek: null, _nwSaving: false, _nwSlow: false, _nwSlowT: null,
+    _pickerSearch: '', _pickerRole: 'All', _pickerTeams: [], _pickerSort: 'season', _pickerMaxPrice: null, _pickerFiltersOpen: false, _pickerXiOpen: false, matches: [], _barH: 0,
     _pickOpen: false, _historyData: null, _state: { deadline: { next_lock_utc: FUTURE(), status: 'active' } }, $app: null,
   });
   const catalogue = o.players || PLAYERS;
@@ -69,6 +70,10 @@ function load(o = {}) {
   c.escAttr = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   c._avClass = () => ''; c._initials = (n) => String(n).slice(0, 2); c._roleBadge = (r) => (r ? '<i class="badge">' + r + '</i>' : '');
   c._wide = () => false; c._activeCompObj = () => ({ status: 'active' }); c._buildPicker = () => '<picker-stub/>';
+  c.cssVars = {}; c.fakeHeader = null;
+  c.document.documentElement = { style: { setProperty: (k, v) => { c.cssVars[k] = v; } } };
+  c.document.querySelector = (sel) => (sel === '.app-bar' ? c.fakeHeader : null);
+  if (o.realPicker) for (const n of ['_buildPicker', '_pickerView', '_pickerToolbarHtml', '_pickerFiltersHtml', '_pickerResultsHtml', '_pickerActive', '_pickerToggleXi']) vm.runInContext(fnSource(n), c, { filename: n });
   c.Ui.toast = (msg, opts) => { c.toasts.push({ msg, opts }); };
   c.Ui.warn = (m) => { c.warns.push(m); }; c.Ui.success = (m) => { c.toasts.push({ msg: m, type: 'success' }); };
   c.Ui.fail = (e, prefix) => { c.fails.push((prefix ? prefix + ': ' : '') + c.Ui.errorMessage(e)); };
@@ -557,6 +562,122 @@ test('focus find: a Save that has just become disabled hands focus to the neares
   c.$app = fakeApp({ 'nw-save': save, 'nw-hintbtn': hint, 'nw-cta': cta });
   assert.strictEqual(c._focusFind('nw-save'), cta, 'save is disabled, the hint button is hidden -> Add players');
   hint.offsetParent = {}; assert.strictEqual(c._focusFind('nw-save'), hint);
+});
+
+
+// ============ 8. the strip under the app bar, and the two floating bars ============
+const bareParts = (h) => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+test('strip under the app bar: ONE row = the status + a single capsule with members / matches / budget (not four chips that wrap)', (c) => {
+  c.matches = new Array(34).fill({});
+  c._activeCompObj = () => ({ status: 'upcoming' });
+  const h = c._pageStripHtml(3);
+  assert.strictEqual((h.match(/<span class="chip[ "]/g) || []).length, 2, 'the status chip and the stats capsule: two items in the row');
+  assert.match(h, /<span class="chip stats">/); assert.match(h, /<b>3<\/b> members/); assert.match(h, /<b>34<\/b> matches/); assert.match(h, /<b>100<\/b> CR<span class="ui-sr-only"> budget<\/span>/);
+});
+test('strip: still fine when the competition list has not arrived yet (no status chip) and for a finished competition', (c) => {
+  assert.strictEqual(c._pageStripHtml(3).indexOf('class="chip stats"') > 0, true);
+  const real = load();   // the page's own status chip
+  real._activeCompObj = () => ({ status: 'completed', champion: 'Sai' });
+  assert.match(real._pageStripHtml(3), /Finished[^<]*Sai/);
+  real._activeCompObj = () => ({});
+  assert.ok(!/class="chip (live|soon|done)"/.test(real._pageStripHtml(3)));
+});
+test('bar numbers: CR left, picked / left, the role balance and the progress track', (c) => {
+  ['q2', 'q4', 'q6', 'q10'].forEach((id) => c._nwToggle(id));        // WK, WK, BAT, BOWL = 11 + 8 + 11 + 7 = 37
+  const P = c._barParts();
+  assert.strictEqual(P.rem, 63); assert.strictEqual(P.count, 4); assert.strictEqual(P.left, 7);
+  assert.match(P.main, />63\.0<span class="nw-budget-denom"> \/ 100CR/); assert.match(P.main, /nw-budget-amt ok/);
+  assert.match(P.track, /width:37%/); assert.match(P.badge, />4 \/ 11</);
+  assert.strictEqual(bareParts(P.pills), '2 WK 1 BAT 0 AR 1 BOWL');
+});
+test('bar numbers: low budget warns, over budget is flagged, a full XI has nothing left to pick', (c) => {
+  XI.forEach((id) => c._nwToggle(id));                                // 95 CR: 5 left
+  let P = c._barParts(); assert.strictEqual(P.left, 0); assert.match(P.main, /nw-budget-amt warn/);
+  c._nwDraft = { team: ['q1', 'q5', 'q3', 'q9', 'q2', 'q6', 'q7', 'q12', 'q8', 'q11', 'q4'], cap: 'q1', vc: 'q5' };
+  P = c._barParts(); assert.match(P.main, /nw-budget-amt over/); assert.match(P.track, /width:100%/);
+});
+test('Pick tab: the bar lives in the sticky wrapper, the hint is OUTSIDE it (the hint scrolls away, the bar stays)', (c) => {
+  withSaved(c); const h = c._buildBudgetBar();
+  assert.ok(h.startsWith('<div class="nw-stick"><div class="nw-budget-bar">'));
+  assert.match(h, /<\/button><\/div><\/div><div class="nw-hint/, 'the bar closes, THEN the wrapper closes, and only then the hint starts');
+  assert.strictEqual((h.match(/class="nw-hint/g) || []).length, 1);
+  assert.ok(h.indexOf('nw-save-btn') < h.indexOf('class="nw-hint'), 'Save is inside the sticky part');
+});
+test('Add players: the floating summary says how many are left to pick, the CR left and the role balance, with no Save button', (c) => {
+  ['q2', 'q4', 'q6', 'q10'].forEach((id) => c._nwToggle(id));
+  const h = c._pickerBarHtml();
+  assert.match(h, /^<div class="pb-wrap"><div class="nw-budget-bar picker-bar" role="group" aria-label="Your squad so far">/);
+  assert.match(h, />63\.0<span class="nw-budget-denom"> \/ 100CR/); assert.match(h, />4 \/ 11</);
+  assert.strictEqual(bareParts(/<div class="nw-role-pills">([\s\S]*?)<button/.exec(h)[1]), '2 WK 1 BAT 0 AR 1 BOWL');
+  assert.match(h, /<span class="ui-sr-only">Your XI: <\/span><b>7<\/b> to pick/);
+  assert.ok(!/nw-save-btn|Save/.test(h), 'saving happens on the squad screen');
+});
+test('Add players summary: the right-hand button opens "Your XI" (a drawer INSIDE the sticky summary, so it opens in view)', (c) => {
+  c._nwToggle('q2');
+  let h = c._pickerBarHtml();
+  assert.match(h, /<button type="button" class="pb-xi" id="lh-xi" data-fk="pk-xi" aria-expanded="false" aria-controls="picker-xi" onclick="_pickerToggleXi\(\)">/);
+  assert.match(h, /<div class="picker-xi" id="picker-xi" role="region" aria-label="Your XI" hidden>/);
+  assert.ok(h.indexOf('id="picker-xi"') > h.indexOf('class="pb-xi'), 'the drawer comes after the bar');
+  assert.ok(h.lastIndexOf('</div>') === h.length - 6, 'and both are inside the one wrapper that sticks');
+  c._pickerXiOpen = true; h = c._pickerBarHtml();
+  assert.match(h, /class="pb-xi open"[^>]*aria-expanded="true"/); assert.ok(!/id="picker-xi"[^>]*hidden/.test(h)); assert.match(h, /xi-cell/);
+});
+test('Add players summary: a full XI says "XI full" (not "0 to pick")', (c) => {
+  XI.forEach((id) => c._nwToggle(id));
+  const h = c._pickerBarHtml();
+  assert.match(h, /class="pb-xi full"/); assert.match(h, /XI full/); assert.ok(!/to pick/.test(h));
+});
+test('Add players page: header (back / title / Done), then the floating summary, then search + filters; the old "n/11 picked" line is gone', (c) => {
+  const k = load({ realPicker: true }); ['q2', 'q4'].forEach((id) => k._nwToggle(id));
+  const h = k._buildPicker();
+  const at = (x) => h.indexOf(x);
+  assert.ok(at('layer-head') < at('pb-wrap') && at('pb-wrap') < at('picker-toolbar') && at('picker-toolbar') < at('id="plist"'));
+  assert.match(h, /aria-label="Back to my squad"/); assert.match(h, /class="lh-title">Add players</); assert.match(h, /data-fk="pk-done" onclick="_pickClose\(\)">Done</);
+  assert.ok(!/lh-sub|picked ·/.test(h), 'the header no longer carries the small count line');
+  assert.strictEqual((h.match(/id="lh-xi"/g) || []).length, 1); assert.strictEqual((h.match(/id="picker-xi"/g) || []).length, 1);
+});
+test('the sticky bars sit under the app bar\'s REAL height: published as --app-bar-h, only when it changes', (c) => {
+  c._syncBarH(); assert.deepStrictEqual(c.cssVars, {}, 'no app bar yet (e.g. the sign-in screen): nothing to publish');
+  c.fakeHeader = { getBoundingClientRect: () => ({ height: 71.4 }) };
+  c._syncBarH(); assert.strictEqual(c.cssVars['--app-bar-h'], '71px');
+  c.cssVars = {}; c._syncBarH(); assert.deepStrictEqual(c.cssVars, {}, 'unchanged: not written again');
+  c.fakeHeader = { getBoundingClientRect: () => ({ height: 113 }) }; c._syncBarH(); assert.strictEqual(c.cssVars['--app-bar-h'], '113px');
+  c.fakeHeader = { getBoundingClientRect: () => ({ height: 0 }) }; c.cssVars = {}; c._syncBarH(); assert.deepStrictEqual(c.cssVars, {}, 'a hidden app bar (0 px) is ignored');
+});
+
+// ---- the stylesheets: the rules that make these bars float have to be there (and the old ones that broke them gone) ----
+const CSS = {};
+const CSS_DIR = process.env.CSS_DIR || path.join(ROOT, 'Static');   // CSS_DIR: point the test at another copy of the stylesheets (to see it catch a broken one)
+for (const f of ['theme', 'style', 'ui', 'screens', 'paper']) CSS[f] = fs.readFileSync(path.join(CSS_DIR, f + '.css'), 'utf8');
+const ALL_CSS = ['theme', 'style', 'ui', 'screens', 'paper'].map((f) => CSS[f]).join('\n');
+const ruleBodies = (sel) => { const out = []; const re = new RegExp('(^|[}\\s])' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'g'); let m; while ((m = re.exec(ALL_CSS))) out.push(m[2]); return out; };
+test('css: the "Add players" shell does not clip (overflow:hidden switched every sticky part off: the header and summary scrolled away with the list)', () => {
+  const bodies = ruleBodies('.nw-right.layer-open .picker-shell');
+  assert.ok(bodies.some((b) => /overflow:\s*visible/.test(b)), 'an overflow:visible rule for the shell inside the layer');
+  assert.ok(!bodies.some((b) => /overflow:\s*hidden/.test(b)));
+});
+test('css: nothing positions the budget bar by a hard-coded 64px any more (that was 5px less than the app bar: it slid under it)', () => {
+  assert.ok(!/\.nw-budget-bar\s*\{[^}]*position:\s*sticky/.test(ALL_CSS));
+  assert.ok(!/top:\s*64px/.test(CSS.screens + CSS.paper));
+  assert.ok(!/picker-toolbar\s*\{[^}]*position:\s*sticky/.test(ALL_CSS), 'the toolbar scrolls with the list; header + summary stay');
+});
+test('css: the floating bars are placed from measured sizes (--app-bar-h, --lh-h) with a step under them', () => {
+  assert.match(CSS.theme, /--app-bar-h:\s*\d+px/); assert.match(CSS.theme, /--lh-h:\s*\d+px/);
+  const stick = ruleBodies('.nw-stick').join(' ');
+  assert.match(stick, /position:\s*sticky/); assert.match(stick, /top:\s*var\(--app-bar-h/); assert.match(stick, /padding:\s*8px/, 'a step of card colour between the app bar and the bar');
+  const wrap = ruleBodies('.pb-wrap').join(' ');
+  assert.match(wrap, /position:\s*sticky/); assert.match(wrap, /top:\s*var\(--lh-h/); assert.match(wrap, /padding:\s*8px/);
+  assert.match(ruleBodies('.layer-head').join(' '), /height:\s*var\(--lh-h/);
+  assert.match(ruleBodies('.nw-left').join(' '), /top:\s*calc\(var\(--app-bar-h/, 'the desktop side panel keeps a step under the app bar too');
+});
+test('css: the strip never wraps onto a second line (it scrolls sideways on a very narrow phone instead)', () => {
+  const strip = ruleBodies('.page-strip').pop();            // the last rule wins (paper.css is loaded last)
+  assert.match(strip, /flex-wrap:\s*nowrap/); assert.match(strip, /overflow-x:\s*auto/);
+  assert.match(ruleBodies('.page-strip .chip').join(' '), /flex:\s*0 0 auto/);
+});
+test('css: the summary is hidden where the squad is already on screen (wide layout), the old header toggle styles are gone', () => {
+  assert.match(ALL_CSS, /@media \(min-width: 1000px\) \{ \.pb-wrap \{ display: none; \} \}/);
+  assert.ok(!/button\.lh-xi/.test(ALL_CSS));
 });
 
 (async () => {

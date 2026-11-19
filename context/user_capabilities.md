@@ -175,6 +175,12 @@ The Admin tab is gated client-side on `_isAdmin` (set from
 - One request at a time; the button reads "Saving...", and after 4 s the hint says the free server may have been asleep (up to a minute).
 - Offline / server unreachable: the message says the picks are kept on this phone; the Save button comes back.
 
+### 5.1b What stays on screen while you scroll
+- Pick tab: the budget bar (CR left, progress, picked / 11, role balance, Save) floats a clear step under the app bar.
+- "Add players": a floating summary under the page header shows the budget, picked / 11, the role balance and how many are left to pick ("6 to pick" / "XI full");
+  tap it to open **Your XI** as a drawer right there, with a cross on each player.
+- The competition status / members / matches / budget now sit in one slim row at the top of every tab.
+
 ### 5.3b Picks are never lost
 - The unsaved draft is also kept on the phone (per member, competition and week). Closing the app, a reload or a dropped connection brings it back
   ("Restored your unsaved picks"), as long as the saved XI has not changed in the meantime.

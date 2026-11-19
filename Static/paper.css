@@ -370,10 +370,6 @@ select:focus-visible { border-color: var(--info-line); }
 .tchip-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: rgb(var(--tcr, 130, 124, 112)); border: 1px solid color-mix(in srgb, var(--pencil) 50%, transparent); }
 
 /* ---------- "Your XI" inside the picker (phones): the header line opens it, so a player can be taken out without leaving ---------- */
-button.lh-xi { display: inline-flex; align-items: center; gap: 4px; margin: -13px 0; padding: 13px 8px 13px 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-button.lh-xi .ui-icon { color: var(--teal-ink); transition: transform .2s var(--ease); }
-button.lh-xi.open .ui-icon { transform: rotate(180deg); }
-button.lh-xi:focus-visible { outline: 2px solid var(--info-line); outline-offset: 1px; border-radius: 6px; }
 .picker-xi { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 52vh; overflow-y: auto; overscroll-behavior: contain; margin: 10px 12px 0; padding: 10px; border: 1.5px solid var(--border); border-radius: var(--r-hand-sm); background: var(--sheet-2); }
 .picker-xi[hidden] { display: none; }
 .xi-cell { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 6px 5px 6px 10px; border: 1.25px solid var(--pencil); border-radius: 12px; background: color-mix(in srgb, var(--gold-fill) 38%, var(--sheet-2)); color: var(--on-fill); }
@@ -521,3 +517,36 @@ button.nw-player-row:active { transform: translateY(1px); }
 /* the deadline: big enough to read at a glance, red in the last hour */
 .nw-countdown { display: inline-flex; align-items: center; padding: 3px 10px; border: 1.25px solid var(--border); border-radius: 999px; background: var(--sheet-2); font: 800 12px/1.2 var(--font); letter-spacing: 0; text-transform: none; color: var(--text); }
 .nw-countdown.urgent { border-color: var(--danger-line); background: color-mix(in srgb, var(--danger-wash) 20%, var(--sheet-2)); color: var(--danger-ink); }
+
+/* ---------- the strip under the app bar: ONE slim row (status, then members / matches / budget in a single capsule) ---------- */
+.page-strip { flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0 0 12px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.page-strip::-webkit-scrollbar { display: none; }
+.page-strip .chip { flex: 0 0 auto; padding: 4px 11px; white-space: nowrap; }
+.page-strip .chip.stats { gap: 8px; padding: 4px 12px; }
+.chip.stats > span { display: inline-flex; align-items: center; gap: 4px; }
+.chip.stats > span + span::before { content: ""; width: 3px; height: 3px; margin-right: 4px; border-radius: 50%; background: var(--dim); }
+
+/* ---------- the floating bars: they sit a clear step below the app bar (never touching it) on a strip of card colour, so rows slide away behind them, not through the gap ---------- */
+.nw-stick { margin: 0 0 4px; }
+.nw-stick .nw-budget-bar, .pb-wrap .nw-budget-bar { position: static; top: auto; box-shadow: 1.5px 2.5px 0 color-mix(in srgb, var(--pencil) 20%, transparent); }
+@media (max-width: 759px) {
+  .nw-left > .card { --card-pad: 20px; padding: var(--card-pad); }
+  .nw-stick { position: sticky; top: var(--app-bar-h, 69px); z-index: 5; margin: -8px calc(-1 * var(--card-pad)) 4px; padding: 8px var(--card-pad) 6px; background: var(--surface); }
+  .nw-stick::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 6px; background: linear-gradient(var(--surface), transparent); pointer-events: none; }
+}
+/* "Add players": the summary stays under the page header while the list scrolls */
+.picker-bar { grid-template-columns: auto minmax(20px, 1fr) auto; }
+.picker-bar .nw-role-pills { align-items: center; }
+.pb-wrap .picker-xi { margin: 8px 0 0; max-height: min(44vh, 320px); box-shadow: 1.5px 2.5px 0 color-mix(in srgb, var(--pencil) 20%, transparent); }   /* the drawer under the bar */
+.picker-bar .nw-budget-main { flex-direction: row; align-items: baseline; gap: 7px; }   /* a one-line summary: the label sits beside the amount (the list is what this page is for) */
+@media (max-width: 999px) {
+  .pb-wrap { position: sticky; top: var(--lh-h, 64px); z-index: 2; padding: 8px 12px 6px; background: var(--bg); }
+  .pb-wrap::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
+}
+@media (min-width: 1000px) { .pb-wrap { display: none; } }
+.pb-xi { display: inline-flex; align-items: center; gap: 4px; margin: -12px 0 -12px auto; min-height: 44px; padding: 0 2px 0 10px; border: 0; background: none; font: 800 12.5px var(--font); color: var(--text); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.pb-xi b { font-size: 15px; color: var(--gold-ink); font-variant-numeric: tabular-nums; }
+.pb-xi.full { color: var(--teal-ink); }
+.pb-xi .ui-icon { color: var(--teal-ink); transition: transform .2s var(--ease); }
+.pb-xi.open .ui-icon { transform: rotate(180deg); }
+.pb-xi:focus-visible { outline: 2px solid var(--info-line); outline-offset: 1px; border-radius: 8px; }

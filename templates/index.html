@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper4">
-  <link rel="stylesheet" href="/static/style.css?v=paper4">
-  <link rel="stylesheet" href="/static/ui.css?v=paper4">
-  <link rel="stylesheet" href="/static/screens.css?v=paper4">
-  <link rel="stylesheet" href="/static/paper.css?v=paper4">
+  <link rel="stylesheet" href="/static/theme.css?v=paper5">
+  <link rel="stylesheet" href="/static/style.css?v=paper5">
+  <link rel="stylesheet" href="/static/ui.css?v=paper5">
+  <link rel="stylesheet" href="/static/screens.css?v=paper5">
+  <link rel="stylesheet" href="/static/paper.css?v=paper5">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper4"></script>
+<script src="/static/ui.js?v=paper5"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -508,14 +508,32 @@ function _buildNwSquad(){
   h+='</div>';
   return h;
 }
-function _buildBudgetBar(){
-  var team=_nwDraft.team,spent=_teamCost(team),rem=Math.round((BUDGET_TOTAL-spent)*10)/10;
+// What both floating bars show about the squad so far: CR left, the progress bar, how many are picked (and left) and the role balance.
+function _barParts(){
+  var team=_nwDraft.team,spent=_teamCost(team),rem=Math.round((BUDGET_TOTAL-spent)*10)/10,count=team.length;
   var pct=Math.min(100,(spent/BUDGET_TOTAL)*100);
   var fillBg=rem<0?"var(--danger-wash)":rem<10?"var(--gold-wash)":"var(--teal-wash)";
   var remCls=rem<0?"over":rem<10?"warn":"ok";
-  var roles={WK:0,BAT:0,AR:0,BOWL:0};
+  var roles={WK:0,BAT:0,AR:0,BOWL:0},pills="";
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
-  var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001&&!!_nwDraft.cap&&!!_nwDraft.vc;   // captain and vice-captain are required
+  ['WK','BAT','AR','BOWL'].forEach(function(r){pills+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
+  return{rem:rem,count:count,left:Math.max(0,XI_SIZE-count),pills:pills,
+    main:'<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>',
+    track:'<div class="nw-budget-track" aria-hidden="true"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>',
+    badge:'<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>'};
+}
+// The summary on the "Add players" page: how many are left to pick, the budget and the role balance stay in view while the list scrolls.
+// Its right-hand button opens "Your XI" (the picked players, each with a cross) as a drawer under the bar, so it opens in view wherever the list is.
+function _pickerBarHtml(){
+  var P=_barParts(),open=_pickerXiOpen;
+  return '<div class="pb-wrap"><div class="nw-budget-bar picker-bar" role="group" aria-label="Your squad so far">'+P.main+P.track+P.badge+
+    '<div class="nw-role-pills">'+P.pills+'<button type="button" class="pb-xi'+(open?' open':'')+(P.left>0?'':' full')+'" id="lh-xi" data-fk="pk-xi" aria-expanded="'+(open?'true':'false')+'" aria-controls="picker-xi" onclick="_pickerToggleXi()">'+
+    '<span class="ui-sr-only">Your XI: </span>'+(P.left>0?'<b>'+P.left+'</b> to pick':'XI full')+Ui.icon("down",14)+'</button></div></div>'+
+    '<div class="picker-xi" id="picker-xi" role="region" aria-label="Your XI"'+(open?'':' hidden')+'>'+_pickerXiHtml()+'</div></div>';
+}
+function _buildBudgetBar(){
+  var P=_barParts(),rem=P.rem,count=P.count;
+  var canSave=count===XI_SIZE&&rem>=-0.001&&!!_nwDraft.cap&&!!_nwDraft.vc;   // captain and vice-captain are required
   var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
   // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone), with the one button that does it
   var hint,hcls,hico,act="",k=XI_SIZE-count,pbMin=_priceBounds().min,back=(dirty&&_nwRestored)?"Restored your unsaved picks. ":"";   // back: said once, in front of whatever is left to do
@@ -532,17 +550,10 @@ function _buildBudgetBar(){
   else{hint="Saved. You can keep editing until picks lock.";hcls="good";hico="check";}
   var lbl=_nwSaving?"Saving…":locked?"Locked":saved?"Saved ✓":(_nwCarry&&!dirty?"Keep this XI":"Save Draft");
   var cls="btn "+(saved||locked?"btn-ghost is-saved":(dirty||!_nwCarry?"btn-gold":"btn-ghost"));
-  var h='<div class="nw-budget-bar">';
-  h+='<div class="nw-budget-main"><div class="nw-budget-lbl">Budget</div><div class="nw-budget-amt '+remCls+'">'+rem.toFixed(1)+'<span class="nw-budget-denom"> / '+BUDGET_TOTAL.toFixed(0)+'CR</span></div></div>';
-  h+='<div class="nw-budget-track"><div class="nw-budget-fill" style="width:'+pct+'%;background:'+fillBg+'"></div></div>';
-  h+='<div class="nw-role-pills">';
-  ['WK','BAT','AR','BOWL'].forEach(function(r){h+='<span class="nw-role-ct"><span class="nw-role-n">'+roles[r]+'</span> '+r+'</span>';});
-  h+='</div>';
-  h+='<span class="nw-slot-badge">'+count+' / '+XI_SIZE+'</span>';
-  h+='<button id="nw-save-btn" data-fk="nw-save" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved||_nwSaving)?' disabled':'')+(_nwSaving?' aria-busy="true"':'')+'>'+lbl+'</button>';
-  h+='</div>';
-  h+='<div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span>'+act+'</div>';
-  return h;
+  // the bar floats just under the app bar while the squad scrolls (.nw-stick); the hint below it scrolls away with the list
+  var bar='<div class="nw-budget-bar">'+P.main+P.track+'<div class="nw-role-pills">'+P.pills+'</div>'+P.badge+
+    '<button id="nw-save-btn" data-fk="nw-save" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved||_nwSaving)?' disabled':'')+(_nwSaving?' aria-busy="true"':'')+'>'+lbl+'</button></div>';
+  return '<div class="nw-stick">'+bar+'</div><div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span>'+act+'</div>';
 }
 
 // ─── PICKER ───────────────────────────────────────────────────────────────────
@@ -644,10 +655,10 @@ function _pickerToggleXi(){
   if(p)p.hidden=!_pickerXiOpen;
 }
 function _buildPicker(){
-  var V=_pickerView(),n=_nwDraft.team.length,xi_full=n>=XI_SIZE,rem=_remaining();
+  var V=_pickerView(),xi_full=_nwDraft.team.length>=XI_SIZE;
   var h='<div class="picker-shell">';
-  h+='<div class="layer-head"><button type="button" class="icon-btn" data-fk="pk-back" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div><button type="button" class="lh-sub lh-xi'+(_pickerXiOpen?' open':'')+'" id="lh-xi" data-fk="pk-xi" aria-expanded="'+(_pickerXiOpen?'true':'false')+'" aria-controls="picker-xi" onclick="_pickerToggleXi()">'+n+'/'+XI_SIZE+' picked · '+rem.toFixed(1)+' CR left'+Ui.icon("down",14)+'</button></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" data-fk="pk-done" onclick="_pickClose()">Done</button></div>';
-  h+='<div class="picker-xi" id="picker-xi" role="region" aria-label="Your XI"'+(_pickerXiOpen?'':' hidden')+'>'+_pickerXiHtml()+'</div>';
+  h+='<div class="layer-head"><button type="button" class="icon-btn" data-fk="pk-back" onclick="_pickClose()" aria-label="Back to my squad">'+Ui.icon("back")+'</button><div class="lh-text"><div class="lh-title">Add players</div></div><button type="button" class="btn '+(xi_full?"btn-teal":"btn-ghost")+' btn-sm" data-fk="pk-done" onclick="_pickClose()">Done</button></div>';
+  h+=_pickerBarHtml();
   h+=_pickerToolbarHtml(V)+_pickerFiltersHtml(V);
   h+='<div class="picker-results" id="picker-results">'+_pickerResultsHtml(V)+'</div>';
   h+='<ul class="plist" id="plist">'+_pickerRowsHtml(V)+'</ul></div>';
@@ -1418,6 +1429,11 @@ var _TAB_DEFS=[
 ];
 function _tabList(){var t=_TAB_DEFS.slice();if(_isAdmin)t.push({id:"admin",label:"Admin",short:"Admin",icon:"admin"});return t;}
 function _activeCompObj(){return _competitions.filter(function(c){return c.slug===_activeComp;})[0]||{};}
+// The strip under the app bar: ONE slim row (the competition's status, then members / matches / budget in a single capsule). It used to be four
+// chips that wrapped onto a second line and took ~80 px of every screen.
+function _pageStripHtml(memberCount){
+  return '<div class="page-strip">'+_statusChip(_activeCompObj())+'<span class="chip stats"><span><b>'+memberCount+'</b> members</span><span><b>'+matches.length+'</b> matches</span><span><b>'+BUDGET_TOTAL.toFixed(0)+'</b> CR<span class="ui-sr-only"> budget</span></span></span></div>';
+}
 function _statusChip(c){
   if(!c||!c.status)return "";
   if(c.status==="active")return '<span class="chip live">● Live</span>';
@@ -1486,7 +1502,7 @@ function render(state){
   if(_activeTab==="admin"&&!_isAdmin)_activeTab="match-centre";
   var html=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1">';
   var _hideStrip=(_activeTab==="admin"&&_adminView&&!_wide());
-  if(!_hideStrip)html+='<div class="page-strip">'+_statusChip(_activeCompObj())+'<span class="chip"><b>'+memberNames.length+'</b> members</span><span class="chip"><b>'+matches.length+'</b> matches</span><span class="chip"><b>'+BUDGET_TOTAL.toFixed(0)+'</b> CR budget</span></div>';
+  if(!_hideStrip)html+=_pageStripHtml(memberNames.length);
   if(!_username){
     html+='<h2 class="ui-sr-only">Sign in</h2>'+_buildLoginCard(memberNames);
     html+=_lbGrid();
@@ -1505,6 +1521,7 @@ function render(state){
   html+='</main>';
   if(_username)html+=_buildBottomNav();
   $app.innerHTML=html;
+  _syncBarH();
   document.body.classList.toggle("layer-open",!!(_pickOpen&&_activeTab==="next"));
   if(_layTop){var _l2=document.querySelector(".nw-right.layer-open");if(_l2)_l2.scrollTop=_layTop;}
   if(_activeTab==="next"&&_preserveSearchFocus){
@@ -1512,6 +1529,15 @@ function render(state){
     if(inp){inp.focus();try{inp.selectionStart=inp.selectionEnd=_preserveSearchPos;}catch(e){}}
   }else if(_fk){var _fe=_focusFind(_fk);if(_fe){try{_fe.focus({preventScroll:true});}catch(e){}}}
 }
+// The sticky bar sits just under the app bar, so it needs the app bar's real height (it grows with the phone's font size and when the web fonts arrive).
+var _barH=0;
+function _syncBarH(){
+  var hd=document.querySelector(".app-bar");if(!hd)return;
+  var px=Math.round(hd.getBoundingClientRect().height);
+  if(px>0&&px!==_barH){_barH=px;document.documentElement.style.setProperty("--app-bar-h",px+"px");}
+}
+window.addEventListener("resize",_syncBarH);
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(_syncBarH);
 // Rebuilding the page drops keyboard focus. The control that had it (marked data-fk) gets it back, so keyboard and screen-reader users keep their place.
 function _focusKey(){var a=document.activeElement;return(a&&a!==document.body&&a.getAttribute&&$app&&$app.contains(a))?a.getAttribute("data-fk"):null;}
 function _focusFind(k){
@@ -1795,7 +1821,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper4"></script>
-<script src="/static/mc_hub.js?v=paper4"></script>
+<script src="/static/ipl_glue.js?v=paper5"></script>
+<script src="/static/mc_hub.js?v=paper5"></script>
 </body>
 </html>

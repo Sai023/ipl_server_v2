@@ -67,6 +67,8 @@
 
   /* ---- shape, spacing, depth, motion ---- */
   --radius: 16px; --maxw: 1120px; --nav-h: 64px;
+  --app-bar-h: 69px;   /* the app bar's real height: index.html measures it and overwrites this (_syncBarH); the sticky bars sit just under it */
+  --lh-h: 64px;        /* the "Add players" page header (a fixed height, so the summary can stick right under it) */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
   --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
   --shadow-card: 0 1px 0 var(--hi) inset, 2px 3px 0 color-mix(in srgb, var(--shade) 14%, transparent);

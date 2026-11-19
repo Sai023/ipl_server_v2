@@ -156,6 +156,23 @@ results bar shows a removable chip per team. Reset on a competition switch (`_re
   `Add players (n/11)` button sits right under the hint, above the list. The over-budget notice in the picker is now a toast (`Ui.warn`), not a banner
   that re-rendered the page after 2.8 s. A second tap on the same picker row within 400 ms is ignored (`_lastTap`): on a slow phone it is a re-tap, and it
   used to undo the add. While `/api/players` has not arrived the list says "Loading the players" instead of "No players match these filters".
+**Floating bars + the strip (2026-11-19, from phone screenshots).** Three things the league saw on a real phone, each with a number from the preview app:
+- *The strip under the app bar* (`_pageStripHtml`) was four chips that wrapped onto a second line at 393 px (67 px tall + margin). It is now ONE row: the status chip plus one
+  capsule `.chip.stats` ("3 members · 34 matches · 100 CR", " budget" kept for screen readers), 27 px tall, `flex-wrap: nowrap` with sideways scrolling as the fallback
+  on a very narrow phone. Saves ~45 px on every tab.
+- *The Pick tab's floating bar touched the app bar.* It was `position: sticky; top: 64px` on the bar itself while the app bar is 69 px: it slid 5 px UNDER it, with no step and no
+  backdrop. Now the bar sits in a sticky wrapper `.nw-stick` (`top: var(--app-bar-h)`, 8 px of card colour above the bar so rows never show in the gap, a 6 px fade under it,
+  a soft pencil shadow on the bar). `--app-bar-h` is the app bar's REAL height, measured and published by `_syncBarH()` (after every render, on resize, when the web fonts are
+  ready; 69 px on a phone, 113 px with the desktop nav tabs): it grows with the phone's font size, so a hard-coded number would drift. At >= 760 px the wrapper is static (as
+  before); on desktop the side panel keeps the same step (`.nw-left { top: calc(var(--app-bar-h) + 8px) }`). The old 64 px rule in `screens.css` is gone.
+- *"Add players" had no context while scrolling* (how many left to pick, the budget, the role balance). The cause was a latent bug: `.picker-shell { overflow: hidden }`
+  (style.css) makes the shell the scroll container for sticky children, and it never scrolls, so the layer header and the toolbar (both `position: sticky`) never stuck.
+  Fixed (`overflow: visible` for the shell inside the layer) and the page now has a floating summary `.pb-wrap` (`_pickerBarHtml`, built from the same `_barParts()` as the Pick
+  tab's bar): "BUDGET 95.0 / 100CR", the progress track, "5 / 11", the role balance and "6 to pick" / "XI full". Header (fixed `--lh-h` = 64 px: back, title, Done) and summary stick;
+  the search/filter toolbar scrolls with the list (header + summary are 98 + 64 px = ~19% of a phone screen; a sticky toolbar would make it ~30%). The right-hand
+  "6 to pick" button opens "Your XI" as a DRAWER inside the sticky wrapper (it used to open at the top of the list, off-screen once you had scrolled). Hidden at >= 1000 px
+  where the squad is on screen. Tests: the section "the strip under the app bar, and the two floating bars" in `tests/js/team_edit_ux.test.js` (markup, numbers, drawer
+  placement, `_syncBarH`, and the stylesheet rules that make them stick: the shell must not clip, nothing may position the bar by a hard-coded 64 px).
 - *Keyboard and screen readers.* `render()` rebuilds the page, which used to drop focus to the top after every tap. Controls that matter carry `data-fk`
   (`pk:<id>` picker row, `sq:<id>` squad row, `xx:<id>` Your XI cross, `nw-save`, `nw-cta`, `pk-done` ...); `_focusKey()` reads it before the rebuild and
   `_focusFind()` restores it after, falling back to the nearest working control (a removed player's row -> Add players; a Save that just became disabled ->
