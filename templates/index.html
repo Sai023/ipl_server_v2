@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper5">
-  <link rel="stylesheet" href="/static/style.css?v=paper5">
-  <link rel="stylesheet" href="/static/ui.css?v=paper5">
-  <link rel="stylesheet" href="/static/screens.css?v=paper5">
-  <link rel="stylesheet" href="/static/paper.css?v=paper5">
+  <link rel="stylesheet" href="/static/theme.css?v=paper6">
+  <link rel="stylesheet" href="/static/style.css?v=paper6">
+  <link rel="stylesheet" href="/static/ui.css?v=paper6">
+  <link rel="stylesheet" href="/static/screens.css?v=paper6">
+  <link rel="stylesheet" href="/static/paper.css?v=paper6">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper5"></script>
+<script src="/static/ui.js?v=paper6"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -398,23 +398,6 @@ function _refreshData(){
     if(ok)Ui.success("Updated "+new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}),{duration:2500});
     else Ui.error("Could not reach the server. Showing the last data we had.");
     if(window.IplPolling)window.IplPolling.start();
-  });
-}
-function _simulateRollover(){
-  var btn=document.getElementById("rollover-btn"),res=document.getElementById("rollover-result");
-  if(btn){btn.disabled=true;btn.textContent="Running\u2026";}
-  if(res)res.textContent="";
-  window.IplApi.rollover(true).then(function(data){
-    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
-    if(res){
-      if(data&&data.rolled){res.textContent="\u2713 Done! New week: W"+(data.new_week_no||"?");res.style.color="var(--teal-ink)";}
-      else{res.textContent="No-op: "+(data&&data.reason?data.reason:"already rolled");res.style.color="var(--muted)";}
-    }
-    _historyData=null;_nwDraft={team:[],cap:null,vc:null};
-    window.dispatchEvent(new CustomEvent("ipl:saved"));_loadHistory();
-  }).catch(function(e){
-    if(btn){btn.disabled=false;btn.textContent="\u25B6 Simulate Monday 14:00 UTC Rollover";}
-    if(res){res.textContent="\u2717 Error: "+(e.serverMessage||e.message);res.style.color="var(--danger-ink)";}
   });
 }
 
@@ -802,10 +785,9 @@ function _buildPodium(rows){
 }
 function _buildLeaderboardCard(lb){return"";}   // replaced by ipl_glue.js (per-week columns + podium)
 function _buildDevTools(){
-  var h='<div class="card devtools"><h4>\uD83D\uDEE0 Dev Tools</h4><p>Force-trigger the Monday 14:00 UTC rollover. Promotes every member\'s Next Week draft into a new locked This Week row. Use only if the scheduled rollover did not fire.</p>';
-  h+='<button id="rollover-btn" class="btn btn-danger btn-sm" onclick="_simulateRollover()">\u25B6 Simulate Monday 14:00 UTC Rollover</button>';
-  h+='<div id="rollover-result"></div></div>';
-  return h;
+  // The old red rollover button is gone: it was a real write (it moved every member to the next week), it had no confirmation and it ignored the season
+  // dates. The weekly rollover is being rebuilt to run by itself on the server (see context/rollover_engine.md); until that is switched on, nothing moves the week.
+  return '<div class="card devtools"><h4>\uD83D\uDD04 Weekly rollover</h4><p>The manual \u201cSimulate rollover\u201d button has been removed: it moved every member to the next week with a single tap, with no confirmation, and it did not check that the season had started.</p><p>The weekly rollover is being rebuilt to run by itself on the server. Until that is switched on, nothing moves the week.</p></div>';
 }
 
 // ─── ADMIN TAB ───────────────────────────────────────────────────────────────
@@ -1077,7 +1059,7 @@ function _adminSections(){
     {id:"competitions",icon:"table",title:"Competitions",sub:(_competitions||[]).map(function(c){return c.name;}).join(" \u00B7 ")||"Create, import and activate"},
     {id:"members",icon:"members",title:"Members & passcodes",sub:_adminMembersList?(_adminMembersList.length+" members"):"Reset a forgotten passcode"},
     {id:"matches",icon:"link",title:"Match links",sub:noLink===null?"Cricbuzz scorecard links":(noLink?noLink+" finished match"+(noLink===1?"":"es")+" without a link":"All finished matches have a link")},
-    {id:"tools",icon:"tools",title:"Developer tools",sub:"Force the Monday rollover"}
+    {id:"tools",icon:"tools",title:"Weekly rollover",sub:"Status of the Monday rollover"}
   ];
 }
 function _adminOpen(id){
@@ -1821,7 +1803,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper5"></script>
-<script src="/static/mc_hub.js?v=paper5"></script>
+<script src="/static/ipl_glue.js?v=paper6"></script>
+<script src="/static/mc_hub.js?v=paper6"></script>
 </body>
 </html>

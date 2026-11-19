@@ -20,15 +20,12 @@
 
   var POLL_INTERVAL_MS  = 60000;
   var MAINTENANCE_DELAY = 1500;
-  var ROLLOVER_HOUR_UTC = 14;
-  var ROLLOVER_MIN_UTC  = 0;
   var SAFE_BOOT_MS      = 5000;
 
   var _lastStateEtag  = null;
   var _overlayTimer   = null;
   var _overlayVisible = false;
   var _pollTimer      = null;
-  var _rolloverTimer  = null;
   var _safeBootTimer  = null;
 
   var IplConfig = {
@@ -193,41 +190,10 @@
     clear: function ()  { try { localStorage.removeItem(COMP_KEY); } catch (e) {} },
   };
 
-  // ── ROLLOVER SCHEDULER ──────────────────────────────────────────────────
-
-  function _msUntilNextRollover() {
-    var now = new Date(); var utcDay = now.getUTCDay();
-    var daysUntilMon = (utcDay === 1) ? 0 : (8 - utcDay) % 7;
-    var candidate = new Date(now);
-    candidate.setUTCDate(now.getUTCDate() + daysUntilMon);
-    candidate.setUTCHours(ROLLOVER_HOUR_UTC, ROLLOVER_MIN_UTC, 0, 0);
-    if (candidate.getTime() - now.getTime() <= 5000) candidate.setUTCDate(candidate.getUTCDate() + 7);
-    return candidate.getTime() - now.getTime();
-  }
-
-  function _executeRollover() {
-    console.info("[IplRollover] Triggering Monday 14:00 rollover \u2026");
-    IplApi.rollover(false)
-      .then(function (data) {
-        if (data && data.rolled) { console.info("[IplRollover] Complete \u2014 week: " + data.new_week_no); _lastStateEtag = null; _pollCycle(); }
-        else { console.info("[IplRollover] No-op:", data && data.reason); }
-      })
-      .catch(function (err) { console.warn("[IplRollover] Failed:", err.message || err); })
-      .finally(function () { _scheduleNextRollover(); });
-  }
-
-  function _scheduleNextRollover() {
-    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
-    var ms = Math.min(_msUntilNextRollover(), 7 * 24 * 60 * 60 * 1000);
-    console.info("[IplRollover] Next rollover scheduled in " + Math.round(ms / 60000) + " min");
-    _rolloverTimer = setTimeout(_executeRollover, ms);
-  }
-
-  function _cancelRolloverTimer() {
-    if (_rolloverTimer) { clearTimeout(_rolloverTimer); _rolloverTimer = null; }
-  }
-
-  var IplRollover = { scheduleNext: _scheduleNextRollover, cancelPending: _cancelRolloverTimer };
+  // ── ROLLOVER ────────────────────────────────────────────────────────────
+  // 2026-11-19: the browser used to schedule and send the weekly rollover itself (a timer for Monday 14:00 UTC that called the rollover endpoint for whichever
+  // competition was selected). It could move a competition that had not started, and it only ever worked for an admin who happened to have the page open.
+  // The rollover now belongs to the server alone; nothing in the browser schedules or sends it.
 
   // ── PUBLIC API ──────────────────────────────────────────────────────────
 
@@ -322,27 +288,6 @@
     },
     logoutClearToken: function () { IplAuth.clearToken(); },
 
-    rollover: function (force) {
-      var url = force ? "/api/rollover?force=1" : "/api/rollover";
-      return _fetchJson(url, { method: "POST" }).then(function (data) {
-        if (!data) return data;
-        if (data.season_complete) {
-          console.warn("[IplApi] Season complete \u2014 all " + IplConfig.max_weeks + " weeks rolled.");
-          window.dispatchEvent(new CustomEvent("ipl:season-complete", { detail: data }));
-        }
-        if (data.rolled) {
-          _fetchJson("/api/current-week").then(function (wk) {
-            if (wk && wk.week_no != null) {
-              IplConfig.current_week = wk.week_no;
-              window.dispatchEvent(new CustomEvent("ipl:week-changed", { detail: { week_no: wk.week_no, max_weeks: wk.max_weeks } }));
-            }
-          }).catch(function () {});
-          _lastStateEtag = null;
-          window.dispatchEvent(new CustomEvent("ipl:rollover-triggered", { detail: data }));
-        }
-        return data;
-      });
-    },
 
   };
 
@@ -393,7 +338,6 @@
       if (wk && wk.week_no != null) IplConfig.current_week = wk.week_no;
     }).catch(function () {});
     startPolling();
-    _scheduleNextRollover();
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) stopPolling(); else { startPolling(); _pollCycle(); }
     });
@@ -433,7 +377,6 @@
   window.IplComp              = IplComp;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
   window.IplConfig            = IplConfig;
-  window.IplRollover          = IplRollover;
   window.normaliseLeaderboard = normaliseLeaderboard;
 
 }(window));

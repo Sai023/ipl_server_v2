@@ -71,7 +71,7 @@ the DOM in-place. The Flask 404 handler in `base.py` also re-renders
 - **Outputs:**
   - The DOM under `<div id="app">`.
   - Side effects via global functions: `login()`, `logout()`,
-    `switchTab()`, `_nwSave()`, `_simulateRollover()` (Admin-only),
+    `switchTab()`, `_nwSave()`,
     `_showRulesModal()` / `_closeRulesModal()`, etc.
 
 ## The 6 visible tabs
@@ -253,7 +253,7 @@ Globals added:
 - **Calls into (HTTP):** every `/api/*` endpoint reachable via the UI.
   Detailed mapping in [user_capabilities.md §12](user_capabilities.md).
 - **Calls into (JS):** `IplApi`, `IplPolling`, `IplConfig`,
-  `IplRollover`, `normaliseLeaderboard` (all from `ipl_glue.js`);
+  `normaliseLeaderboard` (all from `ipl_glue.js`; `IplRollover` was removed 2026-11-19);
   `_buildMatchCentreTab`, `_openMatchModal`, `_closeMatchModal` (from
   `mc_hub.js`).
 
@@ -271,7 +271,7 @@ Direct 1:1 with [user_capabilities.md](user_capabilities.md):
 | §3 Match Centre | delegated to `mc_hub.js` |
 | §4.1 This Week XI | `_buildThisWeekCard` + `_buildPitchView` |
 | §4.2 Scoring Rules popup | `_showRulesModal` / `_closeRulesModal` (button injected by `_buildThisWeekCard` and `_buildNextWeekCard`) |
-| §8.5 Simulate rollover (Admin) | `_buildDevTools` + `_simulateRollover` (rendered under the `admin` tab branch) |
+| §8.5 Weekly rollover (Admin) | `_buildDevTools` (an explanation only since 2026-11-19; the Simulate button and `_simulateRollover` were removed) |
 | §5.1 Picker | `_buildPicker` |
 | §5.2 Captain/VC | `_buildNwSquad` (C/V/× buttons), `_nwSetCap`, `_nwSetVc` |
 | §5.3 Save Draft | `_buildBudgetBar` + `_nwSave` |

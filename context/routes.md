@@ -124,7 +124,7 @@ Phase 7.
 | 6b | Audit | `/api/snapshot` | POST | Run both audits + leaderboard, write to `data/snapshot_<ts>.json`. Receipt for change reviews. |
 | 6c | Match Centre | `/api/match-centre` | GET | Hub endpoint — all matches grouped by week + per-match user pts + season summary. (§3.1) |
 | 6c | Match Centre | `/api/match-details/<id>` | GET | Box Score — historical XI for one match. Reads `tw_team_json` from the week the match belongs to. (§3.2) |
-| 7 | Admin | `/api/rollover` | POST | The weekly promotion. Three callers: browser cron, "Simulate" button, manual curl. (§4.2, §10.2) |
+| 7 | Admin | `/api/rollover` | POST | The weekly promotion. Since 2026-11-19: refuses a competition that is not `active` / not started (`rollover_refusal`); `force=1` needs a signed-in admin + `confirm=<slug>:<week>`. Callers: the scheduler token (workflow, off) or an admin with curl; the browser timer and the Simulate button were removed. |
 | 7 | Admin | `/api/seed-history` | POST | **DEAD** (E5 below) — wired in IplApi but never called. Runs the W1-W4 re-seed. |
 | 7 | Admin | `/api/matches-status` | GET | All match rows + a `duplicate_url` flag computed server-side. Drives the Admin tab. (§8.1) |
 | 7 | Admin | `/api/update-match-url` | POST | Save a Cricbuzz URL + fire a background scrape. (§8.2) |

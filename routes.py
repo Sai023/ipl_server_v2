@@ -113,7 +113,7 @@ from config import (
     CRICBUZZ_DISCOVERY_VER,
 )
 import tasks
-from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team, selections_locked
+from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team, selections_locked, rollover_refusal
 from logic.scoring_engine import debug_calc_pts as _debug_calc_pts
 from logic import competition_import as _ci
 
@@ -1432,20 +1432,32 @@ def api_rollover():
     expected = os.environ.get("ROLLOVER_TOKEN", "").strip()
     auth = request.headers.get("Authorization", "")
     sent = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not (expected and sent == expected):
+    via_token = bool(expected and sent == expected)
+    if not via_token:
         _u, err = _require_admin()
         if err: return err
     force=request.args.get("force","").strip() in ("1","true","yes")
     comp=_comp(); _b,_x,maxw,dh,dm=_comp_cfg(comp)
     try:
         now=datetime.now(timezone.utc)
+        current_week=db.get_current_week(competition_id=comp)
+        crow=db.get_competition(comp) or {}
+        # 2026-11-19: a rollover moves EVERY member to the next week, so it only runs for a competition that is ACTIVE and whose season has
+        # started; a forced one also needs a signed-in admin and the exact confirmation. (Before this the route rolled whatever it was pointed at.)
+        refusal=rollover_refusal(slug=comp,status=crow.get("status",""),week1_anchor_iso=crow.get("week1_anchor_utc",""),now=now,
+                                 current_week=current_week,force=force,confirm=request.args.get("confirm",""),is_admin=not via_token)
+        if refusal:
+            _log(f"POST /api/rollover refused for {comp}: {refusal['reason']}")
+            ok=refusal["http"]==200
+            body={"ok":ok,"rolled":False,"new_week_no":None,"season_complete":False,"reason":refusal["reason"]}
+            if not ok: body.update({"error":refusal["reason"],"code":refusal["http"]})
+            return jsonify(body),refusal["http"]
         if not force:
             lmd=last_monday_deadline(now,dh,dm)
             last_raw=db.get_meta_comp("_last_rollover",comp,"")
             if already_rolled(last_raw,lmd):
                 return jsonify({"ok":True,"rolled":False,"new_week_no":None,
                                 "season_complete":False,"reason":"Already rolled for this deadline"})
-        current_week=db.get_current_week(competition_id=comp)
         if current_week>=maxw:
             return jsonify({"ok":True,"rolled":False,"new_week_no":None,
                             "season_complete":True,"reason":f"Season complete \u2014 {maxw} weeks reached"})

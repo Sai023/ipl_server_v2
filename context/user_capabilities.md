@@ -244,15 +244,9 @@ The Admin tab is gated client-side on `_isAdmin` (set from
 - When a URL is saved, the row exposes a "View scorecard" link that opens the
   Cricbuzz page in a new tab.
 
-### 8.5 Dev Tools — Simulate Monday rollover
-- Card titled "🛠 Dev Tools" appears at the bottom of the Admin tab
-  (built by `_buildDevTools()` in `templates/index.html`).
-- Big red button: "▶ Simulate Monday 14:00 UTC Rollover".
-- Calls `IplApi.rollover(true)` → `POST /api/rollover?force=1`.
-- On success, refreshes history and drops the next-week draft.
-- Operator escape hatch — use only if the scheduled Monday rollover did not
-  fire. Previously sat under §4 (This Week tab) — moved to Admin so it isn't
-  exposed to everyday members.
+### 8.5 Dev Tools — Simulate Monday rollover (REMOVED 2026-11-19)
+- The red "Simulate Monday 14:00 UTC Rollover" button (and its handler) was removed: one tap moved every member to the next week, with no confirmation, and it ignored whether
+  the season had started. The Admin tile is now "Weekly rollover" and only explains that. A forced rollover is possible with curl only (admin session + `confirm=<slug>:<week>`).
 
 ### 8.6 Member Passcodes (Phase 12)
 - Card titled "🔐 Member Passcodes" sits at the **top** of the Admin tab.
@@ -322,12 +316,9 @@ Admins also see an inline **ADMIN** chip next to their display name.
 - On ETag change, fires `ipl:state-updated`, which refreshes all open tabs
   and invalidates Match Centre cache.
 
-### 10.2 Auto-rollover at Monday 14:00 UTC
-- A browser `setTimeout` schedules `_executeRollover()` for the next Monday
-  14:00 UTC ([Static/ipl_glue.js:23, 158-179](../Static/ipl_glue.js:23)).
-- This means **any client that's open at the moment can trigger** the
-  rollover by hitting `/api/rollover`. The server's rollover is idempotent —
-  `already_rolled()` prevents a second roll in the same week.
+### 10.2 Auto-rollover at Monday 14:00 UTC (REMOVED from the browser 2026-11-19)
+- The browser `setTimeout` that called the rollover endpoint was removed: it fired for whichever competition was selected (it could roll one that had not started) and only worked for an admin.
+- Nothing runs the weekly rollover automatically right now; the server-side replacement is the rollover automation plan (catch-up routine + layered triggers + watchdog).
 
 ### 10.3 Member-aware auto-fill of next-week draft
 - On login, if the user has no next-week draft saved, the picker is

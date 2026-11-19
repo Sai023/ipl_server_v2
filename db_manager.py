@@ -363,9 +363,11 @@ class DatabaseManager:
     def get_meta_comp(self, base_key, competition_id, default=""):
         cid = self._cid(competition_id)
         v = self.get_meta(f"{base_key}:{cid}", None)
-        if v is None:
+        if v is None and cid == self.DEFAULT_COMP:
+            # The un-suffixed keys (_saved, _last_rollover) are the pre-multi-competition ones: they belong to the FIRST competition only.
+            # (Before 2026-11-19 every competition fell back to them, so SA20 inherited IPL's "last rollover".)
             v = self.get_meta(base_key, default)
-        return v
+        return default if v is None else v
 
     def set_meta_comp(self, base_key, competition_id, value):
         self.set_meta(f"{base_key}:{self._cid(competition_id)}", value)

@@ -1,3 +1,5 @@
+> **2026-11-19 - read this first.** The browser no longer schedules or sends a weekly rollover (the Monday 14:00 UTC `setTimeout` in `Static/ipl_glue.js`, `IplRollover` and `IplApi.rollover` are gone) and the red admin button "Simulate Monday rollover" is gone. They could roll a competition that had not started (reproduced on scratch data) and only ever worked for an admin who had the page open. `POST /api/rollover` now refuses a competition that is not `active` or whose week-1 anchor has not passed, and a forced rollover needs a signed-in admin plus `confirm=<slug>:<week>` (`logic/rollover_engine.rollover_refusal`, `tests/test_rollover_guards.py`). Nothing runs the rollover automatically until the new server-side catch-up is built (plan: the "Rollover automation plan"). Sections below that describe the browser timer or the button are historical.
+
 # rollover_engine.py — The Weekly Lock-In Clock
 
 ## What it does (business view)
@@ -19,15 +21,10 @@ no I/O, no project imports.
 ## Where it sits in the flow
 
 Called from one place: the `/api/rollover` route handler in `routes.py`.
-That endpoint is hit by three different triggers:
+Since 2026-11-19 that endpoint has ONE legitimate caller: the scheduler token (the GitHub workflow, currently switched off) or a signed-in admin with curl.
+The browser timer and the red "Simulate" button were removed (see the note at the top of this file).
 
-- The browser's auto-rollover timer at Monday 14:00 UTC
-  ([user_capabilities.md §10.2](user_capabilities.md)).
-- A user clicking **"▶ Simulate Monday 2:00 PM Rollover"** in the Dev Tools
-  panel ([user_capabilities.md §4.2](user_capabilities.md)).
-- A manual `curl POST /api/rollover` (admin operation).
-
-All three paths go through the same three helpers below.
+Every call first asks `rollover_refusal()` (below) and only then goes through the three helpers.
 
 ## Inputs / Outputs
 
@@ -79,11 +76,24 @@ All three paths go through the same three helpers below.
 
 From [user_capabilities.md](user_capabilities.md):
 
-- **§4.2 Dev Tools — Simulate Monday rollover** — direct line: button →
-  `POST /api/rollover?force=1` → `pick_active_team` decides the promotion.
-- **§10.2 Auto-rollover at Monday 14:00 UTC** — the browser timer calls
-  the same endpoint; `already_rolled()` prevents duplicates if multiple
-  clients fire.
+- **§4.2 / §8.5 Dev Tools — Simulate Monday rollover** — REMOVED 2026-11-19 (a forced rollover is now `curl` only, with an admin session and `confirm=<slug>:<week>`).
+- **§10.2 Auto-rollover at Monday 14:00 UTC** — the browser timer was REMOVED 2026-11-19; the server alone will own it (rollover automation plan).
+
+## `rollover_refusal()` - when a rollover may run (v1.1.0, 2026-11-19)
+
+A rollover moves EVERY member to the next week, so before anything else the route asks this pure function. It returns `None` (go ahead) or a refusal:
+
+| Situation | Answer |
+|---|---|
+| competition status is not `active` (upcoming, completed, unknown) | 200, `rolled:false`, reason "not active" (a scheduler must not retry it) |
+| no usable `week1_anchor_utc`, or `now` is before it | 200, `rolled:false`, reason "has no usable week-1 start date" / "the season has not started" |
+| `force=1` without a signed-in admin (the scheduler token is not enough) | 403 |
+| `force=1` without `confirm=<slug>:<week it would move to>` (or with another week) | 400 naming the exact value to send |
+
+Found by testing: on scratch data an authorised call rolled an UPCOMING competition from week 1 to 2 (and a forced one to 3). Still true and still dormant (nothing calls it any more):
+the loop is not one transaction, so a failure half way plus a retry leaves members in different weeks. That, week 1's promotion, fixture-driven lock times and the layered triggers
+are the next phases of the rollover automation plan. Also fixed the same day: `db.get_meta_comp` no longer lets every competition inherit the legacy un-suffixed meta keys
+(only `ipl_2026` does), so SA20 does not see IPL's `_last_rollover`.
 
 ## Dead Code Audit
 

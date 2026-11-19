@@ -1,5 +1,5 @@
 """
-IPL Fantasy 2026 — Rollover Engine                rollover_engine v1.0.0
+IPL Fantasy 2026 — Rollover Engine                rollover_engine v1.1.0
 ===========================================================================
 Phase 4 — Extracted verbatim from db_manager.py v5.7.
 
@@ -22,6 +22,11 @@ pick_active_team(nw_team_json, nw_cap_id, nw_vc_id,
     -> (team_json: str, cap_id: str|None, vc_id: str|None)
     Decide which team to promote from draft → active for the new week.
     Rule: use next-week draft if non-empty, else fall back to this-week.
+
+rollover_refusal(slug=, status=, week1_anchor_iso=, now=, current_week=, force=, confirm=, is_admin=)
+    -> None | {"http": int, "reason": str}                                          (v1.1.0, 2026-11-19)
+    Why a rollover must NOT run right now: the competition is not active, its season has
+    not started, or a forced rollover was not asked for properly.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -184,3 +189,53 @@ def selections_locked(
         return True, ("The weekly deadline has passed — selections are locked "
                       "until the next rollover.")
     return False, ""
+
+
+def _parse_utc(iso):
+    """An ISO-8601 string as a timezone-aware UTC datetime, or None when it is empty / unusable."""
+    try:
+        d = datetime.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def rollover_refusal(
+    *,
+    slug: str,
+    status: str,
+    week1_anchor_iso: str,
+    now: datetime,
+    current_week: int,
+    force: bool = False,
+    confirm: str = "",
+    is_admin: bool = False,
+):
+    """
+    Why a weekly rollover must NOT run right now, or None when it may (added 2026-11-19).
+
+    A rollover moves EVERY member to the next week, so it must only ever run for a competition that is ACTIVE and
+    whose season has started. Until now the endpoint rolled whatever competition it was pointed at: on scratch data
+    one authorised call moved an UPCOMING competition (anchor two months away) from week 1 to week 2, and a second
+    forced call to week 3. Returns None, or {"http": int, "reason": str}:
+      200 -> a harmless no-op (a scheduler that gets it must not retry)
+      403 / 400 -> a FORCED rollover that was not asked for properly (needs a signed-in admin, not just the scheduler
+                   token, and the exact confirmation "<slug>:<week it would move to>").
+    Pure function: stdlib only.
+    """
+    st = (status or "").strip().lower()
+    if st != "active":
+        return {"http": 200, "reason": f"Not rolled: competition '{slug}' is {st or 'unknown'}, not active."}
+    anchor = _parse_utc(week1_anchor_iso)
+    if anchor is None:
+        return {"http": 200, "reason": f"Not rolled: competition '{slug}' has no usable week-1 start date."}
+    if now < anchor:
+        return {"http": 200, "reason": f"Not rolled: the season has not started (week 1 begins {anchor.isoformat()})."}
+    if force:
+        want = f"{slug}:{current_week + 1}"
+        if not is_admin:
+            return {"http": 403, "reason": "A forced rollover needs a signed-in admin (the scheduler token is not enough)."}
+        if (confirm or "").strip() != want:
+            return {"http": 400, "reason": (f"A forced rollover moves '{slug}' from week {current_week} to week {current_week + 1} "
+                                             f"for every member. To go ahead, repeat the call with confirm={want}")}
+    return None

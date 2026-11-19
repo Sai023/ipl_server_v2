@@ -1,3 +1,5 @@
+> **2026-11-19 - read this first.** The browser no longer schedules or sends a weekly rollover (the Monday 14:00 UTC `setTimeout` in `Static/ipl_glue.js`, `IplRollover` and `IplApi.rollover` are gone) and the red admin button "Simulate Monday rollover" is gone. They could roll a competition that had not started (reproduced on scratch data) and only ever worked for an admin who had the page open. `POST /api/rollover` now refuses a competition that is not `active` or whose week-1 anchor has not passed, and a forced rollover needs a signed-in admin plus `confirm=<slug>:<week>` (`logic/rollover_engine.rollover_refusal`, `tests/test_rollover_guards.py`). Nothing runs the rollover automatically until the new server-side catch-up is built (plan: the "Rollover automation plan"). Sections below that describe the browser timer or the button are historical.
+
 # .github/workflows/monday_rollover.yml — Weekly Rollover Trigger
 
 > **Phase 11 addition (2026-05-15).** Cron-driven GitHub Actions

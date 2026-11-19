@@ -75,7 +75,7 @@ ipl_glue.js        ← Frontend: polling, rollover, badges, picker
 ### Frontend — `ipl_glue.js`
 
 - **60-second ETag polling** — only fetches state when it changes.
-- **Auto-rollover** — fires Monday 14:00 UTC in the browser without manual intervention.
+- **Auto-rollover** — REMOVED from the browser on 2026-11-19 (it could roll a competition that had not started). A server-side replacement is planned; until then nothing runs the weekly rollover by itself.
 - **Inline `season_pts` badges** — Next Week player cards display each player's season points inline in `_buildNwSquad()` ([templates/index.html:343](templates/index.html:343)). Source: `_state.player_pts` embedded in `/api/state` — zero extra HTTP fetch. (A pre-v7.8 `_patchXiGrid()` MutationObserver patch did the same job; it has since been replaced by direct inline rendering.)
 - **Mobile keyboard dismiss** — `document.activeElement.blur()` fires inside `requestAnimationFrame` after pick/swap actions, ensuring the DOM update completes before the keyboard drops.
 
@@ -256,7 +256,7 @@ Render host (HOSTED=true):  serves UI; git-pulls on /api/sync-now; git-pushes on
 **Sleep behaviour:** Render free web services sleep after 15 min idle and auto-wake on incoming HTTP (~20-30s cold start). The `monday_rollover.yml` workflow retries 5x with 30s gaps to give the host time to wake.
 
 **Failure modes & recovery:**
-- Host asleep at 14:00 UTC Monday: workflow retries 5x; if all fail, the in-browser `setTimeout` in `Static/ipl_glue.js` fires when the next user logs in. `roll_week()` is idempotent.
+- Host asleep at 14:00 UTC Monday: the old workflow retried 5x (it is switched off, and the in-browser fallback was removed 2026-11-19). The planned server-side catch-up will run the rollover the first time anything touches the app after the deadline.
 - Git push conflict during user save: `cloud_sync.commit_and_push()` does pull-rebase and retries once. Failure leaves the change in the local container DB; next successful write catches it up.
 - `daily_sync.yml` push race: workflow does pull-rebase + 3 retries with `concurrency: ipl-sync` serializing against `monday_rollover.yml`.
 
