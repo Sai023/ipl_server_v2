@@ -139,11 +139,18 @@ results bar shows a removable chip per team. Reset on a competition switch (`_re
   rollover. Locked view: `_nwShown()` (the XI the server holds, never an unsaved edit), `.nw-lockbar` with the reason, rows as static `div`s, no budget bar,
   no Add players, no picker (`.nw-locked`, one column). The unsaved draft is NOT thrown away (a wrong clock must not eat it). The countdown is a pill
   (`.nw-countdown`) that turns red in the last hour (`_lockUrgent`).
-- *Save.* `_nwSave(force)`: one request at a time (`_nwSaving`; the button shows `Saving...`, `aria-busy`), after 4 s the hint says the free server may have been
-  asleep (`_nwSlow`); no captain -> `Ui.confirm` ("Save anyway" / "Choose captain", `focusCancel`: Enter and Escape never save without one); 423 -> locked view;
-  no HTTP status (offline) -> the toast says "Your picks are kept on this phone". `Ui.confirm` gained the `focusCancel` option.
+- *Save.* `_nwSave()`: one request at a time (`_nwSaving`; the button shows `Saving...`, `aria-busy`), after 4 s the hint says the free server may have been
+  asleep (`_nwSlow`); 423 -> locked view; no HTTP status (offline) -> the toast says "Your picks are kept on this phone".
+- *Captain and vice-captain are MANDATORY (2026-11-19, the league's call).* The Save button is off until both are chosen (`canSave` in `_buildBudgetBar`), the hint
+  says "Choose your captain (x2 points) and vice-captain (x1.5 points) to save." with a **Choose** button, and `_nwSave()` itself refuses (warn + opens the right
+  list) as a safety net: there is no "save anyway". The banner on the other tabs never calls an XI "ready" without both roles AND a save: it says "Your XI needs a
+  captain (and a vice-captain)" with a **Choose captain / Choose vice-captain** button (`_nwPickRole`), then "complete but not saved yet" with **Save XI**.
+  The server enforces the same rule (`db_manager.validate_selection`, DB_VER 6.4): a full XI without a captain and/or vice-captain gets a 422 with its own message
+  ("Choose a captain and a vice-captain before saving" / "Choose a captain before saving" / "Choose a vice-captain before saving"), decided before the database is
+  read; an empty team still clears a draft. Tests: `tests/test_selection_rules.py` (no database needed; one case runs against a scratch schema when
+  `TEST_DATABASE_URL` is set) and the cases named "mandatory" / "banner" in `tests/js/team_edit_ux.test.js`.
 - *Hint line* (`_buildBudgetBar`): says what is left and the one button that does it: "Pick 4 more players. About 8.6 CR each keeps you in budget", a dead-end
-  warning when the CR left cannot fill the spots (`rem < k * cheapest`), "Choose" -> `_nwPickRole('cap'|'vc')` (the whole XI in one list, best scorers
+  warning when the CR left cannot fill the spots (`rem < k * cheapest`), "Choose" (required to save) -> `_nwPickRole('cap'|'vc')` (the whole XI in one list, best scorers
   first; the vice-captain list follows the captain's when none is set), over budget, unsaved, restored, saved.
 - *Layout.* The empty "+ pick a player" slots are gone (11 identical buttons pushed the real Add players button below the fold on a phone); one stable
   `Add players (n/11)` button sits right under the hint, above the list. The over-budget notice in the picker is now a toast (`Ui.warn`), not a banner

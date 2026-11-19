@@ -163,15 +163,15 @@ The Admin tab is gated client-side on `_isAdmin` (set from
 
 ### 5.2 Assign Captain / Vice-Captain
 - Tap a draft row -> a sheet: Regular / Captain (x2) / Vice-captain (x1.5) / Remove from XI.
-- While a role is still empty the hint line has a **Choose** button: the whole XI in one list (best scorers first), one tap each; after the captain
-  the vice-captain list follows.
+- **Captain AND vice-captain are mandatory**: Save stays off until both are chosen, and the server refuses a save without them (422 with a plain
+  message). While a role is empty the hint line has a **Choose** button (so does the banner on the other tabs): the whole XI in one list (best scorers
+  first), one tap each; after the captain the vice-captain list follows.
 - Picking C clears any existing C; same player as both C and VC is prevented.
 
 ### 5.3 Save the draft
-- "Save Draft" button is disabled until `team.length === 11` and `remaining ≥ 0`.
+- "Save Draft" button is disabled until `team.length === 11`, `remaining ≥ 0` and both a captain and a vice-captain are chosen.
 - Calls `IplApi.saveNextWeek(_username, _nwDraft)` → `POST /api/save-next-week/<n>`.
 - On success, fires `ipl:saved` which re-bootstraps the whole app state.
-- No captain chosen -> asks first ("Save anyway" / "Choose captain"); closing the question saves nothing.
 - One request at a time; the button reads "Saving...", and after 4 s the hint says the free server may have been asleep (up to a minute).
 - Offline / server unreachable: the message says the picks are kept on this phone; the Save button comes back.
 

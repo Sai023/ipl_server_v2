@@ -765,13 +765,22 @@ class DatabaseManager:
 
     def validate_selection(self, team: list, cap, vc, budget: float, xi_size: int,
                            competition_id=None) -> tuple:
-        """Full server-side validation of a proposed XI (BIZ-1)."""
+        """Full server-side validation of a proposed XI (BIZ-1).
+        A full XI must name a captain AND a vice-captain (asked for 2026-11-19: the captain scores double, so a team
+        without one is never saved). An empty team still clears the draft. These cheap rules are decided before the
+        database is touched."""
         if not team:
             return True, None, 0.0
         if len(team) != xi_size:
             return False, f"Need exactly {xi_size} players (got {len(team)})", 0.0
         if len(set(team)) != len(team):
             return False, "Duplicate players are not allowed", 0.0
+        if not cap and not vc:
+            return False, "Choose a captain and a vice-captain before saving", 0.0
+        if not cap:
+            return False, "Choose a captain before saving", 0.0
+        if not vc:
+            return False, "Choose a vice-captain before saving", 0.0
         cid = self._cid(competition_id)
         with self._read() as con:
             ph   = ",".join(["%s"] * len(team))
@@ -785,11 +794,11 @@ class DatabaseManager:
         total = round(sum(price_map[pid] for pid in team), 1)
         if total > budget:
             return False, f"Budget exceeded: {total:.1f} CR (max {budget:.1f})", total
-        if cap and cap not in team:
+        if cap not in team:
             return False, "Captain must be one of your selected players", total
-        if vc and vc not in team:
+        if vc not in team:
             return False, "Vice-captain must be one of your selected players", total
-        if cap and vc and cap == vc:
+        if cap == vc:
             return False, "Captain and vice-captain must be different players", total
         return True, None, total
 

@@ -230,7 +230,6 @@ test('every kind of change goes through the same path: kept + redrawn', (c) => {
 });
 
 // ============ 2. saving ============
-const fullDraft = (c, cap = 'q2', vc = 'q4') => { withSaved(c, XI, cap, vc); c._nwRemove('q13', true); c._nwToggle('q13'); c._nwSetRole('q6', 'vc'); c._nwSetRole('q6', 'none'); c._nwDraft.vc = vc; c._nwSetRole('q3', 'none'); return c; };
 test('Save while locked sends nothing and says so', (c) => {
   withSaved(c); c._nwSetRole('q6', 'vc'); c._state.deadline.next_lock_utc = PAST();
   c._nwSave();
@@ -240,27 +239,28 @@ test('Save with fewer than 11 players asks for 11 and sends nothing', (c) => {
   c._nwToggle('q2'); c._nwSave();
   assert.strictEqual(c.sent.length, 0); assert.match(c.warns[0], /11/);
 });
-test('no captain: asks before saving (focus starts on "Choose captain"), nothing is sent yet', (c) => {
+test('captain AND vice-captain are mandatory: with no captain Save sends nothing, says so and opens the captain list (there is no "save anyway")', (c) => {
   withSaved(c, XI, null, 'q4'); c._nwDraft.cap = null; c._nwChanged();
   c._nwSave();
-  assert.strictEqual(c.sent.length, 0); assert.strictEqual(c.confirms.length, 1);
-  const q = c.confirms[0];
-  assert.strictEqual(q.confirmText, 'Save anyway'); assert.strictEqual(q.cancelText, 'Choose captain'); assert.strictEqual(q.focusCancel, true);
+  assert.strictEqual(c.sent.length, 0); assert.match(c.warns[0], /Choose your captain first/);
+  assert.strictEqual(c.sheets.length, 1); assert.strictEqual(c.sheets[0].title, 'Choose your captain');
+  assert.strictEqual(c.confirms.length, 0, 'no question that lets the member save without one');
 });
-test('closing the captain question (or "Choose captain") saves nothing and opens the captain list', async (c) => {
-  withSaved(c, XI, null, 'q4'); c._nwDraft.cap = null; c._nwChanged();
-  c.confirmAnswer = false; c._nwSave(); await new Promise((r) => setTimeout(r, 10));
-  assert.strictEqual(c.sent.length, 0); assert.strictEqual(c.sheets[0].title, 'Choose your captain');
-});
-test('"Save anyway" sends the XI without a captain', async (c) => {
-  withSaved(c, XI, null, 'q4'); c._nwDraft.cap = null; c._nwChanged();
-  c.confirmAnswer = true; c._nwSave(); await new Promise((r) => setTimeout(r, 10));
-  assert.strictEqual(c.sent.length, 1); assert.strictEqual(c.sent[0].d.cap, null); assert.strictEqual(c.sent[0].u, 'Sai');
-});
-test('a missing vice-captain does not stop the save (only the captain is asked about)', (c) => {
+test('with a captain but no vice-captain Save sends nothing and opens the vice-captain list', (c) => {
   withSaved(c, XI, 'q2', null); c._nwDraft.vc = null; c._nwChanged();
   c._nwSave();
-  assert.strictEqual(c.confirms.length, 0); assert.strictEqual(c.sent.length, 1);
+  assert.strictEqual(c.sent.length, 0); assert.match(c.warns[0], /Choose your vice-captain first/); assert.strictEqual(c.sheets[0].title, 'Choose your vice-captain');
+});
+test('with neither chosen the captain is asked for first', (c) => {
+  withSaved(c, XI, null, null); c._nwDraft.cap = null; c._nwDraft.vc = null; c._nwChanged();
+  c._nwSave();
+  assert.strictEqual(c.sent.length, 0); assert.strictEqual(c.sheets[0].title, 'Choose your captain');
+});
+test('both chosen: the XI is sent with both', async (c) => {
+  withSaved(c, XI, null, null); c._nwDraft.cap = null; c._nwDraft.vc = null; c._nwChanged();
+  c._nwSetRole('q2', 'cap'); c._nwSetRole('q4', 'vc');
+  c._nwSave(); await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(c.sent.length, 1); assert.strictEqual(c.sent[0].d.cap, 'q2'); assert.strictEqual(c.sent[0].d.vc, 'q4'); assert.strictEqual(c.warns.length, 0);
 });
 test('one request at a time: a second Save while saving sends nothing', (c) => {
   withSaved(c); c._nwSetRole('q6', 'vc'); c.saveImpl = () => new Promise(() => {});
@@ -404,6 +404,17 @@ test('banner on the other tabs: "ready" only when SAVED; a complete but unsaved 
   c._nwSaving = true; h = c._buildActionBanner();                    // while the request is on its way the button shows it and cannot be pressed again
   assert.match(h, /disabled aria-busy="true">Saving/);
 });
+test('banner: an XI without a captain / vice-captain is never "ready": it says what it needs, and its button chooses it', (c) => {
+  c._historyData = { weeks: [] };
+  withSaved(c, XI, null, null);                                       // saved, complete, but nobody is captain
+  let h = c._buildActionBanner();
+  assert.match(h, /Your XI needs a captain and a vice-captain/); assert.ok(!/action-banner ok/.test(h)); assert.ok(!/Your XI is ready/.test(h));
+  assert.match(h, /onclick="_nwPickRole\('cap'\)">Choose captain</); assert.ok(!/Save XI/.test(h));
+  c._nwDraft.cap = 'q2'; h = c._buildActionBanner();
+  assert.match(h, /Your XI needs a vice-captain/); assert.match(h, /onclick="_nwPickRole\('vc'\)">Choose vice-captain</);
+  c._nwDraft.vc = 'q4'; h = c._buildActionBanner();                   // both chosen, not yet saved -> one-tap save
+  assert.match(h, /complete but not saved yet/); assert.match(h, /Save XI/);
+});
 test('banner: a part-way draft says how many, and "not saved yet" when it is only on this phone; nothing picked says so', (c) => {
   c._historyData = { weeks: [{ is_current: true, next_week: { team: [] }, this_week: { team: [] } }] };
   assert.match(c._buildActionBanner(), /haven.t picked a team yet/);
@@ -445,10 +456,21 @@ test('hint, over budget: how far over', (c) => {
   c._nwDraft = { team: ['q1', 'q5', 'q3', 'q9', 'q2', 'q6', 'q7', 'q12', 'q8', 'q11', 'q4'], cap: 'q1', vc: 'q5' };   // 15+13+12+12+11+11+10+10+9+9+8 = 120
   assert.match(hintOf(bar(c)), /^Over budget by 20\.0 CR/);
 });
-test('hint, full XI without roles: offers one button for the captain, then for the vice-captain', (c) => {
+test('hint, full XI without roles: says they are needed to save and offers one button for the captain, then for the vice-captain', (c) => {
   withSaved(c, XI, null, null); c._nwDraft.cap = null; c._nwDraft.vc = null; c._nwSaved = c._nwSig(c._nwDraft);
-  let h = bar(c); assert.match(hintOf(h), /^Choose your captain and vice-captain/); assert.match(h, /onclick="_nwPickRole\('cap'\)"[^>]*>Choose</);
-  c._nwDraft.cap = 'q2'; h = bar(c); assert.match(hintOf(h), /^Choose your vice-captain/); assert.match(h, /_nwPickRole\('vc'\)/);
+  let h = bar(c); assert.strictEqual(hintOf(h), 'Choose your captain (\u00d72 points) and vice-captain (\u00d71.5 points) to save.'); assert.match(h, /onclick="_nwPickRole\('cap'\)"[^>]*>Choose</);
+  c._nwDraft.vc = 'q4'; h = bar(c); assert.strictEqual(hintOf(h), 'Choose your captain (\u00d72 points) to save.'); assert.match(h, /_nwPickRole\('cap'\)/);
+  c._nwDraft.cap = 'q2'; c._nwDraft.vc = null; h = bar(c); assert.strictEqual(hintOf(h), 'Choose your vice-captain (\u00d71.5 points) to save.'); assert.match(h, /_nwPickRole\('vc'\)/);
+});
+test('Save is OFF until BOTH captain and vice-captain are chosen (a complete, in-budget XI is not enough)', (c) => {
+  withSaved(c); c._nwSetRole('q6', 'vc');                              // changed, complete, both roles: Save is on
+  assert.ok(!/disabled/.test(saveBtn(bar(c))[0]));
+  c._nwDraft.vc = null; assert.match(saveBtn(bar(c))[0], /disabled/, 'no vice-captain');
+  c._nwDraft.vc = 'q4'; c._nwDraft.cap = null; assert.match(saveBtn(bar(c))[0], /disabled/, 'no captain');
+  c._nwDraft.cap = 'q2'; c._nwDraft.vc = 'q6'; assert.ok(!/disabled/.test(saveBtn(bar(c))[0]), 'both chosen (and different from what is saved): on again');
+});
+test('the tip above the list says both are needed', (c) => {
+  withSaved(c); assert.match(c._buildNwSquad(), /You need both/);
 });
 test('hint, unsaved changes; restored picks say so (also in front of what is left to do)', (c) => {
   withSaved(c); c._nwSetRole('q6', 'vc');

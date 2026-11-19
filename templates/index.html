@@ -272,16 +272,12 @@ function _nwDiscard(){
   Ui.toast("Changes discarded",{type:"info",duration:6000,action:{label:"Undo",onClick:function(){_nwDraft=before;_nwChanged();}}});
 }
 var _nwSaving=false,_nwSlow=false,_nwSlowT=null;
-function _nwSave(force){
+function _nwSave(){
   if(!_username||_nwSaving)return;
   if(_deadlineLocked()){Ui.warn("Picks are locked. Your last saved XI is the one that counts.");return;}
   if(_nwDraft.team.length!==XI_SIZE){Ui.warn("Select exactly "+XI_SIZE+" players first.");return;}
-  // The captain scores double, so forgetting one is the costliest slip in the game: ask once before saving without. Closing the question saves nothing.
-  if(force!==true&&!_nwDraft.cap){
-    Ui.confirm({title:"No captain yet",message:"Your captain earns double points. Save this XI without one?",confirmText:"Save anyway",cancelText:"Choose captain",focusCancel:true})
-      .then(function(go){if(go)_nwSave(true);else _nwPickRole("cap");});
-    return;
-  }
+  // Captain AND vice-captain are required: the captain scores double, so an XI without one is never saved. The Save button is off until both are chosen; this is the safety net.
+  if(!_nwDraft.cap||!_nwDraft.vc){var which=!_nwDraft.cap?"cap":"vc";Ui.warn("Choose your "+(which==="cap"?"captain":"vice-captain")+" first.");_nwPickRole(which);return;}
   var sent=_nwSig(_nwDraft);
   _nwSaving=true;_nwSlow=false;if(_state)render(_state);
   clearTimeout(_nwSlowT);_nwSlowT=setTimeout(function(){if(_nwSaving){_nwSlow=true;if(_state)render(_state);}},4000);
@@ -492,7 +488,7 @@ function _buildNwSquad(){
   var locked=_deadlineLocked(),shown=_nwShown(),team=shown.team,cap=shown.cap,vc=shown.vc;
   var h='<div class="nw-squad-head"><div class="nw-squad-label">'+(locked?'YOUR XI':'YOUR DRAFT XI')+' <span style="font-size:10px;color:var(--muted);font-weight:400">\u00b7 '+team.length+'/'+XI_SIZE+(locked?'':' selected')+'</span></div>'+
     (!locked&&_nwHasUnsaved()?'<button type="button" class="link-btn nw-discard" data-fk="nw-discard" onclick="_nwDiscard()">Discard changes</button>':'')+'</div>';
-  if(team.length>0&&!locked)h+='<p class="nw-tip">Tap a player to make them <span class="badge badge-c">C</span> captain \xd72 or <span class="badge badge-vc">VC</span> vice-captain \xd71.5</p>';
+  if(team.length>0&&!locked)h+='<p class="nw-tip">Tap a player to choose your <span class="badge badge-c">C</span> captain (\xd72) and <span class="badge badge-vc">VC</span> vice-captain (\xd71.5). You need both.</p>';
   if(!team.length)h+='<p class="nw-empty">'+(locked?'No XI was saved for this week.':(_wide()?'Nobody yet. Choose players from the list on the right.':'Nobody yet. Your XI will appear here as you add players.'))+'</p>';
   h+='<div class="nw-squad"'+(locked?' role="list"':'')+'>';
   team.forEach(function(id){
@@ -519,7 +515,7 @@ function _buildBudgetBar(){
   var remCls=rem<0?"over":rem<10?"warn":"ok";
   var roles={WK:0,BAT:0,AR:0,BOWL:0};
   team.forEach(function(id){var r=(resolvePlayer(id).role||"BAT").toUpperCase();if(roles[r]!==undefined)roles[r]++;});
-  var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001;
+  var count=team.length,canSave=count===XI_SIZE&&rem>=-0.001&&!!_nwDraft.cap&&!!_nwDraft.vc;   // captain and vice-captain are required
   var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
   // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone), with the one button that does it
   var hint,hcls,hico,act="",k=XI_SIZE-count,pbMin=_priceBounds().min,back=(dirty&&_nwRestored)?"Restored your unsaved picks. ":"";   // back: said once, in front of whatever is left to do
@@ -528,8 +524,8 @@ function _buildBudgetBar(){
   else if(rem<-0.001){hint="Over budget by "+Math.abs(rem).toFixed(1)+" CR. Swap someone for a cheaper player.";hcls="bad";hico="swap";}
   else if(count<XI_SIZE&&rem<k*pbMin-0.001){hint="Only "+rem.toFixed(1)+" CR left for "+k+" more player"+(k===1?"":"s")+" (the cheapest costs "+pbMin.toFixed(1)+"). Swap someone for a cheaper player.";hcls="bad";hico="swap";}
   else if(count<XI_SIZE){hint=back+(count===0?"Pick your "+XI_SIZE+" players":"Pick "+k+" more player"+(k===1?"":"s"))+(k===1?". You have "+rem.toFixed(1)+" CR left.":". About "+(rem/k).toFixed(1)+" CR each keeps you in budget.");hcls="todo";hico="plus";}
-  else if(!_nwDraft.cap){hint=back+"Choose your captain"+(_nwDraft.vc?"":" and vice-captain")+". The captain earns double points (\xd72).";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'cap\')">Choose</button>';}
-  else if(!_nwDraft.vc){hint=back+"Choose your vice-captain (\xd71.5 points).";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'vc\')">Choose</button>';}
+  else if(!_nwDraft.cap){hint=back+"Choose your captain (\xd72 points)"+(_nwDraft.vc?"":" and vice-captain (\xd71.5 points)")+" to save.";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'cap\')">Choose</button>';}
+  else if(!_nwDraft.vc){hint=back+"Choose your vice-captain (\xd71.5 points) to save.";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'vc\')">Choose</button>';}
   else if(dirty&&_nwRestored){hint="Restored your unsaved picks. Save to keep them.";hcls="todo";hico="pick";}
   else if(dirty){hint="You have unsaved changes.";hcls="todo";hico="pick";}
   else if(_nwCarry){hint="Same XI as last week. It carries over unless you change it.";hcls="good";hico="check";}
@@ -1670,9 +1666,17 @@ function _buildActionBanner(){
   if(!_lockIn()||_deadlineLocked())return "";
   var n=_nwDraft.team.length;
   if(!n&&!_historyData)return "";                       // do not claim "no team" before the saved team has loaded
-  var full=n>=XI_SIZE,pre=_currentWeek<=1,unsaved=_nwHasUnsaved(),ready=full&&!unsaved;   // "ready" only once it is SAVED: a full XI that was never saved is the one that gets lost at the deadline
-  var sub=ready?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it":(full?"Your XI is complete but not saved yet":(n?n+"/"+XI_SIZE+" players picked"+(unsaved?", not saved yet":"")+" \u2014 finish your XI":"You haven\u0027t picked a team yet"));
-  var btn=(full&&unsaved)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwSave()"'+(_nwSaving?' disabled aria-busy="true"':'')+'>'+(_nwSaving?'Saving…':'Save XI')+'</button>'
+  var full=n>=XI_SIZE,pre=_currentWeek<=1,unsaved=_nwHasUnsaved();
+  var needCap=full&&!_nwDraft.cap,needVc=full&&!!_nwDraft.cap&&!_nwDraft.vc;   // captain AND vice-captain are required to save
+  var ready=full&&!needCap&&!needVc&&!unsaved;   // "ready" only once the XI is complete, has both roles and is SAVED: anything else is what gets lost (or plays without a captain) at the deadline
+  var sub=ready?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it"
+    :needCap?"Your XI needs a captain"+(_nwDraft.vc?"":" and a vice-captain")
+    :needVc?"Your XI needs a vice-captain"
+    :full?"Your XI is complete but not saved yet"
+    :n?n+"/"+XI_SIZE+" players picked"+(unsaved?", not saved yet":"")+" \u2014 finish your XI"
+    :"You haven\u0027t picked a team yet";
+  var btn=(needCap||needVc)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwPickRole(\''+(needCap?'cap':'vc')+'\')">Choose '+(needCap?'captain':'vice-captain')+'</button>'
+    :(full&&unsaved)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwSave()"'+(_nwSaving?' disabled aria-busy="true"':'')+'>'+(_nwSaving?'Saving\u2026':'Save XI')+'</button>'
     :'<button type="button" class="btn '+(ready?"btn-ghost":"btn-gold")+' btn-sm" onclick="switchTab(\'next\')">'+(ready?"Edit team":"Pick team")+'</button>';
   return '<div class="action-banner'+(ready?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'+btn+'</div>';
 }

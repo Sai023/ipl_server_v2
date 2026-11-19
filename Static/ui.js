@@ -117,7 +117,7 @@
       bd.addEventListener("mousedown", function (e) { if (e.target === bd && !o.persistent) cancel(); });
       dlg.querySelector('[data-r="ok"]').onclick = ok;
       var c = dlg.querySelector('[data-r="cancel"]'); if (c) c.onclick = cancel;
-      (input || ((o.danger || o.focusCancel) && c ? c : dlg.querySelector('[data-r="ok"]'))).focus();   // destructive (or focusCancel): start on Cancel, so Enter never does the costly thing by accident
+      (input || (o.danger && c ? c : dlg.querySelector('[data-r="ok"]'))).focus();   // destructive: start on Cancel
     });
   }
   Ui.confirm = function (o) { return openDialog(Object.assign({}, o)); };

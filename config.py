@@ -62,7 +62,7 @@ ROUTES_VER       = "1.10.0" # UI redesign: /api/state carries "competition"; pap
                             #           /api/passcode/change, /api/admin/passcode/reset,
                             #           /api/admin/members. Bearer-token auth for the new
                             #           passcode + admin surface only; rest of API unchanged.
-DB_VER           = "6.3"    # get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
+DB_VER           = "6.4"    # BIZ-1: validate_selection requires a captain AND a vice-captain on a full XI. get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
                             # Phase 12: members + sessions tables (passcode hash + bearer tokens)
 SCRAPER_VER      = "11.1"   # SA20 scoring: persist_player hook so score_competition.py can add players in Postgres (legacy SQLite path unchanged). Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
