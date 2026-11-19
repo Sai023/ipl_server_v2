@@ -99,7 +99,7 @@ Phase 7.
 | 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint. |
 | 1 | System | `/api/current-week` | GET | Just the integer week number. |
 | 1.5 | Auth | `/api/register` | POST | Phase 12 — create a new member with display name + 4-digit passcode. Returns `{ok, name, token, must_change:false, is_admin:false}`. |
-| 1.5 | Auth | `/api/login` | POST | Phase 12 — verify passcode, issue 30-day bearer token. Returns `{ok, name, token, must_change, is_admin}`. Generic 401 hides unknown-user vs wrong-passcode. |
+| 1.5 | Auth | `/api/login` | POST | Phase 12 — verify passcode, issue a 60-day bearer token (renewed while used). Returns `{ok, name, token, must_change, is_admin}`. Generic 401 hides unknown-user vs wrong-passcode. |
 | 1.5 | Auth | `/api/whoami` | GET | Phase 12 — validate the bearer token. Used by the bootstrap to decide whether to auto-login or drop to the login card. |
 | 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
 | 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
@@ -209,10 +209,13 @@ seeded as the sole admin on first boot ([init_db.md](init_db.md)
 single `UPDATE members SET is_admin=1 WHERE username=...` — no code
 change, no redeploy.
 
-### 10. Sessions are opportunistically cleaned (Phase 12)
+### 10. Sessions are opportunistically cleaned (Phase 12) and renewed while used (2026-11-19)
 Every call to `db.get_session(token)` runs
 `DELETE FROM sessions WHERE expires_at < now` first, then SELECTs the
 token. No cron job needed; the table self-prunes on read.
+Then, if the session has fewer than 30 days left, it is extended to a full
+60 days ([session_policy.md](session_policy.md)), so a member who opens the
+app at least once in 60 days is never signed out.
 
 ## HOSTED mode (Phase 11) — behaviour deltas
 

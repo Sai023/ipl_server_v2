@@ -25,4 +25,8 @@ competition_import — parse_players(), parse_schedule(), cross_check(),
                      parse_anchor(), week_no_for_match(). Validates an
                      uploaded roster / fixture list and builds the rows the
                      admin import writes (see context/competition_import.md).
+session_policy     — new_expiry(), renewed_expiry(); SESSION_TTL_DAYS = 60,
+                     SESSION_RENEW_BELOW_DAYS = 30. How long a sign-in lasts
+                     and when using the app renews it (see
+                     context/session_policy.md).
 """

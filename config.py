@@ -46,13 +46,13 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.16.2"
+APP_VERSION = "2.16.3"
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
                             # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.10.1" # /api/rollover refuses a competition that is not active / not started and a forced rollover without an admin + confirmation (2026-11-19). UI redesign: /api/state carries "competition"; paper-themed /manifest.json + /offline. Admin import: POST /api/admin/competition action "import"
+ROUTES_VER       = "1.10.2" # /api/version lists the session_policy module (2026-11-19). /api/rollover refuses a competition that is not active / not started and a forced rollover without an admin + confirmation (2026-11-19). UI redesign: /api/state carries "competition"; paper-themed /manifest.json + /offline. Admin import: POST /api/admin/competition action "import"
                             #           (roster + fixtures upload; dry-run by default).
                             # INF-2: GET /api/admin/health (PAT + freshness).
                             # BIZ-2: server-side deadline lock (selections_locked).
@@ -62,7 +62,7 @@ ROUTES_VER       = "1.10.1" # /api/rollover refuses a competition that is not ac
                             #           /api/passcode/change, /api/admin/passcode/reset,
                             #           /api/admin/members. Bearer-token auth for the new
                             #           passcode + admin surface only; rest of API unchanged.
-DB_VER           = "6.5"    # get_meta_comp: the legacy un-suffixed meta keys belong to ipl_2026 only (2026-11-19). BIZ-1: validate_selection requires a captain AND a vice-captain on a full XI. get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
+DB_VER           = "6.6"    # Sessions last 60 days and are renewed while used (create_session default 60; get_session renews when under 30 days remain), 2026-11-19. get_meta_comp: the legacy un-suffixed meta keys belong to ipl_2026 only (2026-11-19). BIZ-1: validate_selection requires a captain AND a vice-captain on a full XI. get_state lists every registered member in every competition. Admin import: import_competition_data() (roster + fixtures upsert).
                             # Phase 12: members + sessions tables (passcode hash + bearer tokens)
 SCRAPER_VER      = "11.1"   # SA20 scoring: persist_player hook so score_competition.py can add players in Postgres (legacy SQLite path unchanged). Phase 9: FIX-020/021/022/023 — schedule.json consumer,
                             #          single discovery code path, self-healing _reset_url
@@ -73,6 +73,7 @@ SEED_MATCHES_VER = "4.1"    # Phase 10: populate teams_json from title; always r
 # logic/ engine versions
 SCORING_ENGINE_VER      = "1.1.0"  # Phase 6: debug_calc_pts() added       (unchanged)
 ROLLOVER_ENGINE_VER     = "1.1.0"  # rollover_refusal(): the pure rule for "may a rollover run now?" (2026-11-19)
+SESSION_POLICY_VER      = "1.0.0"  # 60-day sessions, renewed on use when under 30 days remain (2026-11-19)
 FUZZY_MATCH_VER         = "1.2.0"  # SA20 scoring: _index_players() shared with the Postgres runner (behaviour unchanged). Resilience: _generate_dynamic_player()
 CRICBUZZ_DISCOVERY_VER  = "1.3.0"  # SA20 scoring: resolve_series_id(slug=) for other competitions. Phase 9: title-keyed merge, multi-URL scrape,
                                    #          IPL 2026 series ID corrected to 9241

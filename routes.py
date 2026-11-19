@@ -109,7 +109,7 @@ from config import (
     APP_VERSION, VERSION_MAP,
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
-    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, FUZZY_MATCH_VER,
+    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, SESSION_POLICY_VER, FUZZY_MATCH_VER,
     CRICBUZZ_DISCOVERY_VER,
 )
 import tasks
@@ -167,6 +167,7 @@ def api_version():
             "seed_matches":       SEED_MATCHES_VER,         # Phase 9
             "scoring_engine":     SCORING_ENGINE_VER,
             "rollover_engine":    ROLLOVER_ENGINE_VER,
+            "session_policy":     SESSION_POLICY_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },

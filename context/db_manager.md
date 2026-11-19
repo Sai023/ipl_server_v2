@@ -65,7 +65,7 @@ aggregation — and even that just executes a pre-prepared statement.
 | `matches` | The 74-match schedule + status + Cricbuzz URL | **Persistent** | `Seed_Matches.py` initial rows; `scraper.py` updates status. |
 | `user_selections` | One row per `(competition, member, week)`: this-week XI, next-week draft, **`week_pts`** (leaderboard input), and a `points_per_match` blob | **Persistent** — the leaderboard's source of truth | `init_db.py` seeds W1-W4 (history-seed bootstrap retired in Phase 3); `routes.py` saves drafts and rollovers. |
 | `members` (Phase 12) | One row per user: `passcode_hash` (sha256 of `username:passcode`), `must_change` flag, `is_admin` flag, `created_at` | **Persistent** | `init_db._auto_seed_members_if_needed` backfills `1234`+`must_change=1` for everyone in `user_selections`; `/api/register`, `/api/passcode/change`, `/api/admin/passcode/reset` mutate. |
-| `sessions` (Phase 12) | Bearer tokens for `/api/passcode/*` + `/api/admin/*`: `token` (PK), `username`, `expires_at` (30 days out), `created_at` | **Persistent** — but pruned opportunistically: every `get_session()` first runs `DELETE WHERE expires_at < now` | `/api/login`, `/api/register`, `/api/passcode/change` insert; `/api/admin/passcode/reset` and self-change delete. |
+| `sessions` (Phase 12) | Bearer tokens for `/api/passcode/*` + `/api/admin/*`: `token` (PK), `username`, `expires_at` (60 days out, renewed to 60 days when the session is used with under 30 days left: [session_policy.md](session_policy.md), 2026-11-19), `created_at` | **Persistent** — but pruned opportunistically: every `get_session()` first runs `DELETE WHERE expires_at < now` | `/api/login`, `/api/register`, `/api/passcode/change` insert; `/api/admin/passcode/reset` and self-change delete. |
 | `match_scores` | Raw per-player per-match stat lines from Cricbuzz | **Ephemeral** — wiped at every server startup, rebuilt by `scraper.py` | `scraper.py` only. |
 | `player_match_points` | The **calculated base points** for each player in each match, plus the cap/vc multiplier flag | **Ephemeral** | `recalculate_points()` rebuilds it from `match_scores`. |
 | `user_match_points` | One row per `(member, match)`: that member's total points for that match | **Ephemeral** | `update_week_points()` writes it. |
@@ -210,7 +210,7 @@ active competition via `_active_slug`/`_cid`):
 | **State / read** | `get_state`, `get_history`, `get_leaderboard`, `get_players`, `get_current_week`, `get_user_match_points`, `ping_stats`, `get_etags`, `get_meta` |
 | **Member / match writes** | `upsert_member`, `upsert_match`, `save_state`, `save_next_week`, `validate_budget`, `set_meta` |
 | **Passcode / auth (Phase 12)** | `get_member_auth`, `upsert_member_auth`, `set_passcode`, `list_members_admin_view` |
-| **Sessions (Phase 12)** | `create_session` (returns expiry ISO), `get_session` (with opportunistic expired-row cleanup), `delete_sessions_for_user` |
+| **Sessions (Phase 12)** | `create_session` (returns expiry ISO; lasts 60 days), `get_session` (with opportunistic expired-row cleanup; renews a session that is used with under 30 days left), `delete_sessions_for_user` |
 | **Points pipeline** | `recalculate_points`, `update_week_points`, `update_player_season_pts`, `update_player_points` |
 | **Rollover DAO** | `get_users_and_max_weeks`, `get_selection_row`, `insert_rollover_week`, `set_last_rollover` |
 | **Bulk rebuild / hydrate** | `rebuild_scores_and_points`, `hydrate_from_json` |

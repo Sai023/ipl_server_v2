@@ -23,6 +23,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from config import DB_VER  # noqa: F401
+from logic.session_policy import SESSION_TTL_DAYS, new_expiry, renewed_expiry
 
 
 _SCHEMA = r"""
@@ -1055,20 +1056,33 @@ class DatabaseManager:
             return [dict(r) for r in rows]
 
     # ── Sessions ──────────────────────────────────────────────────────────
-    def create_session(self, token: str, username: str, ttl_days: int = 30) -> str:
-        expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
+    def create_session(self, token: str, username: str, ttl_days: int = SESSION_TTL_DAYS) -> str:
+        """A new sign-in. It lasts SESSION_TTL_DAYS (60) and is renewed by get_session while it is used (logic/session_policy)."""
+        expires = new_expiry(datetime.now(timezone.utc), ttl_days)
         with self._write() as con:
             con.execute("INSERT INTO sessions (token, username, expires_at) VALUES (%s,%s,%s)",
                         (token, username, expires))
         return expires
 
     def get_session(self, token: str):
+        """The session behind a bearer token, or None. Expired rows are deleted first. A session that is being used while fewer than
+        SESSION_RENEW_BELOW_DAYS (30) remain is renewed to a full SESSION_TTL_DAYS (60), so a member who opens the app at least once
+        in 60 days is never signed out and a session is written about once a month (logic/session_policy; Sai, 2026-11-19)."""
         if not token: return None
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         with self._write() as con:
-            con.execute("DELETE FROM sessions WHERE expires_at < %s", (now_iso,))
+            con.execute("DELETE FROM sessions WHERE expires_at < %s", (now.isoformat(),))
             r = con.execute("SELECT username, expires_at FROM sessions WHERE token=%s", (token,)).fetchone()
-            return dict(r) if r else None
+            if not r:
+                return None
+            sess = dict(r)
+            newer = renewed_expiry(sess["expires_at"], now)
+            if newer:
+                # the "AND expires_at = old" guard makes two requests renewing at the same moment harmless (the second changes nothing)
+                con.execute("UPDATE sessions SET expires_at=%s WHERE token=%s AND expires_at=%s",
+                            (newer, token, sess["expires_at"]))
+                sess["expires_at"] = newer
+            return sess
 
     def delete_sessions_for_user(self, username: str) -> int:
         with self._write() as con:
