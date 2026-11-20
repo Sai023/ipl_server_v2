@@ -1576,18 +1576,21 @@ function _renderSwitching(){
     :Ui.stateHtml("loading",{title:"Loading "+nm+"\u2026"});
   $app.innerHTML=_buildAppBar()+'<main id="main" class="wrap" tabindex="-1" aria-busy="'+(_switchFailed?"false":"true")+'"><div class="page-strip">'+_statusChip(c)+'</div>'+body+'</main>'+(_username?_buildBottomNav():"");
 }
+// The current time on the SERVER's clock (a lock is decided there, so the countdown follows it, not a phone clock that may be wrong); the phone's own
+// clock until the server's time is known (see IplClock in ipl_glue.js).
+function _nowMs(){return(window.IplClock&&IplClock.now)?IplClock.now():Date.now();}
 // UX-2: weekly deadline countdown + lock state (server provides _state.deadline)
 function _deadlineLocked(){
   var dl=_state&&_state.deadline; if(!dl)return false;
   if(dl.status==='completed')return true;
   if(_lockedWeek!==null&&_lockedWeek===_currentWeek)return true;   // the server refused a save as too late: it is the authority, whatever this clock says
   if(!dl.next_lock_utc)return false;
-  return Date.now()>=new Date(dl.next_lock_utc).getTime();
+  return _nowMs()>=new Date(dl.next_lock_utc).getTime();
 }
 // The last hour before the deadline: the countdown turns red (a draft saved at the last minute is the one that matters most).
 function _lockUrgent(){
   var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc||dl.status==='completed')return false;
-  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();
+  var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();
   return ms>0&&ms<=3600000;
 }
 function _deadlineText(){
@@ -1595,7 +1598,7 @@ function _deadlineText(){
   if(dl.status==='completed')return '🏁 Season complete';
   if(_deadlineLocked())return '🔒 Locked — awaiting rollover';
   if(!dl.next_lock_utc)return '';
-  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();
+  var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();
   if(ms<=0)return '🔒 Locked — awaiting rollover';
   var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
   var t=d>0?(d+'d '+hh+'h '+mm+'m'):(hh>0?(hh+'h '+mm+'m '+ss+'s'):(mm+'m '+ss+'s'));
@@ -1664,7 +1667,7 @@ function _pickClose(){if(!_pickOpen)return;if(!_popLayer("pick")){_pickOpen=fals
 
 function _lockIn(){
   var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc)return "";
-  var ms=new Date(dl.next_lock_utc).getTime()-Date.now();if(ms<=0)return "";
+  var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();if(ms<=0)return "";
   var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
   return d>0?(d+"d "+hh+"h "+mm+"m"):(hh>0?(hh+"h "+mm+"m "+ss+"s"):(mm+"m "+ss+"s"));
 }
@@ -1722,7 +1725,8 @@ function _bootstrap(){
   var seq=_bootSeq;   // replies that arrive after a competition switch belong to the old competition: every handler below drops them
   var savedUser=getSavedUsername();
   var compP=(window.IplApi&&window.IplApi.getCompetitions)?window.IplApi.getCompetitions().catch(function(){return null;}):Promise.resolve(null);
-  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();});
+  var t0=Date.now();   // the phone's clock when the request leaves: the server's time in the reply is matched to it (IplClock)
+  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}).then(function(j){if(j&&j.server_now_utc&&window.IplClock)IplClock.sync(j.server_now_utc,t0,Date.now());return j;});
   var hP=(savedUser&&window.IplApi)?window.IplApi.getHistory(savedUser).catch(function(){return null;}):Promise.resolve(null);
   var plP=(!_players&&window.IplApi)?window.IplApi.getPlayers().catch(function(){return null;}):Promise.resolve(null);
   var lbP=fetch(_withComp("/api/leaderboard"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});

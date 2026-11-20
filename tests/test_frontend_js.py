@@ -35,6 +35,11 @@ class BrowserSideRegressions(unittest.TestCase):
         shows the server's own text, then the HTTP status. Nothing that worked before changes."""
         self.run_script("error_reasons.test.js")
 
+    def test_the_lock_countdown_follows_the_servers_clock_not_the_phones(self):
+        """A lock is decided by the server's clock (2026-11-20): a phone set two hours wrong used to show the wrong time left and a wrong
+        locked / open state. The page keeps the offset to the server's time and every lock function applies it."""
+        self.run_script("server_clock.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

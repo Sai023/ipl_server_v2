@@ -39,7 +39,7 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 
 const LOADED = ['_teamCost', '_remaining', '_priceBounds', '_nwSig', '_nwDirty', '_nwHasUnsaved', '_getCurrentWeekRow', '_nwLoadSaved', '_nwNewWeek', '_nwInit',
   '_draftKey', '_draftStore', '_draftRestore', '_nwChanged', '_nwSetRole', '_nwSetCap', '_nwSetVc', '_nwRemove', '_nwToggle', '_nwDiscard', '_nwSave', '_nwTooLate', '_nwCloseLayer',
-  '_nwPickRole', '_nwOpenPlayer', '_deadlineLocked', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
+  '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
 
 function load(o = {}) {
   const c = { toasts: [], warns: [], fails: [], events: [], confirms: [], sheets: [], sent: [], timers: [], renders: 0, backs: 0, saveImpl: () => Promise.resolve({ ok: true }), store: o.store || new Map(), storeBroken: false };

@@ -247,7 +247,9 @@ def api_test_push():
 @bp.route("/api/poll", methods=["GET"])
 def api_poll():
     try:
-        return jsonify({"state_etag": db.get_etags(competition_id=_comp())["state"], "ok": True})
+        # server_now_utc: the server's clock, so the page can count down to a lock on IT and not on a phone clock that may be wrong
+        return jsonify({"state_etag": db.get_etags(competition_id=_comp())["state"], "ok": True,
+                        "server_now_utc": datetime.now(timezone.utc).isoformat()})
     except Exception as e:
         return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
@@ -679,6 +681,7 @@ def api_get_state():
                 nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
         state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", "")}
         state["competition"] = comp   # lets the browser discard a reply that belongs to another competition
+        state["server_now_utc"] = datetime.now(timezone.utc).isoformat()   # the server's clock (the ETag/304 path above never carries a body, so /api/poll carries it too)
         resp = jsonify(state); resp.headers["ETag"] = etag; return resp
     except Exception as e:
         _log(f"GET /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500

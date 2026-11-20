@@ -110,6 +110,13 @@ The file's docstring still claims version **v7.8** and mentions Phase
   `already_rolled` guard ensures multiple browsers firing
   simultaneously produce exactly one rollover.
 
+### 2b. `IplClock`: lock countdowns follow the SERVER's clock (2026-11-20)
+A lock is decided by the server, so a countdown on a phone whose clock is wrong used to show the wrong time left and a wrong locked / open state.
+`/api/poll` (every minute) and `/api/state` now carry `server_now_utc`; `IplClock.sync(serverIso, sentAt, receivedAt)` keeps the offset (the server stamped
+its time about half-way through the round trip; a round trip over 5 s, such as a sleeping server waking up, is ignored) and `IplClock.now()` applies it.
+Until the server's time is known it is the phone's clock. The page's lock functions (`_deadlineLocked`, `_lockUrgent`, `_deadlineText`, `_lockIn`) read it
+through `_nowMs()` in `templates/index.html`. Tests: `tests/js/server_clock.test.js`, `tests/test_server_clock.py`.
+
 ### 3. Bearer-token attach is URL-prefix-scoped (Phase 12)
 
 `_fetchJson` inspects the URL and only attaches `Authorization: Bearer

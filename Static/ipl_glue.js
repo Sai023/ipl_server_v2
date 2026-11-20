@@ -195,6 +195,34 @@
   // competition was selected). It could move a competition that had not started, and it only ever worked for an admin who happened to have the page open.
   // The rollover now belongs to the server alone; nothing in the browser schedules or sends it.
 
+  // ── SERVER CLOCK ────────────────────────────────────────────────────────
+  // Locks are decided by the SERVER's clock, so a countdown must follow it, not the phone's (a phone with a wrong clock showed the wrong time
+  // left, and a draft that looked open could be locked). The server sends its time with /api/poll (every minute) and /api/state; the offset
+  // is kept here and IplClock.now() applies it. Until the server's time is known it is simply the phone's clock.
+  var IplClock = (function () {
+    var offset = 0, synced = false;
+    var MAX_ROUND_TRIP_MS = 5000;   // a slower round trip (a sleeping server waking up) says nothing about the time of the reply
+    return {
+      now:      function () { return Date.now() + offset; },
+      offsetMs: function () { return offset; },
+      isSynced: function () { return synced; },
+      // serverIso: the server's time in its reply. sentAt / receivedAt: the phone's clock when the request left and when the reply arrived.
+      // The server stamped its time about half-way through the round trip.
+      sync: function (serverIso, sentAt, receivedAt) {
+        var t = Date.parse(serverIso);
+        if (!isFinite(t)) return false;
+        if (typeof sentAt === "number" && typeof receivedAt === "number") {
+          if (receivedAt < sentAt || receivedAt - sentAt > MAX_ROUND_TRIP_MS) return false;
+          offset = t - (sentAt + receivedAt) / 2;
+        } else {
+          offset = t - Date.now();
+        }
+        synced = true;
+        return true;
+      },
+    };
+  })();
+
   // ── PUBLIC API ──────────────────────────────────────────────────────────
 
   var IplApi = {
@@ -204,11 +232,12 @@
       if (_lastStateEtag) headers["If-None-Match"] = _lastStateEtag;
       var url = "/api/state";   // always say WHICH competition (the server would otherwise answer with the default one)
       try { var _c = (window.IplComp && IplComp.get && IplComp.get()) || ""; if (_c) url += "?comp=" + encodeURIComponent(_c); } catch (e) {}
+      var t0 = Date.now();
       return fetch(url, { headers: headers }).then(function (res) {
         if (res.status === 304) return null;
         if (!res.ok) { var err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
         var etag = res.headers.get("ETag"); if (etag) _lastStateEtag = etag;
-        return res.json();
+        return res.json().then(function (j) { if (j && j.server_now_utc) IplClock.sync(j.server_now_utc, t0, Date.now()); return j; });
       });
     },
 
@@ -296,8 +325,10 @@
   function _pollCycle() {
     var c0 = (window.IplComp && IplComp.get && IplComp.get()) || "";
     var same = function () { return ((window.IplComp && IplComp.get && IplComp.get()) || "") === c0; };   // the competition can change while a request is in flight
+    var t0 = Date.now();
     return _fetchJson("/api/poll")
       .then(function (poll) {
+        if (poll && poll.server_now_utc) IplClock.sync(poll.server_now_utc, t0, Date.now());
         _cancelOverlay();
         if (!same()) return;
         var serverEtag = poll && poll.state_etag;
@@ -375,6 +406,7 @@
   window.IplApi               = IplApi;
   window.IplAuth              = IplAuth;
   window.IplComp              = IplComp;
+  window.IplClock             = IplClock;
   window.IplPolling           = { start: startPolling, stop: stopPolling };
   window.IplConfig            = IplConfig;
   window.normaliseLeaderboard = normaliseLeaderboard;
