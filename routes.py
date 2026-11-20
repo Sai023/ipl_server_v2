@@ -829,6 +829,35 @@ def api_history(n):
 # 5. SAVE
 # ════════════════════════════════════════════════════════════════════════════
 
+def _picks_lock(comp):
+    """(locked, reason) for picking in a competition right now. A stored lock schedule decides (fail closed from a lock until its handover has run);
+    a competition with none keeps the old Monday-14:00 rule. One definition, shared by saving and by "Keep this XI"."""
+    ls = db.get_lock_state(comp)
+    if ls is not None:
+        return ls["locked"], ls["reason"]
+    crow = db.get_competition(comp) or {}
+    _b, _x, _mw, dh, dm = _comp_cfg(comp)
+    return selections_locked(datetime.now(timezone.utc), crow.get("status", ""), crow.get("week1_anchor_utc", ""), dh, dm,
+                             db.get_meta_comp("_last_rollover", comp, ""))
+
+
+def _stated_week(body):
+    """(week, error) for the optional "week" a save or keep request states: the week the page says its draft is FOR. None when it is not stated."""
+    v = body.get("week") if isinstance(body, dict) else None
+    if v is None:
+        return None, None
+    if isinstance(v, bool) or not isinstance(v, (int, str)) or (isinstance(v, str) and not v.strip().isdigit()):
+        return None, "week must be a whole number"
+    return int(v), None
+
+
+def _week_moved(result):
+    """The 409 a request gets when the draft it states is no longer the draft being collected (a handover ran since the page loaded): nothing was written."""
+    cw, dw = result["week_no"], result.get("draft_week")
+    return jsonify({"error": f"The week has moved on: week {cw} is now being played" + (f", so drafts are now for week {dw}." if dw else "."),
+                    "code": 409, "reason": "week_changed", "current_week": cw, "draft_week": dw}), 409
+
+
 @bp.route("/api/save-next-week/<n>", methods=["POST"])
 def api_save_next_week(n):
     re_=_check_rate(_write_limiter)
@@ -838,18 +867,13 @@ def api_save_next_week(n):
         _self,err=_require_self(n)
         if err: return err
         comp=_comp(); budget,xi,_mw,dh,dm=_comp_cfg(comp)
-        crow=db.get_competition(comp) or {}
-        ls=db.get_lock_state(comp)   # a stored lock schedule decides when picking is locked (fail closed from the lock until its transition has run)
-        if ls is not None:
-            locked,lreason=ls["locked"],ls["reason"]
-        else:                        # no schedule: the old Monday-14:00 rule
-            locked,lreason=selections_locked(datetime.now(timezone.utc), crow.get("status",""),
-                                             crow.get("week1_anchor_utc",""), dh, dm,
-                                             db.get_meta_comp("_last_rollover",comp,""))
+        locked,lreason=_picks_lock(comp)
         if locked:
             return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
+        week,werr=_stated_week(d)
+        if werr: return jsonify({"error":werr,"code":400}),400
         team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")
         if not isinstance(team,list): return jsonify({"error":"team must be list","code":400}),400
         rlog=[]
@@ -866,13 +890,41 @@ def api_save_next_week(n):
         ok,verr,total_cost=db.validate_selection(team,cap,vc,budget,xi,competition_id=comp)
         if not ok:
             return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422,"reason":"invalid_team"}),422
-        result=db.save_next_week(n,team,cap,vc,competition_id=comp)
+        result=db.save_next_week(n,team,cap,vc,competition_id=comp,expect_week=week)
+        if result.get("conflict"): return _week_moved(result)      # the week moved on while the page was open: nothing was written
         _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
-        return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})
+        return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"],"total_cost":total_cost,"resolution_log":rlog})
     except psycopg.IntegrityError as e:
         return jsonify({"error":str(e),"code":400}),400
     except Exception as e:
         _log(f"POST /api/save-next-week/{n}: {e}","error")
+        return jsonify({"error":str(e),"ok":False,"code":500}),500
+
+@bp.route("/api/keep-xi/<n>", methods=["POST"])
+def api_keep_xi(n):
+    """"Keep this XI" (2026-11-20, Phase 1.6): the member confirms the draft they already have, usually last week's XI carried over, without changing it.
+    The draft is only marked touched, which is what a reminder looks at ("no changes" = no save and no keep since the week began). Same lock rules as a
+    save; optional body {"week": <the week the page believes is current>} (409 week_changed when it has moved on)."""
+    re_=_check_rate(_write_limiter)
+    if re_: return re_
+    try:
+        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+        _self,err=_require_self(n)
+        if err: return err
+        comp=_comp()
+        locked,lreason=_picks_lock(comp)
+        if locked:
+            return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
+        week,werr=_stated_week(request.get_json(force=True,silent=True))
+        if werr: return jsonify({"error":werr,"code":400}),400
+        result=db.keep_next_week(n,competition_id=comp,expect_week=week)
+        if result.get("conflict"): return _week_moved(result)
+        if result.get("nothing"):
+            return jsonify({"error":"You have no team to keep yet. Pick your players first.","code":409,"reason":"nothing_to_keep"}),409
+        _push_if_hosted(f"keep-xi:{comp}:{n}:w{result['week_no']}")
+        return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"]})
+    except Exception as e:
+        _log(f"POST /api/keep-xi/{n}: {e}","error")
         return jsonify({"error":str(e),"ok":False,"code":500}),500
 
 @bp.route("/api/member/<n>", methods=["PUT"])

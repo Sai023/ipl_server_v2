@@ -284,10 +284,20 @@
                         + "?user=" + encodeURIComponent(name));
     },
 
-    saveNextWeek: function (name, picks) {
+    // `week` (optional) = the week the page believes is current: the server answers 409 week_changed instead of writing into the wrong week.
+    saveNextWeek: function (name, picks, week) {
+      var body = (week == null) ? picks : Object.assign({}, picks, { week: week });
       return _fetchJson("/api/save-next-week/" + encodeURIComponent(name), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(picks),
+        body: JSON.stringify(body),
+      });
+    },
+
+    // "Keep this XI": confirm the draft the member already has (nothing about the team changes). Same lock and week rules as a save.
+    keepNextWeek: function (name, week) {
+      return _fetchJson("/api/keep-xi/" + encodeURIComponent(name), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(week == null ? {} : { week: week }),
       });
     },
 

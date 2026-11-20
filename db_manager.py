@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS user_selections (
     points_per_match TEXT    NOT NULL DEFAULT '{}',
     PRIMARY KEY (competition_id, display_name, week_no)
 );
+ALTER TABLE user_selections ADD COLUMN IF NOT EXISTS nw_touched_at TEXT;
 CREATE TABLE IF NOT EXISTS match_scores (
     competition_id TEXT    NOT NULL DEFAULT 'ipl_2026',
     match_id       TEXT    NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
@@ -821,7 +822,7 @@ class DatabaseManager:
                            "SELECT DISTINCT display_name FROM user_selections WHERE competition_id=%s", (slug,)).fetchall()})
         known_ids = {r["id"] for r in con.execute("SELECT id FROM players WHERE competition_id=%s", (slug,)).fetchall()}
         detail = {"before_status": comp["status"], "activated": False, "members": [], "inserted": [], "warnings": []}
-        cols = "tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id"
+        cols = "tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,nw_touched_at"
         if kind == "start":
             ahead = con.execute("SELECT MAX(week_no) AS wn FROM user_selections WHERE competition_id=%s", (slug,)).fetchone()["wn"]
             if ahead is not None and ahead > 1:
@@ -852,8 +853,9 @@ class DatabaseManager:
                     detail["warnings"].append(f"{name}: {len(bad)} id(s) not in the roster: {', '.join(map(str, bad[:5]))}")
                 if kind == "start":
                     entry.update(action="promoted" if promoted else ("kept" if ids else "empty"), team_size=len(ids),
-                                 before={"tw_team_json": row["tw_team_json"], "tw_cap_id": row["tw_cap_id"], "tw_vc_id": row["tw_vc_id"]})
-                    con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s "
+                                 before={"tw_team_json": row["tw_team_json"], "tw_cap_id": row["tw_cap_id"], "tw_vc_id": row["tw_vc_id"], "nw_touched_at": row["nw_touched_at"]})
+                    # the pre-season pick becomes the XI that plays week 1; the same draft now pre-fills week 2's, which nobody has confirmed yet
+                    con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s, nw_touched_at=NULL "
                                 "WHERE competition_id=%s AND display_name=%s AND week_no=1", (team, cap, vc, slug, name))
                 else:
                     entry.update(action="promoted" if promoted else ("carried" if ids else "empty"), team_size=len(ids), before=None,
@@ -938,8 +940,8 @@ class DatabaseManager:
                         con.execute("DELETE FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=1", (slug, m["name"]))
                     elif m.get("before"):
                         b = m["before"]
-                        con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s WHERE competition_id=%s AND display_name=%s AND week_no=1",
-                                    (b["tw_team_json"], b["tw_cap_id"], b["tw_vc_id"], slug, m["name"]))
+                        con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s, nw_touched_at=%s WHERE competition_id=%s AND display_name=%s AND week_no=1",
+                                    (b["tw_team_json"], b["tw_cap_id"], b["tw_vc_id"], b.get("nw_touched_at"), slug, m["name"]))
                 if detail.get("activated"):
                     con.execute("UPDATE competitions SET status=%s WHERE slug=%s", (detail.get("before_status") or "upcoming", slug))
             for key, val in (detail.get("meta_before") or {}).items():
@@ -1090,7 +1092,7 @@ class DatabaseManager:
         with self._read() as con:
             current_week = self.get_current_week(cid)
             rows = con.execute("""
-                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,
+                SELECT week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id,nw_touched_at,
                        week_pts,points_per_match
                 FROM user_selections WHERE competition_id=%s AND display_name=%s ORDER BY week_no ASC
             """, (cid, name)).fetchall()
@@ -1098,6 +1100,7 @@ class DatabaseManager:
             {"week_no": r["week_no"], "is_current": r["week_no"]==current_week,
              "this_week": {"team": _jloads(r["tw_team_json"],[]), "cap": r["tw_cap_id"], "vc": r["tw_vc_id"]},
              "next_week": {"team": _jloads(r["nw_team_json"],[]), "cap": r["nw_cap_id"], "vc": r["nw_vc_id"]},
+             "next_week_touched_at": r["nw_touched_at"],     # when the member last saved or confirmed ("Keep this XI") this draft; None = not since the row was created
              "week_pts": r["week_pts"],
              "points_per_match": _jloads(r["points_per_match"], {})}
             for r in rows
@@ -1154,27 +1157,71 @@ class DatabaseManager:
             return False, "Captain and vice-captain must be different players", total
         return True, None, total
 
-    def save_next_week(self, name: str, team: list, cap, vc, competition_id=None) -> dict:
+    def _draft_week(self, con, cid, current_week):
+        """The week the draft being saved is FOR: the handover it will be promoted at (inside the caller's transaction). On a lock schedule that is the first
+        week whose handover has not run; without one it is the week after the current one (the first week is picked before it starts). None when every
+        scheduled week has been handed over (the final week: there is nothing left to pick for)."""
+        weeks = [r["week_no"] for r in con.execute("SELECT week_no FROM competition_weeks WHERE competition_id=%s ORDER BY week_no", (cid,)).fetchall()]
+        if not weeks:
+            return 1 if current_week <= 1 else current_week + 1
+        done = {r["to_week"] for r in con.execute("SELECT to_week FROM rollover_log WHERE competition_id=%s AND undone_at IS NULL", (cid,)).fetchall()}
+        return next((w for w in weeks if w not in done), None)
+
+    def save_next_week(self, name: str, team: list, cap, vc, competition_id=None, expect_week=None) -> dict:
+        """Save the member's draft for the next week (into the row of the competition's CURRENT week) and mark it touched. `expect_week` is the week the page
+        says its draft is FOR: when a handover has moved the draft on since the page loaded (including the week-1 start, which does not change the row's
+        week), nothing is written and {"conflict": True, "week_no": <current week>, "draft_week": <the week a draft is for now>} comes back, so a stale page
+        can never drop a draft into the wrong week. The check and the write happen under a shared lock on the competition row, which a handover holds
+        exclusively: a save that races a handover waits for it and is then judged against the new week."""
         cid = self._cid(competition_id)
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._write() as con:
+            con.execute("SELECT 1 FROM competitions WHERE slug=%s FOR SHARE", (cid,))
             row = con.execute(
                 "SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections WHERE competition_id=%s",
                 (cid,)).fetchone()
             current_week = int(row["wn"]) if row else 1
+            if expect_week is not None:
+                draft_week = self._draft_week(con, cid, current_week)
+                if int(expect_week) != draft_week:
+                    return {"conflict": True, "week_no": current_week, "draft_week": draft_week}
             con.execute("""
                 INSERT INTO user_selections
                     (competition_id,display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,
-                     nw_team_json,nw_cap_id,nw_vc_id)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     nw_team_json,nw_cap_id,nw_vc_id,nw_touched_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (competition_id,display_name,week_no) DO UPDATE SET
                     nw_team_json=EXCLUDED.nw_team_json,
                     nw_cap_id=EXCLUDED.nw_cap_id,
-                    nw_vc_id=EXCLUDED.nw_vc_id
-            """, (cid, name, current_week, "[]", None, None, json.dumps(team), cap, vc))
+                    nw_vc_id=EXCLUDED.nw_vc_id,
+                    nw_touched_at=EXCLUDED.nw_touched_at
+            """, (cid, name, current_week, "[]", None, None, json.dumps(team), cap, vc, now_iso))
             con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) "
                         "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (f"_saved:{cid}", now_iso))
-        return {"week_no": current_week}
+        return {"week_no": current_week, "touched_at": now_iso}
+
+    def keep_next_week(self, name: str, competition_id=None, expect_week=None) -> dict:
+        """The member confirms the draft they already have ("Keep this XI"): nothing about the team changes, the draft is only marked touched (this is what
+        lets a reminder know they have seen it). `expect_week` works as for save_next_week. Returns {"week_no", "touched_at"}; {"conflict": True, "week_no",
+        "draft_week"} when the draft has moved on; {"nothing": True, "week_no"} when there is no team (draft or XI) to keep."""
+        cid = self._cid(competition_id)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            con.execute("SELECT 1 FROM competitions WHERE slug=%s FOR SHARE", (cid,))
+            current_week = int(con.execute("SELECT COALESCE(MAX(week_no),1) AS wn FROM user_selections WHERE competition_id=%s", (cid,)).fetchone()["wn"])
+            if expect_week is not None:
+                draft_week = self._draft_week(con, cid, current_week)
+                if int(expect_week) != draft_week:
+                    return {"conflict": True, "week_no": current_week, "draft_week": draft_week}
+            row = con.execute("SELECT tw_team_json, nw_team_json FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s FOR UPDATE",
+                              (cid, name, current_week)).fetchone()
+            if not row or not (_jloads(row["tw_team_json"], []) or _jloads(row["nw_team_json"], [])):
+                return {"nothing": True, "week_no": current_week}
+            con.execute("UPDATE user_selections SET nw_touched_at=%s WHERE competition_id=%s AND display_name=%s AND week_no=%s",
+                        (now_iso, cid, name, current_week))
+            con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) "
+                        "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (f"_saved:{cid}", now_iso))
+        return {"week_no": current_week, "touched_at": now_iso}
 
     # ── Competition DAO ───────────────────────────────────────────────────
     def list_competitions(self) -> list:

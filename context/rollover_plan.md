@@ -80,3 +80,7 @@ None. Every public function is used by `db_manager.py` or `routes.py`; `schedule
 
 1. Triggers: the handover is currently triggered only by `POST /api/rollover` (scheduler token or admin). The redundant triggers (Supabase clock, GitHub cron, a lazy trigger on any request, a watchdog + Telegram alert) are Phase 2 of the plan.
 2. A member who joins mid-season gets an empty XI for the weeks they missed (0 points) and a row from the next handover on.
+
+## A draft starts untouched (Phase 1.6, 2026-11-20)
+
+A handover never marks a draft touched: a new week's row starts with `nw_touched_at` empty, and the week-1 **start** resets it on the row it promotes (the pre-season pick is now week 2's draft, which nobody has confirmed; an undo restores the old value). So "no changes since the week began" (what a reminder will ask) is exactly "`nw_touched_at` is empty". A save or a Keep sets it. See [db_manager.md](db_manager.md).

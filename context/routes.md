@@ -109,11 +109,12 @@ Phase 7.
 | 3 | Players | `/api/players` | GET | All players sorted by `season_pts DESC`. |
 | 3 | Players | `/api/resolve-player` | POST | Fuzzy-resolve a single name into a player ID. |
 | 3 | Players | `/api/leaderboard` | GET | The 73-line CTE from [db_manager.py:178](../db_manager.py:178). Supports `?week=N`. |
-| 4 | History | `/api/history/<n>` | GET | Week-by-week XI history for one user. |
+| 4 | History | `/api/history/<n>` | GET | Week-by-week XI history for one user. Each week row also carries `next_week_touched_at`: when the member last saved or kept that week's draft (null = not since the row was created). |
 | 4 | History | `/api/player-points/<n>` | GET | **DEAD** (E1) — consumer was the dead Points tab. |
 | 4 | History | `/api/user-match-points/<n>` | GET | **DEAD** (E2 below) — consumer was the dead Matches tab. |
 | 4 | History | `/api/debug-points/<n>` | GET | **DEAD** (E3 below) — no consumer anywhere. |
-| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Auto-resolves typed names → IDs. Enforces budget = 100 CR and XI = 11. Refused with 423 `reason:"locked"` from a week's lock until its handover has run (stored lock schedule), or by the old Monday rule for a competition with none. |
+| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Auto-resolves typed names → IDs. Enforces budget = 100 CR and XI = 11. Refused with 423 `reason:"locked"` from a week's lock until its handover has run (stored lock schedule), or by the old Monday rule for a competition with none. Body may carry `week` = the week the page says its draft is FOR (the handover it will be promoted at: on a lock schedule the first week not yet handed over, otherwise the week after the current one): if a handover moved that on since the page loaded (this includes the week-1 start, which does not change the row week) nothing is written and the answer is 409 `reason:"week_changed"` with `current_week` and `draft_week`. A save marks the draft touched (`nw_touched_at`) and answers `touched_at`. (2026-11-20, routes 1.13.0) |
+| 5 | Save | `/api/keep-xi/<n>` | POST | **"Keep this XI"** (2026-11-20): the member confirms the draft they already have, usually last week's XI carried over; nothing about the team changes, the draft is only marked touched, which is what a reminder looks at ("no changes" = no save and no keep since the week began). Same lock rules as a save (423), optional `week` as for a save (409 `week_changed`), 409 `nothing_to_keep` when there is no team (draft or XI) to keep, self-only (403 `not_your_team`). Answers `{ok, week_no, touched_at}`. |
 | 5 | Save | `/api/member/<n>` | PUT | Create or update a member's `this_week` / `next_week` selections. |
 | 5 | Save | `/api/match` | POST | **DEAD** (E4 below) — generic match upsert; no UI calls it. |
 | 6 | Scoring | `/api/recalculate-points` | POST | Force-rebuild every points table. Wired in IplApi but admin-only manual use. |

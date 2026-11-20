@@ -517,6 +517,14 @@ button.nw-player-row:active { transform: translateY(1px); }
 /* the deadline: big enough to read at a glance, red in the last hour */
 .nw-countdown { display: inline-flex; align-items: center; padding: 3px 10px; border: 1.25px solid var(--border); border-radius: 999px; background: var(--sheet-2); font: 800 12px/1.2 var(--font); letter-spacing: 0; text-transform: none; color: var(--text); }
 .nw-countdown.urgent { border-color: var(--danger-line); background: color-mix(in srgb, var(--danger-wash) 20%, var(--sheet-2)); color: var(--danger-ink); }
+/* Phase 1.6: the lock time in the member's own time zone, and the notices above the draft (no XI for the week that is playing; "Week N is open") */
+.nw-when { margin: -2px 0 10px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.nw-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 2px 0 12px; padding: 10px 12px; border: 1.25px dashed var(--teal-line); border-radius: var(--r-hand-sm); background: color-mix(in srgb, var(--teal-wash) 20%, var(--sheet-2)); color: var(--teal-ink); }
+.nw-notice.warn { border-color: var(--gold-line); background: color-mix(in srgb, var(--gold-wash) 22%, var(--sheet-2)); color: var(--gold-ink); }
+.nw-notice b { font: 700 18px/1.1 var(--font-hand); letter-spacing: 0; }
+.nw-notice span { flex: 1 1 180px; min-width: 0; font-size: 13px; font-weight: 700; line-height: 1.4; color: var(--text); }
+.nw-notice-x { position: relative; flex: none; min-height: 36px; margin-left: auto; padding: 4px 14px; border: 1.25px solid var(--pencil); border-radius: var(--r-hand-sm); background: transparent; font: 800 12px/1 var(--font); color: inherit; cursor: pointer; }
+.nw-notice-x::after { content: ""; position: absolute; inset: -4px; }   /* 44px hit area, 36px look */
 
 /* ---------- the strip under the app bar: ONE slim row (status, then members / matches / budget in a single capsule) ---------- */
 .page-strip { flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0 0 12px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }

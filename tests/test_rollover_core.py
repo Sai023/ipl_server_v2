@@ -364,19 +364,23 @@ class TheOpsRecords(Base):
 class TheBootDdlIsAdditive(Base):
     """The tables are created when the app boots after the deploy. Nothing may be dropped, altered or rewritten, and booting twice must be harmless."""
 
-    def test_every_boot_statement_only_creates_what_is_missing(self):
+    def test_every_boot_statement_only_creates_what_is_missing_or_adds_the_one_nullable_column(self):
         import re
         from db_manager import _SCHEMA
         stmts = [s.strip() for s in _SCHEMA.split(";") if s.strip()]
         self.assertGreater(len(stmts), 20)
+        alters = [s for s in stmts if s.upper().startswith("ALTER")]
+        self.assertEqual(alters, ["ALTER TABLE user_selections ADD COLUMN IF NOT EXISTS nw_touched_at TEXT"], "the ONLY change to an existing table: one nullable column")
         for s in stmts:
-            self.assertRegex(s, r"^CREATE (TABLE|INDEX) IF NOT EXISTS ", s[:70])
+            if s not in alters:
+                self.assertRegex(s, r"^CREATE (TABLE|INDEX) IF NOT EXISTS ", s[:70])
         new = re.findall(r"CREATE TABLE IF NOT EXISTS (competition_weeks|rollover_log|ops_heartbeat)\b", _SCHEMA)
         self.assertEqual(sorted(new), ["competition_weeks", "ops_heartbeat", "rollover_log"])
 
-    def test_booting_on_a_database_from_the_previous_release_adds_only_the_three_new_tables(self):
-        """The deploy rehearsal: a database shaped like production TODAY (this release's boot DDL minus the three new tables), with data in it, is booted by this
-        release. Every existing table keeps its columns and its rows; the only change is three new, empty tables."""
+    def test_booting_on_a_database_from_the_previous_release_adds_only_the_touched_column(self):
+        """The deploy rehearsal: a database shaped like production when 2.18.0 is live (this release's boot DDL minus the one ALTER), with data in every
+        table including the Phase 1.5 ones, is booted by this release. Every table keeps its rows; no table changes except user_selections, which gains
+        one nullable column that is empty for every existing row."""
         import re
         import uuid
         import psycopg
@@ -385,7 +389,7 @@ class TheBootDdlIsAdditive(Base):
         raw = os.environ["TEST_DATABASE_URL"]
         schema = "t_upg_" + uuid.uuid4().hex[:8]
         dsn = raw + ("&" if "?" in raw else "?") + "options=" + quote(f"-c search_path={schema}")
-        old_ddl = [s for s in (x.strip() for x in _SCHEMA.split(";")) if s and not re.search(r"\b(competition_weeks|rollover_log|ops_heartbeat)\b", s)]
+        old_ddl = [s for s in (x.strip() for x in _SCHEMA.split(";")) if s and not re.search(r"\bnw_touched_at\b", s)]
         admin = psycopg.connect(raw, autocommit=True)
         admin.execute(f'CREATE SCHEMA "{schema}"')
         con = psycopg.connect(dsn, autocommit=True)
@@ -398,19 +402,26 @@ class TheBootDdlIsAdditive(Base):
             con.execute("INSERT INTO user_selections (competition_id,display_name,week_no,tw_team_json,nw_team_json) VALUES ('ipl_2026','Sai',3,'[\"a\"]','[\"b\"]'),('sa20_2027','Sai',1,'[]','[\"c\"]')")
             con.execute("INSERT INTO meta (key,value) VALUES ('_saved:sa20_2027','2026-11-19T10:00:00+00:00')")
             con.execute("INSERT INTO sessions (token,username,expires_at) VALUES ('tok','Sai','2027-01-01T00:00:00+00:00')")
+            con.execute("INSERT INTO competition_weeks (competition_id,week_no,lock_at_utc,first_match_utc) VALUES ('sa20_2027',1,'2027-01-17T12:30:00+00:00','2027-01-17T13:30:00+00:00')")
+            con.execute("INSERT INTO rollover_log (competition_id,kind,to_week,lock_at_utc,applied_at,triggered_by,members) VALUES ('ipl_2026','start',1,'x','y','test',3)")
+            con.execute("INSERT INTO ops_heartbeat (source,last_at,detail) VALUES ('rollover:admin','2026-11-20T09:00:00+00:00','sa20_2027: nothing due')")
             shape = lambda: con.execute("SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema=%s "   # noqa: E731
                                         "ORDER BY table_name, ordinal_position", (schema,)).fetchall()
-            rows_of = lambda t: con.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()                                                            # noqa: E731
-            old_tables = sorted({r[0] for r in shape()})
-            cols_before, data_before = shape(), {t: rows_of(t) for t in old_tables}
+            cols_before = shape()
+            tables = sorted({r[0] for r in cols_before})
+            names = {t: [r[1] for r in cols_before if r[0] == t] for t in tables}
+            rows_of = lambda t: con.execute(f"SELECT {', '.join(names[t])} FROM {t} ORDER BY 1, 2").fetchall()                                         # noqa: E731
+            data_before = {t: rows_of(t) for t in tables}
             db = DatabaseManager(dsn)                                                                  # the boot after the deploy
             cols_after = shape()
-            self.assertEqual(sorted({r[0] for r in cols_after} - set(old_tables)), ["competition_weeks", "ops_heartbeat", "rollover_log"])
-            self.assertEqual([r for r in cols_after if r[0] in old_tables], cols_before, "no existing table gained, lost or changed a column")
-            self.assertEqual({t: rows_of(t) for t in old_tables}, data_before, "no existing row was touched")
-            for t in ("competition_weeks", "rollover_log", "ops_heartbeat"):
-                self.assertEqual(rows_of(t), [], t + " starts empty")
-            self.assertIsNone(db.get_lock_state("sa20_2027"), "and nothing is managed until a schedule is stored: behaviour is unchanged")
+            self.assertEqual(sorted({r[0] for r in cols_after}), tables, "no table was added or removed")
+            self.assertEqual([r for r in cols_after if r[0] != "user_selections"], [r for r in cols_before if r[0] != "user_selections"], "no other table changed a column")
+            self.assertEqual([r for r in cols_after if r[0] == "user_selections"], [r for r in cols_before if r[0] == "user_selections"] + [("user_selections", "nw_touched_at", "text", "YES")],
+                             "user_selections gained exactly one nullable text column, at the end")
+            self.assertEqual({t: rows_of(t) for t in tables}, data_before, "no existing value in any table was touched")
+            self.assertEqual(con.execute("SELECT count(*) FROM user_selections WHERE nw_touched_at IS NOT NULL").fetchone()[0], 0, "the new column is empty for every existing row")
+            self.assertEqual(len(db.get_schedule("sa20_2027")), 1, "the Phase 1.5 schedule survived the boot")
+            self.assertIsNone(db.get_history("Sai", competition_id="sa20_2027")["weeks"][0]["next_week_touched_at"], "an old draft reads as untouched")
         finally:
             try:
                 if db is not None:

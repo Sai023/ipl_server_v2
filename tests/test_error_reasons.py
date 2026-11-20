@@ -19,7 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Reasons the page shows its OWN sentence for (Static/ui.js REASON_COPY) ...
 WITH_COPY = {"auth_required", "session_ended", "admin_only", "not_your_team", "rate_limited", "locked", "name_taken", "bad_credentials", "server_error"}
 # ... and reasons whose server text is already specific and readable ("Choose a captain and a vice-captain before saving"): shown as sent.
-PASS_THROUGH = {"name_invalid", "passcode_invalid", "credentials_required", "target_required", "member_not_found", "invalid_team"}
+PASS_THROUGH = {"name_invalid", "passcode_invalid", "credentials_required", "target_required", "member_not_found", "invalid_team",
+                "week_changed", "nothing_to_keep"}      # the last two (Phase 1.6): the page answers week_changed with its own dialog, and nothing_to_keep says it in the server's words
 
 
 def read(*p):

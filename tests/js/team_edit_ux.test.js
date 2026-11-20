@@ -39,7 +39,10 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 
 const LOADED = ['_teamCost', '_remaining', '_priceBounds', '_nwSig', '_nwDirty', '_nwHasUnsaved', '_getCurrentWeekRow', '_nwLoadSaved', '_nwNewWeek', '_nwInit',
   '_draftKey', '_draftStore', '_draftRestore', '_nwChanged', '_nwSetRole', '_nwSetCap', '_nwSetVc', '_nwRemove', '_nwToggle', '_nwDiscard', '_nwSave', '_nwTooLate', '_nwCloseLayer',
-  '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_finalWeek', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
+  '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_finalWeek', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot',
+  // Phase 1.6: the week a draft is for, Keep this XI, a draft from a week that moved on, the lock card wording, notices, local time
+  '_nwTargetWeek', '_nwSameAsXi', '_nwCarried', '_nwKeep', '_nwWeekMoved', '_nwOfferStale', '_nwAdopt', '_nwLetGo', '_nwSyncTarget', '_whenLocal', '_hhmm', '_nwWhenLine',
+  '_lockCardText', '_nwSeenKey', '_nwSeenWeek', '_nwDismissNotice', '_nwNotices'];
 
 function load(o = {}) {
   const c = { toasts: [], warns: [], fails: [], events: [], confirms: [], sheets: [], sent: [], timers: [], renders: 0, backs: 0, saveImpl: () => Promise.resolve({ ok: true }), store: o.store || new Map(), storeBroken: false };
@@ -59,6 +62,7 @@ function load(o = {}) {
   Object.assign(c, {
     BUDGET_TOTAL: 100, XI_SIZE: 11, _username: 'Sai', _activeComp: 'sa20_2027', _currentWeek: 3, _weekKnown: true,
     _nwDraft: { team: [], cap: null, vc: null }, _nwSaved: null, _nwCarry: false, _nwRestored: false, _lockedWeek: null, _nwSaving: false, _nwSlow: false, _nwSlowT: null,
+    _nwTouched: false, _nwKeeping: false, _nwTarget: null, _nwOffer: false,
     _pickerSearch: '', _pickerRole: 'All', _pickerTeams: [], _pickerSort: 'season', _pickerMaxPrice: null, _pickerFiltersOpen: false, _pickerXiOpen: false, matches: [], _barH: 0,
     _pickOpen: false, _historyData: null, _state: { deadline: { next_lock_utc: FUTURE(), status: 'active' } }, $app: null,
   });
@@ -80,7 +84,11 @@ function load(o = {}) {
   c.confirmAnswer = false;
   c.Ui.confirm = (opts) => { c.confirms.push(opts); return Promise.resolve(c.confirmAnswer); };
   c.Ui.sheet = (opts) => { c.sheets.push(opts); return () => {}; };
-  c.IplApi = { saveNextWeek: (u, d) => { c.sent.push({ u, d: clone(d) }); return c.saveImpl(); } };
+  c.blockings = []; c.kept = []; c.refreshes = 0; c.refreshOk = true;
+  c.Ui.sheetBlocking = (o) => { c.blockings.push(o); return { close() {}, el: {} }; };
+  c.keepImpl = () => Promise.resolve({ ok: true, touched_at: '2027-01-19T08:00:00+00:00' });
+  c.IplApi = { saveNextWeek: (u, d, w) => { c.sent.push({ u, d: clone(d), w }); return c.saveImpl(); }, keepNextWeek: (u, w) => { c.kept.push({ u, w }); return c.keepImpl(); } };
+  c._doStateRefresh = (cb) => { c.refreshes++; if (cb) cb(c.refreshOk); };
   for (const n of LOADED) vm.runInContext(fnSource(n), c, { filename: n });
   return c;
 }
@@ -125,12 +133,6 @@ test('the draft comes back after a reload / a closed app (same week, same saved 
   assert.deepStrictEqual(arr(c2._nwDraft.team), XI.filter((x) => x !== 'q13'));
   assert.strictEqual(c2._nwDraft.vc, 'q6');
   assert.strictEqual(c2._nwRestored, true); assert.strictEqual(c2._nwHasUnsaved(), true);
-});
-test('a kept draft from another week is dropped and cleaned up', (c) => {
-  const row = withSaved(c); c._nwRemove('q13', true);
-  const d = keptDraft(c); d.wk = 2; c.store.set(KEY, JSON.stringify(d));
-  const c2 = load({ store: c.store }); c2._historyData = { weeks: [row] }; c2._nwInit(row);
-  assert.strictEqual(c2._nwHasUnsaved(), false); assert.strictEqual(c2._nwRestored, false); assert.strictEqual(keptDraft(c2), null);
 });
 test('a kept draft made against an older saved XI is dropped (the server moved on, e.g. saved from another phone)', (c) => {
   const row = withSaved(c); c._nwRemove('q13', true);
@@ -692,6 +694,194 @@ test('css: the strip never wraps onto a second line (it scrolls sideways on a ve
 test('css: the summary is hidden where the squad is already on screen (wide layout), the old header toggle styles are gone', () => {
   assert.match(ALL_CSS, /@media \(min-width: 1000px\) \{ \.pb-wrap \{ display: none; \} \}/);
   assert.ok(!/button\.lh-xi/.test(ALL_CSS));
+});
+
+// ───── Phase 1.6 (2026-11-20): which week a draft is for, Keep this XI, a draft from a week that moved on is offered back, lock card wording, notices, local time ─────
+const MANAGED = (over = {}) => Object.assign({ status: 'active', managed: true, locked: false, awaiting: null, season_over: false, applied_to: 3, next_lock_utc: FUTURE() }, over);
+const carriedRow = (extra = {}) => Object.assign({ week_no: 3, is_current: true, this_week: { team: XI, cap: 'q2', vc: 'q4' }, next_week: { team: XI, cap: 'q2', vc: 'q4' } }, extra);
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const REFUSED = { status: 409, serverData: { reason: 'week_changed', current_week: 4, draft_week: 5 } };
+
+test('the week a draft is for: the handover it will be promoted at (the row week does not change at the first week start)', (c) => {
+  c._currentWeek = 3;
+  assert.strictEqual(c._nwTargetWeek({ managed: true, applied_to: 0 }), 1, 'before the season starts a draft is for week 1');
+  c._currentWeek = 1; assert.strictEqual(c._nwTargetWeek({ managed: true, applied_to: 1 }), 2, 'after the start the row week is still 1, but a draft is for week 2');
+  c._currentWeek = 2; assert.strictEqual(c._nwTargetWeek({ managed: true, applied_to: 2 }), 3);
+  assert.strictEqual(c._nwTargetWeek({ managed: true, applied_to: 2, awaiting: { kind: 'rollover', to_week: 3 } }), 3, 'while a handover is waiting it is that week');
+  c._currentWeek = 3; assert.strictEqual(c._nwTargetWeek({ status: 'active' }), 4, 'without a lock schedule: the week after this one');
+  c._currentWeek = 1; assert.strictEqual(c._nwTargetWeek({ status: 'active' }), 1, '... and the first week is picked before it starts');
+});
+
+test('a draft from a week that moved on is OFFERED back when the app opens, never deleted: it stays on the phone until the member answers', (c) => {
+  const row = withSaved(c); c._nwRemove('q13', true);
+  const d = keptDraft(c); d.wk = 2; d.to = 3;   // made while week 2 was playing, for the Week 3 draft
+  c.store.set(KEY, JSON.stringify(d));
+  const c2 = load({ store: c.store }); c2._historyData = { weeks: [row] }; c2._nwInit(row);
+  assert.strictEqual(c2.blockings.length, 1);
+  assert.match(c2.blockings[0].message, /It was for Week 3, but Week 3 is already playing\. Use it as your Week 4 draft\?/);
+  assert.strictEqual(c2.blockings[0].primary.label, 'Use it as Week 4 draft'); assert.strictEqual(c2.blockings[0].secondary.label, 'Discard');
+  assert.strictEqual(c2._nwHasUnsaved(), false, 'nothing is changed until the member answers'); assert.ok(keptDraft(c2), 'and the copy is still on the phone');
+  c2.blockings[0].primary.onClick();
+  assert.strictEqual(c2._nwHasUnsaved(), true); assert.strictEqual(c2._nwDraft.team.length, 10); assert.strictEqual(keptDraft(c2).wk, 3, 'now kept against the week that is open');
+  assert.ok(c2.toasts.some((t) => /Draft brought back/.test(t.msg)));
+  const c3 = load({ store: new Map([[KEY, JSON.stringify(d)]]) }); c3._historyData = { weeks: [row] }; c3._nwInit(row);
+  c3.blockings[0].secondary.onClick();
+  assert.strictEqual(keptDraft(c3), null); assert.strictEqual(c3._nwHasUnsaved(), false);
+});
+
+test('a draft made before the first week started (same row week, but drafts are for the next week now) is offered back too', (c) => {
+  c._currentWeek = 1; c._state.deadline = MANAGED({ applied_to: 0 });
+  const row = withSaved(c); c._nwRemove('q13', true);                      // an edit of the pre-season pick, kept on the phone with to = 1
+  assert.strictEqual(keptDraft(c).to, 1);
+  const c2 = load({ store: c.store }); c2._currentWeek = 1; c2._state.deadline = MANAGED({ applied_to: 1 });   // the season has started since
+  c2._historyData = { weeks: [row] }; c2._nwInit(row);
+  assert.strictEqual(c2.blockings.length, 1); assert.match(c2.blockings[0].message, /It was for Week 1, but Week 1 is already playing\. Use it as your Week 2 draft\?/);
+});
+
+test('picks not yet saved when a handover runs while the app is open are offered back, not lost; the screen shows the new week meanwhile', (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); withSaved(c);
+  c._nwRemove('q13', true);
+  const next = { week_no: 4, is_current: true, next_week: { team: XI, cap: 'q2', vc: 'q4' }, this_week: { team: XI, cap: 'q2', vc: 'q4' } };
+  c._currentWeek = 4; c._nwNewWeek(next, 5);
+  assert.strictEqual(c.blockings.length, 1); assert.match(c.blockings[0].message, /It was for Week 4, but Week 4 is already playing\. Use it as your Week 5 draft\?/);
+  assert.deepStrictEqual(arr(c._nwDraft.team), XI, 'meanwhile the screen shows what the server holds for the new week');
+  c._nwNewWeek(next, 6); assert.strictEqual(c.blockings.length, 1, 'one question at a time');
+  c.blockings[0].primary.onClick();
+  assert.strictEqual(c._nwDraft.team.length, 10); assert.strictEqual(c._nwHasUnsaved(), true); assert.strictEqual(keptDraft(c).to, 6);
+});
+
+test('nothing to offer: a handover with no unsaved picks (or before the server has said which week drafts are for) asks nothing', (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); withSaved(c);
+  c._currentWeek = 4; c._nwNewWeek({ next_week: { team: XI, cap: 'q2', vc: 'q4' }, this_week: { team: XI, cap: 'q2', vc: 'q4' } }, 5);
+  assert.strictEqual(c.blockings.length, 0);
+  const c2 = load(); c2._state = null; c2._historyData = { weeks: [] }; c2._nwInit(null); assert.strictEqual(c2._nwTarget, null); assert.strictEqual(c2.blockings.length, 0);
+});
+
+test('Keep this XI: a carried-over draft shows an enabled Keep button and Edit, and says what it is', (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); c._currentWeek = 3;
+  const row = carriedRow(); c._historyData = { weeks: [row] }; c._nwInit(row);
+  assert.strictEqual(c._nwCarried(), true);
+  const bar = c._buildBudgetBar();
+  assert.match(bar, />Keep this XI</); assert.ok(!/id="nw-save-btn"[^>]*disabled/.test(bar), 'the Keep button is enabled'); assert.match(bar, /onclick="_nwKeep\(\)"/);
+  assert.match(bar, /Week 4 draft: using last week’s XI/); assert.match(bar, /data-fk="nw-edit"/); assert.match(bar, /btn-gold/);
+  c._nwSetCap('q3'); assert.strictEqual(c._nwCarried(), false, 'once it is edited it is an ordinary draft'); assert.match(c._buildBudgetBar(), />Save Draft</);
+});
+
+test('Keep this XI: pressing it tells the server, marks the draft kept and changes nothing about the team', async (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); c._currentWeek = 3;
+  const row = carriedRow(); c._historyData = { weeks: [row] }; c._nwInit(row);
+  c._nwKeep(); assert.strictEqual(c._nwKeeping, true); assert.match(c._buildBudgetBar(), /Keeping/); c._nwKeep();
+  await tick();
+  assert.deepStrictEqual(c.kept, [{ u: 'Sai', w: 4 }]); assert.strictEqual(c.sent.length, 0, 'a keep is not a save, and a second press while one is in flight is ignored');
+  assert.strictEqual(c._nwTouched, true); assert.strictEqual(c._nwKeeping, false); assert.strictEqual(row.next_week_touched_at, '2027-01-19T08:00:00+00:00');
+  assert.strictEqual(c._nwCarried(), false); assert.deepStrictEqual(arr(c._nwDraft.team), XI);
+  const bar = c._buildBudgetBar();
+  assert.match(bar, /Kept ✓/); assert.match(bar, /Kept\. We will use this XI for Week 4/); assert.match(bar, /id="nw-save-btn"[^>]*disabled/);
+  assert.ok(c.toasts.some((t) => /Kept\. We will use this XI for Week 4/.test(t.msg)));
+});
+
+test('Keep this XI: not while picks are locked; a refused week is explained, not shown as an error', async (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); const row = carriedRow(); c._historyData = { weeks: [row] }; c._nwInit(row);
+  c._state.deadline = MANAGED({ next_lock_utc: PAST(), locked: true, awaiting: { kind: 'rollover', to_week: 4 } });
+  c._nwKeep(); assert.strictEqual(c.kept.length, 0); assert.match(c.warns[0], /locked/i);
+  c._state.deadline = MANAGED({ applied_to: 3 });
+  c.keepImpl = () => Promise.reject(REFUSED);
+  c._nwKeep(); await tick();
+  assert.strictEqual(c.refreshes, 1, 'the page brings itself up to date'); assert.strictEqual(c.fails.length, 0, 'and the refusal is not shown as an error');
+  assert.ok(c.toasts.some((t) => /nothing was kept/.test(t.msg)));
+  c.keepImpl = () => Promise.reject({ status: 423, serverData: { reason: 'locked' } }); c._nwKeep(); await tick();
+  assert.strictEqual(c._lockedWeek, 3, 'a too-late keep locks the screen like a too-late save');
+});
+
+test('Save states the week the draft is for and marks the draft kept', async (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); const row = withSaved(c); c._nwSetCap('q3');
+  c._nwSave(); await tick();
+  assert.strictEqual(c.sent.length, 1); assert.strictEqual(c.sent[0].w, 4);
+  assert.strictEqual(c._nwTouched, true); assert.ok(row.next_week_touched_at);
+});
+
+test('a save the server refuses because the week moved on becomes a question: save it as the new draft, or discard', async (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); withSaved(c); c._nwSetCap('q3');
+  c._doStateRefresh = (cb) => { c.refreshes++; c._state.deadline = MANAGED({ applied_to: 4 }); c._nwTarget = 5; cb(true); };   // the refresh moves the target on, as the real one does
+  c.saveImpl = () => Promise.reject(REFUSED);
+  c._nwSave(); await tick();
+  assert.strictEqual(c.refreshes, 1); assert.strictEqual(c.blockings.length, 1); assert.strictEqual(c.fails.length, 0); assert.strictEqual(c.warns.length, 0);
+  const b = c.blockings[0];
+  assert.strictEqual(b.title, 'Week 4 just started');
+  assert.strictEqual(b.message, 'Your draft was for the Week 4 lineup, but Week 4 is already playing. Save it as your Week 5 draft?');
+  assert.strictEqual(b.primary.label, 'Save as Week 5 draft'); assert.strictEqual(b.secondary.label, 'Discard');
+  c.saveImpl = () => Promise.resolve({ ok: true, touched_at: 'x' });
+  b.primary.onClick(); await tick();
+  assert.strictEqual(c.sent.length, 2); assert.strictEqual(c.sent[1].w, 5, 'saved again, for the week that is open now'); assert.strictEqual(c.sent[1].d.cap, 'q3', 'with the draft the member had');
+});
+
+test('a refused save, discarded: nothing is saved and the kept copy goes', async (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); withSaved(c); c._nwSetCap('q3'); assert.ok(keptDraft(c));
+  c._doStateRefresh = (cb) => { c._state.deadline = MANAGED({ applied_to: 4 }); c._nwTarget = 5; cb(true); };
+  c.saveImpl = () => Promise.reject(REFUSED);
+  c._nwSave(); await tick();
+  c.blockings[0].secondary.onClick();
+  assert.strictEqual(c.sent.length, 1, 'only the refused attempt'); assert.strictEqual(keptDraft(c), null);
+});
+
+test('the state sync adopts the first answer quietly and refetches when a handover moves the draft week', (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 });
+  c._nwTarget = null; c._nwSyncTarget({ deadline: MANAGED({ applied_to: 3 }) }); assert.strictEqual(c._nwTarget, 4); assert.strictEqual(c.refreshes, 0);
+  c._nwSyncTarget({ deadline: MANAGED({ applied_to: 3 }) }); assert.strictEqual(c.refreshes, 0);
+  c._nwSyncTarget({ deadline: MANAGED({ applied_to: 4 }) }); assert.strictEqual(c.refreshes, 1, 'the first week start moves the target without moving the current week');
+  c._username = null; c._nwSyncTarget({ deadline: MANAGED({ applied_to: 5 }) }); assert.strictEqual(c.refreshes, 1);
+});
+
+test('the Pick card names the week the draft is for (Week 2 after the first week starts) and when it locks in the member’s own time', (c) => {
+  c._currentWeek = 1; c._state.deadline = MANAGED({ applied_to: 1, next_lock_utc: '2027-01-18T14:00:00+00:00' }); withSaved(c);
+  let h = c._buildNextWeekCard(); assert.match(h, /Week 2 draft/); assert.ok(!/Pick your team/.test(h));
+  assert.match(h, /class="nw-when">Locks [A-Z][a-z]{2},? 18 Jan,? \d{2}:\d{2}</);
+  c._state.deadline = MANAGED({ applied_to: 0 }); h = c._buildNextWeekCard(); assert.match(h, /Pick your team/);
+  c._state.deadline = MANAGED({ applied_to: 1, next_lock_utc: PAST(), locked: true, awaiting: { kind: 'rollover', to_week: 2 } }); assert.ok(!/nw-when/.test(c._buildNextWeekCard()), 'no "locks at" once it has locked');
+});
+
+test('local lock time: weekday, day, month and the time in the member’s zone; junk gives nothing', (c) => {
+  assert.match(c._whenLocal('2027-01-18T14:00:00+00:00', 'en-GB', 'Africa/Johannesburg'), /^Mon,? 18 Jan,? 16:00$/);
+  assert.match(c._whenLocal('2027-01-17T12:30:00+00:00', 'en-GB', 'Africa/Johannesburg'), /^Sun,? 17 Jan,? 14:30$/);
+  assert.strictEqual(c._hhmm('2027-01-17T12:30:00+00:00', 'en-GB', 'Africa/Johannesburg'), '14:30');
+  assert.strictEqual(c._whenLocal('not a date'), ''); assert.strictEqual(c._hhmm(null), ''); assert.strictEqual(c._whenLocal('2027-01-18T14:00:00+00:00', 'en-GB', 'Not/AZone'), '');
+});
+
+test('the lock bar says what is going on: setting up the next week, slow, closed for good, or locked until the next rollover', (c) => {
+  withSaved(c); c._currentWeek = 3;
+  c._state.deadline = MANAGED({ locked: true, next_lock_utc: new Date(Date.now() - 30e3).toISOString(), awaiting: { kind: 'rollover', to_week: 4 } });
+  let lc = c._lockCardText(); assert.match(lc.title, /^Picks locked at \d{2}:\d{2}$/); assert.strictEqual(lc.text, 'Setting up Week 4. This takes a few seconds.');
+  assert.match(c._deadlineText(), /Locked — setting up Week 4/);
+  const h = c._buildNextWeekCard(); assert.match(h, /Setting up Week 4/); assert.ok(!/next rollover/.test(h));
+  c._state.deadline = MANAGED({ locked: true, next_lock_utc: new Date(Date.now() - 5 * 60e3).toISOString(), awaiting: { kind: 'rollover', to_week: 4 } });
+  lc = c._lockCardText(); assert.strictEqual(lc.title, 'Still setting up Week 4'); assert.strictEqual(lc.text, 'This is taking longer than usual. Your locked XI is safe.');
+  c._state.deadline = MANAGED({ season_over: true, locked: true, next_lock_utc: null }); assert.strictEqual(c._lockCardText().title, 'Picks are closed');
+  c._state.deadline = { status: 'active', next_lock_utc: PAST() };
+  lc = c._lockCardText(); assert.strictEqual(lc.title, 'Picks are locked'); assert.match(lc.text, /New picks open again after the next rollover/); assert.match(c._deadlineText(), /Locked — awaiting rollover/);
+});
+
+test('notices: no XI for the week that is playing; "Week N is open" once, only after a handover that carried the XI over', (c) => {
+  const weeks = (cur, prev) => ({ weeks: [Object.assign({ week_no: 2, is_current: false, this_week: { team: XI }, next_week: { team: XI } }, prev), Object.assign({ week_no: 3, is_current: true }, cur)] });
+  c._currentWeek = 3; c._state.deadline = MANAGED({ applied_to: 3 });
+  c._historyData = weeks({ this_week: { team: [] }, next_week: { team: [] } }, {});
+  let n = c._nwNotices(); assert.match(n, /No XI for Week 3/); assert.match(n, /score 0 until Week 4\. You can still draft Week 4\./); assert.match(n, /nw-notice warn/);
+  c._state.deadline = MANAGED({ applied_to: 3, season_over: true }); assert.match(c._nwNotices(), /score 0 for the rest of the season/);
+  c._state.deadline = MANAGED({ applied_to: 2 }); assert.strictEqual(c._nwNotices(), '', 'this week has not been handed over yet');
+  c._state.deadline = MANAGED({ applied_to: 3 });
+  c._historyData = weeks({ this_week: { team: XI }, next_week: { team: XI } }, { next_week_touched_at: null });
+  n = c._nwNotices(); assert.match(n, /Week 3 is open/); assert.match(n, /Your XI carried over\./); assert.match(n, /_nwDismissNotice\(\)/);
+  c._nwDismissNotice(); assert.strictEqual(c.store.get('ipl_seen_week:sa20_2027:Sai'), '3'); assert.strictEqual(c._nwNotices(), '', 'said once');
+  c.store.clear(); c._historyData = weeks({ this_week: { team: XI }, next_week: { team: XI } }, { next_week_touched_at: '2027-01-12T08:00:00+00:00' });
+  assert.strictEqual(c._nwNotices(), '', 'the member picked it themselves: nothing to explain');
+  c._state.deadline = { status: 'active', next_lock_utc: FUTURE() }; assert.strictEqual(c._nwNotices(), '', 'only for a competition on a lock schedule');
+});
+
+test('the banner on the other tabs keeps a carried-over XI in one tap, and is not "ready" green until the member has', (c) => {
+  c._state.deadline = MANAGED({ applied_to: 3 }); const row = carriedRow(); c._historyData = { weeks: [row] }; c._nwInit(row);
+  let b = c._buildActionBanner();
+  assert.match(b, /Using last week’s XI\. Keep it, or change it\./); assert.match(b, /onclick="_nwKeep\(\)">Keep this XI</); assert.ok(!/action-banner ok/.test(b));
+  row.next_week_touched_at = '2027-01-19T08:00:00+00:00'; c._nwInit(row); b = c._buildActionBanner();
+  assert.match(b, /Your XI is ready/); assert.match(b, /action-banner ok/); assert.ok(!/Keep this XI/.test(b));
 });
 
 (async () => {

@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper7">
-  <link rel="stylesheet" href="/static/style.css?v=paper7">
-  <link rel="stylesheet" href="/static/ui.css?v=paper7">
-  <link rel="stylesheet" href="/static/screens.css?v=paper7">
-  <link rel="stylesheet" href="/static/paper.css?v=paper7">
+  <link rel="stylesheet" href="/static/theme.css?v=paper8">
+  <link rel="stylesheet" href="/static/style.css?v=paper8">
+  <link rel="stylesheet" href="/static/ui.css?v=paper8">
+  <link rel="stylesheet" href="/static/screens.css?v=paper8">
+  <link rel="stylesheet" href="/static/paper.css?v=paper8">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper7"></script>
+<script src="/static/ui.js?v=paper8"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -43,6 +43,7 @@ var _pickerSearch="",_pickerRole="All",_pickerTeams=[],_pickerSort="season";   /
 var _pickerMaxPrice=null,_pickerFiltersOpen=false,_pickerXiOpen=false;   // null = no price limit; _pickerXiOpen: the "Your XI" strip under the picker header is open
 var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (signature), and whether that is last week's XI carried over
 var _nwRestored=false,_lockedWeek=null;   // _nwRestored: the draft on screen came back from this phone; _lockedWeek: the week for which the server refused a save as too late
+var _nwTouched=false,_nwKeeping=false,_nwTarget=null,_nwOffer=false;   // _nwTouched: the server holds a save or a "Keep this XI" for this draft; _nwKeeping: a keep is in flight; _nwTarget: the week the loaded draft is FOR (a change means a handover ran); _nwOffer: a question about an unsaved draft is open
 var _adminMatches=null,_adminFilter="all";
 var _adminMembersList=null;
 var _switching=false,_switchFailed=false,_swGuard=null,_weekKnown=false,_bootSeq=0;   // competition switch state (see _switchComp); _weekKnown: _currentWeek belongs to the competition on screen; _bootSeq: bumped on every switch so late replies for the old competition are dropped
@@ -130,7 +131,7 @@ function logout(){
   _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
   try{localStorage.removeItem("ipl_is_admin");}catch(e){}
   clearUsername();_historyData=null;_historyViewWk=null;
-  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwRestored=false;_lockedWeek=null;_adminMatches=null;_adminMembersList=null;
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwTouched=false;_nwTarget=null;_nwRestored=false;_lockedWeek=null;_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
 }
 function switchTab(tab){
@@ -289,10 +290,11 @@ function _nwSave(){
   var sent=_nwSig(_nwDraft);
   _nwSaving=true;_nwSlow=false;if(_state)render(_state);
   clearTimeout(_nwSlowT);_nwSlowT=setTimeout(function(){if(_nwSaving){_nwSlow=true;if(_state)render(_state);}},4000);
-  window.IplApi.saveNextWeek(_username,_nwDraft)
-    .then(function(){
+  window.IplApi.saveNextWeek(_username,_nwDraft,_nwTargetWeek())
+    .then(function(r){
       _nwSaving=false;_nwSlow=false;clearTimeout(_nwSlowT);
       _nwSaved=sent;_nwCarry=false;_nwRestored=false;        // what we sent is now what the server holds
+      _nwTouched=true;{var _cur=_getCurrentWeekRow();if(_cur)_cur.next_week_touched_at=(r&&r.touched_at)||new Date().toISOString();}
       _draftStore();                                          // ...so the copy kept on this phone is no longer needed (unless it was edited again meanwhile)
       Ui.success("Team saved");
       window.dispatchEvent(new CustomEvent("ipl:saved"));
@@ -300,11 +302,141 @@ function _nwSave(){
     }).catch(function(e){
       _nwSaving=false;_nwSlow=false;clearTimeout(_nwSlowT);
       if(e&&e.status===423){_nwTooLate();return;}
+      if(e&&e.status===409&&Ui.errorReason(e)==="week_changed"){_nwWeekMoved(e,true);return;}
       var offline=!(e&&e.status);   // no HTTP status = the request never got an answer
       if(offline)Ui.toast("Could not save your team: "+Ui.errorMessage(e)+" Your picks are kept on this phone.",{type:"error",duration:7000});
       else Ui.fail(e,"Could not save your team");
       if(_state)render(_state);
     });
+}
+// ─── WHICH WEEK A DRAFT IS FOR (Phase 1.6) ───
+// The handover a draft will be promoted at. On a lock schedule the server says so (the first week not yet handed over); otherwise it is the week after
+// the current one, and the first week is picked before it starts. A save states this week, so a draft can never be filed under the wrong one.
+function _nwTargetWeek(dl){
+  dl=dl||(_state&&_state.deadline);
+  if(dl&&dl.managed&&!dl.season_over){
+    if(dl.awaiting&&dl.awaiting.to_week)return dl.awaiting.to_week;
+    if(typeof dl.applied_to==="number")return dl.applied_to+1;
+  }
+  return _currentWeek<=1?1:_currentWeek+1;
+}
+// The draft on screen is exactly the XI that plays this week.
+function _nwSameAsXi(){
+  var row=_getCurrentWeekRow(),tw=row&&row.this_week;
+  return !!(tw&&tw.team&&tw.team.length&&_nwSig(_nwDraft)===_nwSig(tw));
+}
+// The draft is last week XI carried over and the member has not confirmed it (no save and no Keep since the week began): what the Keep this XI button is for.
+function _nwCarried(){
+  return _nwSaved!==null&&!_nwTouched&&!_nwDirty()&&!_deadlineLocked()&&_nwSameAsXi();
+}
+// Keep this XI: confirm the draft as it is. Nothing about the team changes; the server only notes that the member has seen it.
+function _nwKeep(){
+  if(!_username||_nwKeeping||_nwSaving)return;
+  if(_deadlineLocked()){Ui.warn("Picks are locked. Your last saved XI is the one that counts.");return;}
+  _nwKeeping=true;if(_state)render(_state);
+  window.IplApi.keepNextWeek(_username,_nwTargetWeek())
+    .then(function(r){
+      _nwKeeping=false;_nwTouched=true;
+      var cur=_getCurrentWeekRow();if(cur)cur.next_week_touched_at=(r&&r.touched_at)||new Date().toISOString();
+      Ui.success("Kept. We will use this XI for Week "+_nwTargetWeek()+".");
+      if(_state)render(_state);
+    }).catch(function(e){
+      _nwKeeping=false;
+      if(e&&e.status===423){_nwTooLate();return;}
+      if(e&&e.status===409&&Ui.errorReason(e)==="week_changed"){_nwWeekMoved(e,false);return;}
+      Ui.fail(e,"Could not keep your XI");
+      if(_state)render(_state);
+    });
+}
+// A save or a keep was refused because the draft it was for has moved on (a weekly handover ran while this page was open). Nothing was written.
+// Bring the page up to date, then let the member decide about the draft they had.
+function _nwWeekMoved(err,wasSaving){
+  var d=(err&&err.serverData)||{},from=_nwTarget,to=d.draft_week||null;
+  var draft={team:_nwDraft.team.slice(),cap:_nwDraft.cap,vc:_nwDraft.vc};
+  _nwOffer=true;   // the refresh below must not ask the same question a second time
+  _doStateRefresh(function(ok){
+    _nwOffer=false;
+    if(!ok){Ui.error("Could not reach the server. Your picks are kept on this phone.");return;}
+    var now=_nwTarget||to;
+    if(!wasSaving||!draft.team.length){Ui.toast("The week moved on, so nothing was kept. The Week "+now+" draft is open.",{type:"info",duration:6000});return;}
+    _nwOfferStale(draft,(from!==null?from:(now?now-1:1)),now,true);
+  });
+}
+// An unsaved draft for a week that has moved on is never deleted silently: the member decides whether it becomes the draft for the week that is open now.
+function _nwOfferStale(draft,forWeek,toWeek,saveNow){
+  if(_nwOffer||!draft||!draft.team||!draft.team.length)return;
+  forWeek=forWeek>=1?forWeek:1;if(!(toWeek>forWeek))toWeek=forWeek+1;
+  _nwOffer=true;
+  var played=(toWeek-forWeek>1)?"has already been played":"is already playing";
+  var msg=saveNow?"Your draft was for the Week "+forWeek+" lineup, but Week "+forWeek+" "+played+". Save it as your Week "+toWeek+" draft?"
+                 :"It was for Week "+forWeek+", but Week "+forWeek+" "+played+". Use it as your Week "+toWeek+" draft?";
+  Ui.sheetBlocking({
+    title:saveNow?"Week "+forWeek+" just started":"You had an unsaved draft",
+    message:msg,
+    primary:{label:saveNow?"Save as Week "+toWeek+" draft":"Use it as Week "+toWeek+" draft",onClick:function(){_nwOffer=false;_nwAdopt(draft,saveNow);}},
+    secondary:{label:"Discard",onClick:function(){_nwOffer=false;_nwLetGo();}}
+  });
+}
+function _nwAdopt(draft,saveNow){
+  _nwDraft={team:draft.team.slice(),cap:draft.cap||null,vc:draft.vc||null};_nwRestored=false;
+  _nwChanged();   // kept on this phone against the week that is open now, and the screen redraws
+  if(saveNow)_nwSave();
+  else Ui.toast("Draft brought back. Save it to keep it.",{type:"info",duration:6000});
+}
+function _nwLetGo(){
+  try{localStorage.removeItem(_draftKey());}catch(e){}
+  if(_state)render(_state);
+}
+// A handover moves the week a draft is for, even when the current week keeps its number (the first week starts). Notice it whichever way the new state arrived.
+function _nwSyncTarget(state){
+  if(!_username||!state||!state.deadline||!_weekKnown)return;
+  var t=_nwTargetWeek(state.deadline);
+  if(_nwTarget===null){_nwTarget=t;return;}
+  if(t!==_nwTarget)_doStateRefresh();   // refetch the member rows: _nwNewWeek then decides what happens to a draft in progress
+}
+// A lock time in the member own time zone: "Mon 18 Jan, 16:00". locale and tz are only given by tests.
+function _whenLocal(iso,locale,tz){
+  if(!iso)return "";
+  var d=new Date(iso);if(isNaN(d.getTime()))return "";
+  try{return new Intl.DateTimeFormat(locale||undefined,{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:tz||undefined}).format(d);}catch(e){return "";}
+}
+function _hhmm(iso,locale,tz){
+  if(!iso)return "";
+  var d=new Date(iso);if(isNaN(d.getTime()))return "";
+  try{return new Intl.DateTimeFormat(locale||undefined,{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:tz||undefined}).format(d);}catch(e){return "";}
+}
+function _nwWhenLine(){
+  var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc||_deadlineLocked()||_finalWeek())return "";
+  var w=_whenLocal(dl.next_lock_utc);return w?'<div class="nw-when">Locks '+esc(w)+'</div>':"";
+}
+// What the red lock bar says. On a lock schedule the member is told what is going on: the XI is locked and the next week is being set up (usually seconds);
+// only when that takes long does it say so.
+function _lockCardText(){
+  var dl=_state&&_state.deadline;
+  if(_finalWeek())return{title:"Picks are closed",text:"This is the final week, so there is no next week to pick for. The XI below is the one that counts."};
+  if(dl&&dl.managed&&dl.awaiting&&dl.awaiting.to_week){
+    var wk=dl.awaiting.to_week,late=_nowMs()-new Date(dl.next_lock_utc).getTime()>120000;
+    return late?{title:"Still setting up Week "+wk,text:"This is taking longer than usual. Your locked XI is safe."}
+               :{title:"Picks locked at "+(_hhmm(dl.next_lock_utc)||"the deadline"),text:"Setting up Week "+wk+". This takes a few seconds."};
+  }
+  return{title:"Picks are locked",text:"The deadline has passed, so your XI is set. New picks open again after the next rollover."};
+}
+// Notices at the top of the Pick tab (managed competitions): no XI for the week that is playing, and "Week N is open" once after a handover that carried the XI over.
+function _nwSeenKey(){return "ipl_seen_week:"+((window.IplComp&&IplComp.get&&IplComp.get())||_activeComp||"")+":"+(_username||"");}
+function _nwSeenWeek(){try{return parseInt(localStorage.getItem(_nwSeenKey()),10)||0;}catch(e){return 0;}}
+function _nwDismissNotice(){try{localStorage.setItem(_nwSeenKey(),String(_currentWeek));}catch(e){}if(_state)render(_state);}
+function _nwNotices(){
+  var dl=_state&&_state.deadline;
+  if(!_username||!_weekKnown||!_historyData||!dl||!dl.managed||dl.status==="completed")return "";
+  var wk=_currentWeek;
+  if((dl.applied_to||0)<wk)return "";   // this week has not been handed over yet (before the season starts)
+  var row=_getCurrentWeekRow(),tw=row&&row.this_week,hasXi=!!(tw&&tw.team&&tw.team.length);
+  if(!hasXi)return '<div class="nw-notice warn" role="status"><b>No XI for Week '+wk+'</b><span>'+(dl.season_over?'You\u2019ll score 0 for the rest of the season.':'You\u2019ll score 0 until Week '+(wk+1)+'. You can still draft Week '+(wk+1)+'.')+'</span></div>';
+  if(_nwSeenWeek()<wk){
+    var prev=null;(_historyData.weeks||[]).forEach(function(w){if(w.week_no===wk-1)prev=w;});
+    if(prev&&!prev.next_week_touched_at)return '<div class="nw-notice" role="status"><b>Week '+wk+' is open</b><span>Your XI carried over.</span><button type="button" class="nw-notice-x" onclick="_nwDismissNotice()">Got it</button></div>';
+  }
+  return "";
 }
 // The deadline has passed (the server says so, or the countdown ran out): the screen becomes read-only and says what counts.
 function _nwTooLate(){
@@ -384,9 +516,12 @@ function _doStateRefresh(onDone){
     var state=results[0],lb=results[1],history=results[2],players=results[3];
     if(state&&!_staleState(state)){
       if(history&&history.ok){
-        var _wasWk=_currentWeek,_hadWk=_weekKnown;
+        var _wasWk=_currentWeek,_hadWk=_weekKnown,_wasTarget=_nwTarget;
         _historyData=history;_currentWeek=history.current_week;_weekKnown=true;
-        if(_hadWk&&_currentWeek!==_wasWk)_nwNewWeek(_getCurrentWeekRow(history));
+        var _newTarget=state.deadline?_nwTargetWeek(state.deadline):null;
+        // a handover moves the week a draft is for, even when the current week keeps its number (the first week starts)
+        if(_hadWk&&(_currentWeek!==_wasWk||(_wasTarget!==null&&_newTarget!==null&&_newTarget!==_wasTarget)))_nwNewWeek(_getCurrentWeekRow(history),_newTarget);
+        else{if(_wasTarget===null&&_newTarget!==null)_nwTarget=_newTarget;if(!_nwDirty()){var _r=_getCurrentWeekRow(history);_nwTouched=!!(_r&&_r.next_week_touched_at);}}
       }
       if(lb){_leaderboard=window.normaliseLeaderboard?window.normaliseLeaderboard(lb):lb;}
       if(players&&players.ok!==false){_players=players;}
@@ -427,17 +562,22 @@ function _nwSig(d){return JSON.stringify({t:((d&&d.team)||[]).slice().sort(),c:(
 function _nwDirty(){return _nwSig(_nwDraft)!==_nwSaved;}
 function _nwHasUnsaved(){return _nwDraft.team.length>0&&_nwDirty();}   // picks that would be lost: an empty draft has nothing to lose
 // The draft = what the server holds (the saved draft, or last week's XI when nothing was saved). False when the member has neither yet.
-function _nwLoadSaved(row){
+function _nwLoadSaved(row,target){
   var nw=row&&row.next_week,tw=row&&row.this_week;
+  _nwTouched=!!(row&&row.next_week_touched_at);
+  _nwTarget=(target!==undefined)?target:((_state&&_state.deadline)?_nwTargetWeek():null);   // null until the server has told us: no handover is guessed from a missing answer
   if(nw&&nw.team&&nw.team.length>0){_nwDraft={team:nw.team.slice(),cap:nw.cap,vc:nw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=false;return true;}
   if(tw&&tw.team&&tw.team.length>0){_nwDraft={team:tw.team.slice(),cap:tw.cap,vc:tw.vc};_nwSaved=_nwSig(_nwDraft);_nwCarry=true;return true;}
   return false;
 }
-// The rollover ran while the app was open: the old week's draft is history, the new one starts from what the server holds for it.
-function _nwNewWeek(row){
+// The rollover ran while the app was open: the old week's draft is for a week that is playing now and the new one starts from what the server holds.
+// Picks the member had not saved are not thrown away: they are asked what to do with them.
+function _nwNewWeek(row,target){
+  var lost=_nwHasUnsaved()?{team:_nwDraft.team.slice(),cap:_nwDraft.cap,vc:_nwDraft.vc}:null,was=_nwTarget;
   _nwRestored=false;
-  if(!_nwLoadSaved(row)){_nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;}
+  if(!_nwLoadSaved(row,target)){_nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;}
   _draftStore();
+  if(lost&&was!==null&&_nwTarget!==null)_nwOfferStale(lost,was,_nwTarget,false);
 }
 function _nwInit(row){
   _nwLoadSaved(row);   // row is null for a member with no history yet (a new member, or before the first week): nothing saved, but picks may still be waiting on this phone
@@ -450,7 +590,7 @@ function _draftStore(){
   try{
     if(!_username)return;
     if(!_nwHasUnsaved()){localStorage.removeItem(_draftKey());return;}
-    localStorage.setItem(_draftKey(),JSON.stringify({wk:_currentWeek,base:_nwSaved,team:_nwDraft.team,cap:_nwDraft.cap,vc:_nwDraft.vc}));
+    localStorage.setItem(_draftKey(),JSON.stringify({wk:_currentWeek,to:_nwTarget,base:_nwSaved,team:_nwDraft.team,cap:_nwDraft.cap,vc:_nwDraft.vc}));
   }catch(e){}   // private mode / storage full: the draft simply stays in memory, as before
 }
 function _draftRestore(){
@@ -459,9 +599,15 @@ function _draftRestore(){
     var k=_draftKey(),raw=localStorage.getItem(k);if(!raw)return false;
     var d=JSON.parse(raw);
     var team=(d&&Array.isArray(d.team))?d.team.filter(function(x){return typeof x==="string"&&x;}):[];
-    // only a draft made against what the server holds NOW, in this same week, is worth bringing back
-    if(!d||d.wk!==_currentWeek||d.base!==_nwSaved||!team.length||team.length>XI_SIZE||new Set(team).size!==team.length){localStorage.removeItem(k);return false;}
+    if(!d||!team.length||team.length>XI_SIZE||new Set(team).size!==team.length){localStorage.removeItem(k);return false;}
     var cap=team.indexOf(d.cap)>=0?d.cap:null,vc=(team.indexOf(d.vc)>=0&&d.vc!==cap)?d.vc:null;
+    // a draft made for a week that has since started is not thrown away: the member is asked what to do with it (the copy stays here until they answer)
+    if(d.wk!==_currentWeek||(d.to!=null&&_nwTarget!==null&&d.to!==_nwTarget)){
+      _nwOfferStale({team:team,cap:cap,vc:vc},(d.to!=null?d.to:(d.wk<=1?1:d.wk+1)),(_nwTarget!==null?_nwTarget:_nwTargetWeek()),false);
+      return false;
+    }
+    // otherwise only a draft made against what the server holds NOW is worth bringing back
+    if(d.base!==_nwSaved){localStorage.removeItem(k);return false;}
     var keep=_nwDraft;_nwDraft={team:team,cap:cap,vc:vc};
     if(!_nwDirty()){_nwDraft=keep;localStorage.removeItem(k);return false;}   // the same as what is saved: nothing to bring back
     _nwRestored=true;return true;
@@ -525,11 +671,12 @@ function _pickerBarHtml(){
 function _buildBudgetBar(){
   var P=_barParts(),rem=P.rem,count=P.count;
   var canSave=count===XI_SIZE&&rem>=-0.001&&!!_nwDraft.cap&&!!_nwDraft.vc;   // captain and vice-captain are required
-  var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
+  var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty),carried=_nwCarried(),same=_nwSameAsXi();
   // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone), with the one button that does it
   var hint,hcls,hico,act="",k=XI_SIZE-count,pbMin=_priceBounds().min,back=(dirty&&_nwRestored)?"Restored your unsaved picks. ":"";   // back: said once, in front of whatever is left to do
   if(locked){hint=_finalWeek()?"Picks are closed: this is the final week.":"Picks are locked until the next rollover.";hcls="bad";hico="lock";}
   else if(_nwSaving){hint=_nwSlow?"Still saving. The server may have been asleep, so this can take up to a minute. Keep this screen open.":"Saving your team…";hcls="todo";hico="clock";}
+  else if(_nwKeeping){hint="Keeping your XI…";hcls="todo";hico="clock";}
   else if(rem<-0.001){hint="Over budget by "+Math.abs(rem).toFixed(1)+" CR. Swap someone for a cheaper player.";hcls="bad";hico="swap";}
   else if(count<XI_SIZE&&rem<k*pbMin-0.001){hint="Only "+rem.toFixed(1)+" CR left for "+k+" more player"+(k===1?"":"s")+" (the cheapest costs "+pbMin.toFixed(1)+"). Swap someone for a cheaper player.";hcls="bad";hico="swap";}
   else if(count<XI_SIZE){hint=back+(count===0?"Pick your "+XI_SIZE+" players":"Pick "+k+" more player"+(k===1?"":"s"))+(k===1?". You have "+rem.toFixed(1)+" CR left.":". About "+(rem/k).toFixed(1)+" CR each keeps you in budget.");hcls="todo";hico="plus";}
@@ -537,13 +684,14 @@ function _buildBudgetBar(){
   else if(!_nwDraft.vc){hint=back+"Choose your vice-captain (\xd71.5 points) to save.";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-hintbtn" onclick="_nwPickRole(\'vc\')">Choose</button>';}
   else if(dirty&&_nwRestored){hint="Restored your unsaved picks. Save to keep them.";hcls="todo";hico="pick";}
   else if(dirty){hint="You have unsaved changes.";hcls="todo";hico="pick";}
-  else if(_nwCarry){hint="Same XI as last week. It carries over unless you change it.";hcls="good";hico="check";}
+  else if(carried){hint="Week "+_nwTargetWeek()+" draft: using last week\u2019s XI. It carries over unless you change it.";hcls="todo";hico="team";act='<button type="button" class="nw-hint-btn" data-fk="nw-edit" onclick="_pickOpenLayer()">Edit</button>';}
+  else if(same&&_nwTouched){hint="Kept. We will use this XI for Week "+_nwTargetWeek()+".";hcls="good";hico="check";}
   else{hint="Saved. You can keep editing until picks lock.";hcls="good";hico="check";}
-  var lbl=_nwSaving?"Saving…":locked?"Locked":saved?"Saved ✓":(_nwCarry&&!dirty?"Keep this XI":"Save Draft");
-  var cls="btn "+(saved||locked?"btn-ghost is-saved":(dirty||!_nwCarry?"btn-gold":"btn-ghost"));
+  var lbl=_nwSaving?"Saving…":_nwKeeping?"Keeping…":locked?"Locked":carried?"Keep this XI":saved?(same?"Kept ✓":"Saved ✓"):"Save Draft";
+  var cls="btn "+(carried?"btn-gold":(saved||locked?"btn-ghost is-saved":"btn-gold"));
   // the bar floats just under the app bar while the squad scrolls (.nw-stick); the hint below it scrolls away with the list
   var bar='<div class="nw-budget-bar">'+P.main+P.track+'<div class="nw-role-pills">'+P.pills+'</div>'+P.badge+
-    '<button id="nw-save-btn" data-fk="nw-save" class="'+cls+'" onclick="_nwSave()"'+((!canSave||locked||saved||_nwSaving)?' disabled':'')+(_nwSaving?' aria-busy="true"':'')+'>'+lbl+'</button></div>';
+    '<button id="nw-save-btn" data-fk="nw-save" class="'+cls+'" onclick="'+(carried?'_nwKeep()':'_nwSave()')+'"'+((carried?(_nwSaving||_nwKeeping):(!canSave||locked||saved||_nwSaving||_nwKeeping))?' disabled':'')+((_nwSaving||_nwKeeping)?' aria-busy="true"':'')+'>'+lbl+'</button></div>';
   return '<div class="nw-stick">'+bar+'</div><div class="nw-hint '+hcls+'" role="status">'+Ui.icon(hico,18)+'<span>'+esc(hint)+'</span>'+act+'</div>';
 }
 
@@ -748,11 +896,11 @@ function _buildNextWeekCard(){
   if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
   var locked=_deadlineLocked();
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_finalWeek()?'Final week':_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_finalWeek()?'Final week':_nwTargetWeek()<=1?'Pick your team':'Week '+_nwTargetWeek()+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>'+_nwWhenLine()+_nwNotices();
   if(locked){
     // Past the deadline nothing on this screen can change the XI, so nothing here pretends it can: the XI that counts, and why.
-    var fw=_finalWeek();   // the last scheduled week: there is no next rollover to wait for
-    h+='<div class="nw-lockbar" role="status">'+Ui.icon("lock",22)+'<div><b>'+(fw?'Picks are closed':'Picks are locked')+'</b><span>'+(fw?'This is the final week, so there is no next week to pick for. The XI below is the one that counts.':'The deadline has passed, so your XI is set. New picks open again after the next rollover.')+'</span>'+(_nwHasUnsaved()?'<span class="nw-lock-warn">Changes you had not saved cannot be saved now. The XI below is your last saved one.</span>':'')+'</div></div>';
+    var lc=_lockCardText();   // says what is going on: closed for good (the last week), being set up, or locked until the next handover
+    h+='<div class="nw-lockbar" role="status">'+Ui.icon("lock",22)+'<div><b>'+esc(lc.title)+'</b><span>'+esc(lc.text)+'</span>'+(_nwHasUnsaved()?'<span class="nw-lock-warn">Changes you had not saved cannot be saved now. The XI below is your last saved one.</span>':'')+'</div></div>';
     h+=_buildNwSquad()+'</div>';
     return '<div class="nw-layout nw-locked"><div class="nw-left">'+h+'</div></div>';
   }
@@ -1568,7 +1716,7 @@ function _withComp(url){
 // RULE: any new competition-scoped client state must be reset in this function.
 function _resetCompScope(){
   _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_adminMatches=null;_adminFilter="all";
-  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwRestored=false;_lockedWeek=null;
+  _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwTouched=false;_nwTarget=null;_nwRestored=false;_lockedWeek=null;
   _pickerSearch="";_pickerRole="All";_pickerTeams=[];_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;_pickerXiOpen=false;
   _weekKnown=false;
   if(window.Ui&&Ui.accClear){Ui.accClear("mcw-");Ui.accClear("mem-");}
@@ -1621,10 +1769,11 @@ function _deadlineText(){
   var dl=_state&&_state.deadline; if(!dl)return '';
   if(dl.status==='completed')return '🏁 Season complete';
   if(dl.season_over)return '🏁 Final week under way — picks are closed';
-  if(_deadlineLocked())return '🔒 Locked — awaiting rollover';
+  var setting=(dl.managed&&dl.awaiting&&dl.awaiting.to_week)?'🔒 Locked — setting up Week '+dl.awaiting.to_week:'🔒 Locked — awaiting rollover';
+  if(_deadlineLocked())return setting;
   if(!dl.next_lock_utc)return '';
   var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();
-  if(ms<=0)return '🔒 Locked — awaiting rollover';
+  if(ms<=0)return setting;
   var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
   var t=d>0?(d+'d '+hh+'h '+mm+'m'):(hh>0?(hh+'h '+mm+'m '+ss+'s'):(mm+'m '+ss+'s'));
   return '🔒 locks in '+t;
@@ -1702,19 +1851,21 @@ function _buildActionBanner(){
   if(!_lockIn()||_deadlineLocked())return "";
   var n=_nwDraft.team.length;
   if(!n&&!_historyData)return "";                       // do not claim "no team" before the saved team has loaded
-  var full=n>=XI_SIZE,pre=_currentWeek<=1,unsaved=_nwHasUnsaved();
+  var full=n>=XI_SIZE,pre=_nwTargetWeek()<=1,unsaved=_nwHasUnsaved(),carried=_nwCarried();
   var needCap=full&&!_nwDraft.cap,needVc=full&&!!_nwDraft.cap&&!_nwDraft.vc;   // captain AND vice-captain are required to save
   var ready=full&&!needCap&&!needVc&&!unsaved;   // "ready" only once the XI is complete, has both roles and is SAVED: anything else is what gets lost (or plays without a captain) at the deadline
-  var sub=ready?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it"
+  var sub=carried?"Using last week\u2019s XI. Keep it, or change it."
+    :ready?"Your XI is ready ("+n+"/"+XI_SIZE+") \u2014 you can still change it"
     :needCap?"Your XI needs a captain"+(_nwDraft.vc?"":" and a vice-captain")
     :needVc?"Your XI needs a vice-captain"
     :full?"Your XI is complete but not saved yet"
     :n?n+"/"+XI_SIZE+" players picked"+(unsaved?", not saved yet":"")+" \u2014 finish your XI"
     :"You haven\u0027t picked a team yet";
-  var btn=(needCap||needVc)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwPickRole(\''+(needCap?'cap':'vc')+'\')">Choose '+(needCap?'captain':'vice-captain')+'</button>'
+  var btn=carried?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwKeep()"'+(_nwKeeping?' disabled aria-busy="true"':'')+'>'+(_nwKeeping?'Keeping\u2026':'Keep this XI')+'</button>'
+    :(needCap||needVc)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwPickRole(\''+(needCap?'cap':'vc')+'\')">Choose '+(needCap?'captain':'vice-captain')+'</button>'
     :(full&&unsaved)?'<button type="button" class="btn btn-gold btn-sm" onclick="_nwSave()"'+(_nwSaving?' disabled aria-busy="true"':'')+'>'+(_nwSaving?'Saving\u2026':'Save XI')+'</button>'
     :'<button type="button" class="btn '+(ready?"btn-ghost":"btn-gold")+' btn-sm" onclick="switchTab(\'next\')">'+(ready?"Edit team":"Pick team")+'</button>';
-  return '<div class="action-banner'+(ready?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'+btn+'</div>';
+  return '<div class="action-banner'+(ready&&!carried?" ok":"")+'" role="region" aria-label="Pick deadline"><div class="ab-text"><div class="ab-title">'+(pre?"Team picks lock in ":"Next week\u0027s picks lock in ")+'<span class="js-lockin">'+esc(_lockIn())+'</span></div><div class="ab-sub">'+esc(sub)+'</div></div>'+btn+'</div>';
 }
 function _openCompMenu(){
   var items=(_competitions||[]).map(function(c){
@@ -1887,13 +2038,14 @@ window.addEventListener("ipl:state-updated",function(e){
   if(!state||typeof state.members!=="object"||_staleState(state))return;
   if(!_username){var saved=getSavedUsername();if(saved&&state.members[saved])_username=saved;else if(saved&&!state.members[saved])clearUsername();}
   render(state);
+  _nwSyncTarget(state);
 });
 window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(e.detail);});
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper7"></script>
-<script src="/static/mc_hub.js?v=paper7"></script>
+<script src="/static/ipl_glue.js?v=paper8"></script>
+<script src="/static/mc_hub.js?v=paper8"></script>
 </body>
 </html>

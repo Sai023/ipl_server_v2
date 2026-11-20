@@ -266,3 +266,7 @@ D17–D21, D24–D26 are all executed — about **36% of the file**.
    `seedHistory`) inflate that contract. Worth grouping the
    delete-candidates in the cleanup pass — each one cascades to a
    route handler and a DAO method.
+
+## Phase 1.6 additions (2026-11-20)
+
+`IplApi.saveNextWeek(name, picks, week)` now states the week the draft is FOR (optional; the server answers 409 `week_changed` when a handover moved that on) and `IplApi.keepNextWeek(name, week)` is new (`POST /api/keep-xi/<n>`: "Keep this XI"). See [routes.md](routes.md) and [index_html.md](index_html.md).
