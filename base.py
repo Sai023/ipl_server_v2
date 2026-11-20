@@ -195,7 +195,7 @@ _write_limiter=_RateLimiter(30,60)
 def _check_rate(lim):
     ip=request.remote_addr or "unknown"
     if not lim.is_allowed(ip):
-        return jsonify({"error":"Too many requests","code":429}),429
+        return jsonify({"error":"Too many requests","code":429,"reason":"rate_limited"}),429
     return None
 
 
@@ -227,11 +227,11 @@ def _handle_integrity(e):
 @app.errorhandler(psycopg.OperationalError)
 def _handle_operational(e):
     _log(f"Database error: {e}","error")
-    return jsonify({"error":"Database error","detail":str(e),"code":500}),500
+    return jsonify({"error":"Database error","detail":str(e),"code":500,"reason":"server_error"}),500
 
 @app.errorhandler(500)
 def _handle_500(e):
-    _log(f"500: {e}","error"); return jsonify({"error":"Internal error","code":500}),500
+    _log(f"500: {e}","error"); return jsonify({"error":"Internal error","code":500,"reason":"server_error"}),500
 
 @app.errorhandler(404)
 def _handle_404(e):

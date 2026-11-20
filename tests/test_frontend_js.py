@@ -30,6 +30,11 @@ class BrowserSideRegressions(unittest.TestCase):
         survives a redraw."""
         self.run_script("team_edit_ux.test.js")
 
+    def test_failed_requests_become_plain_sentences_using_the_servers_reason(self):
+        """The server tags many errors with a machine `reason` (2026-11-20); the page owns the sentence for the ones it knows and otherwise
+        shows the server's own text, then the HTTP status. Nothing that worked before changes."""
+        self.run_script("error_reasons.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

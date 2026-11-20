@@ -295,10 +295,10 @@ def _require_token():
     """Returns (username, None) on success, (None, (json_resp, status)) on failure."""
     token = get_bearer_token()
     if not token:
-        return None, (jsonify({"ok": False, "error": "auth required", "code": 401}), 401)
+        return None, (jsonify({"ok": False, "error": "auth required", "code": 401, "reason": "auth_required"}), 401)
     sess = db.get_session(token)
     if not sess:
-        return None, (jsonify({"ok": False, "error": "invalid or expired token", "code": 401}), 401)
+        return None, (jsonify({"ok": False, "error": "invalid or expired token", "code": 401, "reason": "session_ended"}), 401)
     return sess["username"], None
 
 def _require_admin():
@@ -306,7 +306,7 @@ def _require_admin():
     if err: return None, err
     m = db.get_member_auth(username)
     if not m or not m["is_admin"]:
-        return None, (jsonify({"ok": False, "error": "admin only", "code": 403}), 403)
+        return None, (jsonify({"ok": False, "error": "admin only", "code": 403, "reason": "admin_only"}), 403)
     return username, None
 
 def _require_self(n):
@@ -315,7 +315,7 @@ def _require_self(n):
     username, err = _require_token()
     if err: return None, err
     if username != n:
-        return None, (jsonify({"ok": False, "error": "you can only modify your own team", "code": 403}), 403)
+        return None, (jsonify({"ok": False, "error": "you can only modify your own team", "code": 403, "reason": "not_your_team"}), 403)
     return username, None
 
 
@@ -328,11 +328,11 @@ def api_register():
         name = (d.get("name") or "").strip()
         passcode = str(d.get("passcode") or "").strip()
         if not name or len(name) > 30:
-            return jsonify({"ok": False, "error": "name must be 1-30 chars", "code": 400}), 400
+            return jsonify({"ok": False, "error": "name must be 1-30 chars", "code": 400, "reason": "name_invalid"}), 400
         if not PASSCODE_RE.match(passcode):
-            return jsonify({"ok": False, "error": "passcode must be exactly 4 digits", "code": 400}), 400
+            return jsonify({"ok": False, "error": "passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
         if db.get_member_auth(name):
-            return jsonify({"ok": False, "error": "name already registered", "code": 409}), 409
+            return jsonify({"ok": False, "error": "name already registered", "code": 409, "reason": "name_taken"}), 409
         # Create empty user_selections row using existing helper.
         db.upsert_member(name, {"this_week": {"team": [], "cap": None, "vc": None},
                                 "next_week": {"team": [], "cap": None, "vc": None}})
@@ -357,12 +357,12 @@ def api_login():
         name = (d.get("name") or "").strip()
         passcode = str(d.get("passcode") or "").strip()
         if not name or not PASSCODE_RE.match(passcode):
-            return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400}), 400
+            return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400, "reason": "credentials_required"}), 400
         m = db.get_member_auth(name)
         if not m or not verify_passcode(passcode, name, m["passcode_hash"]):
             # Same error message for unknown-user vs wrong-passcode — don't
             # leak which member names exist beyond what /api/state already shows.
-            return jsonify({"ok": False, "error": "wrong name or passcode", "code": 401}), 401
+            return jsonify({"ok": False, "error": "wrong name or passcode", "code": 401, "reason": "bad_credentials"}), 401
         token = new_session_token()
         db.create_session(token, name)
         return jsonify({"ok": True, "name": name, "token": token,
@@ -396,7 +396,7 @@ def api_passcode_change():
         d = request.get_json(force=True, silent=True) or {}
         new_pc = str(d.get("new") or "").strip()
         if not PASSCODE_RE.match(new_pc):
-            return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400}), 400
+            return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
         # No current-passcode check by design — user is already authenticated via
         # bearer token; for forced resets (must_change=1) the user can't verify
         # the current passcode anyway because the admin reset it without telling
@@ -423,10 +423,10 @@ def api_admin_passcode_reset():
         d = request.get_json(force=True, silent=True) or {}
         target = (d.get("target_username") or "").strip()
         if not target:
-            return jsonify({"ok": False, "error": "target_username required", "code": 400}), 400
+            return jsonify({"ok": False, "error": "target_username required", "code": 400, "reason": "target_required"}), 400
         m = db.get_member_auth(target)
         if not m:
-            return jsonify({"ok": False, "error": "target user not found", "code": 404}), 404
+            return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
         db.set_passcode(target, hash_passcode("1234", target), must_change=1)
         # Force the target to re-login with 1234 on whatever device they're on.
         db.delete_sessions_for_user(target)
@@ -758,7 +758,7 @@ def api_save_next_week(n):
                                          crow.get("week1_anchor_utc",""), dh, dm,
                                          db.get_meta_comp("_last_rollover",comp,""))
         if locked:
-            return jsonify({"error":lreason,"locked":True,"code":423}),423
+            return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
         d=request.get_json(force=True,silent=True)
         if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
         team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")
@@ -776,7 +776,7 @@ def api_save_next_week(n):
             con.close()
         ok,verr,total_cost=db.validate_selection(team,cap,vc,budget,xi,competition_id=comp)
         if not ok:
-            return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422}),422
+            return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422,"reason":"invalid_team"}),422
         result=db.save_next_week(n,team,cap,vc,competition_id=comp)
         _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
         return jsonify({"ok":True,"week_no":result["week_no"],"total_cost":total_cost,"resolution_log":rlog})

@@ -4,7 +4,8 @@
      Ui.confirm({title,message,confirmText,danger})  -> Promise<boolean>
      Ui.prompt({title,message,label,validate})        -> Promise<string|null>
      Ui.notice({title,message})                       -> Promise<void>
-     Ui.errorMessage(err, fallback)  plain-language text for any failed request
+     Ui.errorMessage(err, fallback)  plain-language text for any failed request (uses the server's machine `reason` when we have a sentence for it)
+     Ui.errorFor(reason, fallback) / Ui.errorReason(err)  the sentence for a server `reason`, and the reason carried by a failed request
      Ui.stateHtml(kind, {title,message,retry})  loading | empty | error | offline cards
      Ui.connection.set('offline'|'reconnecting', msg) / .clear()
      Ui.boot  staged loading messages for a slow first load (server waking up), with a real failure screen + Retry
@@ -17,11 +18,28 @@
   Ui.esc = esc;
 
   /* ---------- plain-language error text ---------- */
+  /* The server tags many errors with a machine `reason`. These are the sentences we show for them (the client owns the wording);
+     a reason that is not listed here (or no reason at all) falls back to the server's own readable text. */
+  var REASON_COPY = {
+    auth_required:   "You're signed out. Sign in to continue.",
+    session_ended:   "You've been signed out. Sign in again to continue.",
+    admin_only:      "Only an admin can do that.",
+    not_your_team:   "You can only change your own team.",
+    rate_limited:    "Too many tries. Wait a minute and try again.",
+    locked:          "Picks are locked right now. Your last saved XI is the one that counts.",
+    name_taken:      "Someone already has that name. Try another.",
+    bad_credentials: "Wrong name or passcode.",
+    server_error:    "The server had a problem. Please try again in a moment."
+  };
+  Ui.errorFor = function (reason, fallback) { return Object.prototype.hasOwnProperty.call(REASON_COPY, reason) ? REASON_COPY[reason] : (fallback || ""); };
+  Ui.errorReason = function (err) { var d = err && typeof err === "object" ? err.serverData : null; return (d && typeof d.reason === "string") ? d.reason : ""; };
   Ui.errorMessage = function (err, fallback) {
     fallback = fallback || "Something went wrong. Please try again.";
     if (!err) return fallback;
     if (typeof err === "string") return err;
-    if (err.serverMessage) return err.serverMessage;               // the server's own readable explanation wins
+    var byReason = Ui.errorFor(Ui.errorReason(err));
+    if (byReason) return byReason;                                 // a reason we have a sentence for
+    if (err.serverMessage) return err.serverMessage;               // otherwise the server's own readable explanation wins
     var s = err.status;
     if (s === 401) return "Your session has expired. Please sign in again.";
     if (s === 403) return "You don't have permission to do that.";

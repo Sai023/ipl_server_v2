@@ -217,6 +217,24 @@ Then, if the session has fewer than 30 days left, it is extended to a full
 60 days ([session_policy.md](session_policy.md)), so a member who opens the
 app at least once in 60 days is never signed out.
 
+### 11. Errors carry a machine `reason` (2026-11-20, Phase 1.2 of the SA20 readiness plan)
+Error bodies keep the readable `error` text and the numeric `code`; many now also carry a machine `reason` the page can act on. `Static/ui.js`
+(`REASON_COPY`, `Ui.errorFor`, `Ui.errorMessage`) owns the sentence the member reads for the reasons it knows; the others are shown as the server sent them.
+
+| `reason` | Sent by | HTTP |
+|---|---|---|
+| `auth_required` / `session_ended` | `_require_token`: no token was sent / the token is unknown, expired or revoked | 401 |
+| `admin_only` / `not_your_team` | `_require_admin` / `_require_self` | 403 |
+| `name_invalid` / `passcode_invalid` / `name_taken` | register, passcode change | 400 / 400 / 409 |
+| `credentials_required` / `bad_credentials` | login | 400 / 401 |
+| `target_required` / `member_not_found` | admin passcode reset | 400 / 404 |
+| `locked` / `invalid_team` | `POST /api/save-next-week` | 423 / 422 |
+| `rate_limited` | `base._check_rate` (30 writes per minute per address) | 429 |
+| `server_error` | the 500 handlers in `base.py` | 500 |
+
+`tests/test_error_reasons.py` keeps the server's list and the page's sentences in step (adding a reason on one side fails the test until the other
+side is decided) and drives every one of these through the real routes on a scratch schema. Errors that do not carry a `reason` yet behave as before.
+
 ## HOSTED mode (Phase 11) — behaviour deltas
 
 `_IS_HOSTED` is read once at module scope (line ~47) from the
