@@ -209,6 +209,37 @@
     return close;
   };
 
+  /* ---------- blocking sheet: something that must be answered before the app can go on (e.g. "You've been signed out") ----------
+     Ui.sheetBlocking({title, message, primary:{label, onClick, keepOpen}, secondary:{label, onClick, keepOpen}}) -> {close, el}
+     No close button; Escape and a tap outside do nothing; Tab stays inside; announced as an alert; focus starts on the primary button.
+     A button closes the sheet before running its onClick unless keepOpen is set. */
+  Ui.sheetBlocking = function (o) {
+    var prev = document.activeElement, id = "ui-blk-" + Date.now();
+    var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd ui-sheet-blocking";
+    bd.innerHTML =
+      '<div class="ui-sheet" role="alertdialog" aria-modal="true" aria-labelledby="' + id + '-t"' + (o.message ? ' aria-describedby="' + id + '-b"' : "") + ">" +
+      '<div class="ui-sheet-grip" aria-hidden="true"></div>' +
+      '<h2 class="ui-sheet-title has-sub" id="' + id + '-t">' + esc(o.title) + "</h2>" +
+      (o.message ? '<p class="ui-sheet-sub" id="' + id + '-b">' + esc(o.message) + "</p>" : "") +
+      '<div class="ui-sheet-actions"><button type="button" class="btn btn-teal" data-r="primary">' + esc(o.primary.label) + "</button>" +
+      (o.secondary ? '<button type="button" class="btn btn-ghost" data-r="secondary">' + esc(o.secondary.label) + "</button>" : "") + "</div></div>";
+    document.body.appendChild(bd);
+    function close() { document.removeEventListener("keydown", onKey, true); if (bd.parentNode) bd.parentNode.removeChild(bd); try { if (prev && prev.focus) prev.focus(); } catch (e) {} }
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); }       // it cannot be dismissed: it has to be answered
+      else if (e.key === "Tab") {
+        var f = bd.querySelectorAll("button"); if (!f.length) return;
+        if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+        else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+      }
+    }
+    document.addEventListener("keydown", onKey, true);
+    function wire(sel, spec) { var b = bd.querySelector(sel); if (!b || !spec) return; b.onclick = function () { if (!spec.keepOpen) close(); if (spec.onClick) spec.onClick(); }; }
+    wire('[data-r="primary"]', o.primary); wire('[data-r="secondary"]', o.secondary);
+    var first = bd.querySelector('[data-r="primary"]'); if (first) first.focus();
+    return { close: close, el: bd };
+  };
+
   /* ---------- accordion state: <details> sections remember what the user opened across re-renders ---------- */
   var _acc = {};
   Ui.accOpen = function (id, def) { return Object.prototype.hasOwnProperty.call(_acc, id) ? _acc[id] : !!def; };

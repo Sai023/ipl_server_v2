@@ -96,7 +96,7 @@ Phase 7.
 | 1 | System | `/api/version` | GET | Returns `APP_VERSION` + every module's version pin + `VERSION_MAP` changelog. |
 | 1 | System | `/api/ping` | GET | Liveness check + `public_url` + budget constants. |
 | 1 | System | `/api/_test-push` | POST | **HOSTED-only diagnostic.** Bumps `meta._last_test_push`, calls `db.checkpoint()`, then `cloud_sync.commit_and_push` directly. Returns raw `(ok, msg)` from the push attempt — the only way to verify the host→git write path on Render free tier (no shell available). Returns 400 in local mode. No auth — only side effect is one extra commit and no secrets leak (token is sanitised). Added post-launch when zero `ui:` commits appeared in the first 24h of HOSTED operation. |
-| 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint — plus `server_now_utc` (the server's clock, 2026-11-20: the page counts down to a lock on it, not on the phone's clock). |
+| 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint — plus `server_recv_utc` and `server_now_utc` (the server's clock when the request arrived and when the reply leaves, 2026-11-20: the page counts down to a lock on it, not on the phone's clock; see ipl_glue.md `IplClock`). |
 | 1 | System | `/api/current-week` | GET | Just the integer week number. |
 | 1.5 | Auth | `/api/register` | POST | Phase 12 — create a new member with display name + 4-digit passcode. Returns `{ok, name, token, must_change:false, is_admin:false}`. |
 | 1.5 | Auth | `/api/login` | POST | Phase 12 — verify passcode, issue a 60-day bearer token (renewed while used). Returns `{ok, name, token, must_change, is_admin}`. Generic 401 hides unknown-user vs wrong-passcode. |
@@ -104,7 +104,7 @@ Phase 7.
 | 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
 | 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
 | 1.5 | Auth | `/api/admin/members` | GET | Phase 12 — admin-only. Lists every member with `must_change` + `is_admin` flags for the Member Passcodes card. |
-| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). Also `deadline` and, on a 200, `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
+| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). Also `deadline` and, on a 200, `server_recv_utc` + `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
 | 2 | State | `/api/state` | POST | **DEAD** — see Dead Code. Was a generic "save anything" endpoint. |
 | 3 | Players | `/api/players` | GET | All players sorted by `season_pts DESC`. |
 | 3 | Players | `/api/resolve-player` | POST | Fuzzy-resolve a single name into a player ID. |

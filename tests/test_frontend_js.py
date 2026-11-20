@@ -40,6 +40,12 @@ class BrowserSideRegressions(unittest.TestCase):
         locked / open state. The page keeps the offset to the server's time and every lock function applies it."""
         self.run_script("server_clock.test.js")
 
+    def test_a_sign_in_that_ends_is_handled_in_the_open_and_a_network_blip_never_signs_anyone_out(self):
+        """Launch: only a real 401 signs a member out; no network, a slow or failing server keeps them signed in and re-checks quietly (it used to
+        sign them out and give up at 8 s). Mid-session: a refused token shows the blocking 'You've been signed out' sheet and signing in again
+        carries on where they were (2026-11-20)."""
+        self.run_script("session_flow.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,15 @@
 .ui-dialog .ui-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; margin-top: var(--sp-2); }
 .ui-dialog .btn { min-width: 88px; }
 
+/* ---- blocking sheet (Ui.sheetBlocking): a bottom sheet on a phone that has to be answered; centred on a wide screen ---- */
+.ui-sheet-actions { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-1); }
+.ui-sheet-actions .btn { width: 100%; min-height: 48px; justify-content: center; }
+@media (min-width: 760px) {
+  .ui-sheet-bd.ui-sheet-blocking { align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--backdrop) 58%, transparent); }
+  .ui-sheet-bd.ui-sheet-blocking .ui-sheet { max-width: 380px; border: 1.5px solid var(--border-strong); border-radius: 18px; padding: 12px 12px 16px; }
+  .ui-sheet-bd.ui-sheet-blocking .ui-sheet-grip { display: none; }
+}
+
 /* ---- status cards: loading / empty / error / offline ---- */
 .ui-state { text-align: center; padding: var(--sp-6) var(--sp-4); color: var(--muted); }
 .ui-state .ui-state-ico { font-size: 34px; margin-bottom: var(--sp-3); }

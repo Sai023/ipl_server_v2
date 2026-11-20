@@ -142,6 +142,7 @@
         headers["Authorization"] = "Bearer " + t;
       }
     }
+    var sentToken = !!headers["Authorization"];   // a sign-in went with this request
     // Multi-competition: attach ?comp=<slug> to /api/* calls so reads/writes
     // target the selected competition. Harmless on endpoints that ignore it;
     // empty store => server default (the active competition).
@@ -160,6 +161,11 @@
           // Clear the token so the next bootstrap drops to the login card.
           if (res.status === 401 && url.indexOf("/api/") === 0) {
             IplAuth.clearToken();
+            // The server refused a token this member was signed in with: their session is over. Tell the page (it says so and lets them sign in
+            // again where they were). A wrong passcode at /api/login is a 401 too, but it is not this.
+            if (sentToken && !/^\/api\/(login|register)(\?|$)/.test(url)) {
+              try { window.dispatchEvent(new CustomEvent("ipl:session-ended", { detail: { url: url } })); } catch (e) {}
+            }
           }
           return res.json().catch(function () { return {}; }).then(function (j) {
             err.serverMessage = j.error || j.detail || ""; err.serverData = j; throw err;
@@ -201,24 +207,42 @@
   // is kept here and IplClock.now() applies it. Until the server's time is known it is simply the phone's clock.
   var IplClock = (function () {
     var offset = 0, synced = false;
-    var MAX_ROUND_TRIP_MS = 5000;   // a slower round trip (a sleeping server waking up) says nothing about the time of the reply
+    var MAX_NETWORK_MS = 5000;    // a slower trip (a sleeping server waking up) says nothing about the time of the reply
+    var GOOD_NETWORK_MS = 300;    // a trip this quick is accurate to about 150 ms: the latest such reading always wins
+    var KEEP_BEST_MS = 600000;    // a worse reading replaces a better one only once that one is this old
+    var bestNetwork = Infinity, bestAt = 0;
+    var mono = (typeof performance !== "undefined" && performance.now) ? function () { return performance.now(); } : function () { return Date.now(); };
+    // The page loads several things at once, and the browser can hold a request back before it is sent; that delay is all on the way out, so a reading
+    // from such a trip can be a second or two off. A reading from a quicker trip is better, so the best one seen is kept.
+    function take(off, network) {
+      var at = mono();
+      if (network > GOOD_NETWORK_MS && network > bestNetwork && at - bestAt < KEEP_BEST_MS) return false;
+      offset = off; bestNetwork = network; bestAt = at; synced = true;
+      return true;
+    }
     return {
       now:      function () { return Date.now() + offset; },
       offsetMs: function () { return offset; },
       isSynced: function () { return synced; },
-      // serverIso: the server's time in its reply. sentAt / receivedAt: the phone's clock when the request left and when the reply arrived.
-      // The server stamped its time about half-way through the round trip.
-      sync: function (serverIso, sentAt, receivedAt) {
-        var t = Date.parse(serverIso);
-        if (!isFinite(t)) return false;
+      // serverIso: the server's time when its reply LEFT. sentAt / receivedAt: the phone's clock when the request left and when the reply arrived.
+      // serverRecvIso (optional): the server's time when the request ARRIVED. With both server stamps the time the server spent on the request
+      // cancels out (as in NTP); without it the server's stamp is assumed to fall half-way through the round trip.
+      sync: function (serverIso, sentAt, receivedAt, serverRecvIso) {
+        var t2 = Date.parse(serverIso);
+        if (!isFinite(t2)) return false;
         if (typeof sentAt === "number" && typeof receivedAt === "number") {
-          if (receivedAt < sentAt || receivedAt - sentAt > MAX_ROUND_TRIP_MS) return false;
-          offset = t - (sentAt + receivedAt) / 2;
-        } else {
-          offset = t - Date.now();
+          if (receivedAt < sentAt) return false;
+          var t1 = Date.parse(serverRecvIso), network;
+          if (isFinite(t1) && t1 <= t2) {
+            network = Math.max(0, (receivedAt - sentAt) - (t2 - t1));          // the network part of the trip, without the server's own time
+            if (network > MAX_NETWORK_MS) return false;
+            return take(((t1 - sentAt) + (t2 - receivedAt)) / 2, network);
+          }
+          network = receivedAt - sentAt;
+          if (network > MAX_NETWORK_MS) return false;
+          return take(t2 - (sentAt + receivedAt) / 2, network);
         }
-        synced = true;
-        return true;
+        return take(t2 - Date.now(), 0);
       },
     };
   })();
@@ -237,7 +261,7 @@
         if (res.status === 304) return null;
         if (!res.ok) { var err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
         var etag = res.headers.get("ETag"); if (etag) _lastStateEtag = etag;
-        return res.json().then(function (j) { if (j && j.server_now_utc) IplClock.sync(j.server_now_utc, t0, Date.now()); return j; });
+        return res.json().then(function (j) { if (j && j.server_now_utc) IplClock.sync(j.server_now_utc, t0, Date.now(), j.server_recv_utc); return j; });
       });
     },
 
@@ -328,7 +352,7 @@
     var t0 = Date.now();
     return _fetchJson("/api/poll")
       .then(function (poll) {
-        if (poll && poll.server_now_utc) IplClock.sync(poll.server_now_utc, t0, Date.now());
+        if (poll && poll.server_now_utc) IplClock.sync(poll.server_now_utc, t0, Date.now(), poll.server_recv_utc);
         _cancelOverlay();
         if (!same()) return;
         var serverEtag = poll && poll.state_etag;

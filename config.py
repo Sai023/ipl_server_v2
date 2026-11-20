@@ -46,13 +46,13 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.16.3"
+APP_VERSION = "2.17.0"
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
                             # Phase 11: HOSTED mode (Render/Codespaces); boot-time git pull;
                             #           skip APScheduler + ephemeral wipe + tunnel in cloud
-ROUTES_VER       = "1.10.2" # /api/version lists the session_policy module (2026-11-19). /api/rollover refuses a competition that is not active / not started and a forced rollover without an admin + confirmation (2026-11-19). UI redesign: /api/state carries "competition"; paper-themed /manifest.json + /offline. Admin import: POST /api/admin/competition action "import"
+ROUTES_VER       = "1.11.0" # Errors carry a machine `reason` (auth_required, session_ended, admin_only, not_your_team, name_taken, bad_credentials, locked, invalid_team, rate_limited, server_error ...); /api/poll and /api/state carry server_recv_utc + server_now_utc, the server's clock (2026-11-20). /api/version lists the session_policy module (2026-11-19). /api/rollover refuses a competition that is not active / not started and a forced rollover without an admin + confirmation (2026-11-19). UI redesign: /api/state carries "competition"; paper-themed /manifest.json + /offline. Admin import: POST /api/admin/competition action "import"
                             #           (roster + fixtures upload; dry-run by default).
                             # INF-2: GET /api/admin/health (PAT + freshness).
                             # BIZ-2: server-side deadline lock (selections_locked).

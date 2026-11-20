@@ -211,6 +211,18 @@ user assigns both to the same player ([index.html:187-188](../templates/index.ht
 after pick/swap so the keyboard dismisses before the next paint —
 mentioned in the README's frontend section.
 
+### 7b. Session handling: checked at launch, and what happens when it ends (2026-11-20)
+- **Launch.** A saved name + token is checked with `GET /api/whoami` (`_checkSavedSession`), and the loader stays up meanwhile (no 8 s give-up). Only a real
+  401 signs the member out, and then straight to the passcode prompt for them ("Your session ended. Enter your 4-digit passcode to continue."). No network, a
+  slow server (25 s) or a failing one is NOT an answer: the member stays signed in on trust (`_unverified`; the Admin tab follows the last known `ipl_is_admin`),
+  sees the league with a slim "Can't confirm your sign-in" banner, and `_recheckSession` retries quietly (3 s, 8 s, 20 s, then every minute; also on "Retry now"
+  and when the phone comes back online).
+- **Mid-session.** `IplApi` fires `ipl:session-ended` when a signed-in member's token is refused; `_sessionEnded` shows `Ui.sheetBlocking` ("You've been signed
+  out. Your picks on this phone are safe." / Sign in). It cannot be dismissed (Escape and a tap outside do nothing). Sign in opens the passcode prompt for the
+  same member; closing that prompt brings the sheet back; signing in (`_reauthDone`) carries on exactly where they were: same tab, the unsaved draft untouched.
+- Flags: `_authPending`, `_unverified`, `_sessionLost`, `_reauth`, `_sessionSheet`; all are cleared by `_establishSession` and `logout`.
+- Tests: `tests/js/session_flow.test.js`.
+
 ### 8. 404 falls back to this file
 `base.py`'s 404 handler re-renders `index.html`, so a hard refresh of
 e.g. `/leaderboard` (if anyone ever bookmarked one) still loads the SPA.

@@ -112,10 +112,18 @@ The file's docstring still claims version **v7.8** and mentions Phase
 
 ### 2b. `IplClock`: lock countdowns follow the SERVER's clock (2026-11-20)
 A lock is decided by the server, so a countdown on a phone whose clock is wrong used to show the wrong time left and a wrong locked / open state.
-`/api/poll` (every minute) and `/api/state` now carry `server_now_utc`; `IplClock.sync(serverIso, sentAt, receivedAt)` keeps the offset (the server stamped
-its time about half-way through the round trip; a round trip over 5 s, such as a sleeping server waking up, is ignored) and `IplClock.now()` applies it.
-Until the server's time is known it is the phone's clock. The page's lock functions (`_deadlineLocked`, `_lockUrgent`, `_deadlineText`, `_lockIn`) read it
-through `_nowMs()` in `templates/index.html`. Tests: `tests/js/server_clock.test.js`, `tests/test_server_clock.py`.
+`/api/poll` (every minute) and `/api/state` now carry two server stamps: `server_recv_utc` (when the request arrived) and `server_now_utc` (when the reply
+leaves). `IplClock.sync(serverNow, sentAt, receivedAt, serverRecv)` works the offset out as NTP does, so the time the server spent on the request cancels
+out (a heavy `/api/state` can take seconds); a trip whose NETWORK part is over 5 s, such as a sleeping server waking up, is ignored. The page loads several
+things at once and the browser can hold a request back before it is sent, which makes that reading up to a second or two off, so the clock keeps the reading
+from the quickest trip (any trip under 300 ms always replaces the previous one; a slower one only replaces an older-than-10-minutes reading).
+`IplClock.now()` applies the offset; until the server's time is known it is the phone's clock. The page's lock functions (`_deadlineLocked`, `_lockUrgent`,
+`_deadlineText`, `_lockIn`) read it through `_nowMs()` in `templates/index.html`. Tests: `tests/js/server_clock.test.js`, `tests/test_server_clock.py`.
+
+### 2c. A refused token ends the session in the open (2026-11-20)
+`_fetchJson` forgets the token on any 401. When a token WAS sent (a signed-in member) and the call was not `/api/login` or `/api/register` (a wrong passcode is
+a 401 too, but it is not a session ending), it also dispatches `ipl:session-ended`; the page answers with the blocking "You've been signed out" sheet
+(see index_html.md, "Session handling"). Test: `tests/js/session_flow.test.js`.
 
 ### 3. Bearer-token attach is URL-prefix-scoped (Phase 12)
 

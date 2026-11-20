@@ -14,17 +14,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper6">
-  <link rel="stylesheet" href="/static/style.css?v=paper6">
-  <link rel="stylesheet" href="/static/ui.css?v=paper6">
-  <link rel="stylesheet" href="/static/screens.css?v=paper6">
-  <link rel="stylesheet" href="/static/paper.css?v=paper6">
+  <link rel="stylesheet" href="/static/theme.css?v=paper7">
+  <link rel="stylesheet" href="/static/style.css?v=paper7">
+  <link rel="stylesheet" href="/static/ui.css?v=paper7">
+  <link rel="stylesheet" href="/static/screens.css?v=paper7">
+  <link rel="stylesheet" href="/static/paper.css?v=paper7">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper6"></script>
+<script src="/static/ui.js?v=paper7"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -33,6 +33,10 @@ var BUDGET_TOTAL=100.0,XI_SIZE=11;
 var _state=null,_leaderboard=null,_players=null,_username=null;
 var _isAdmin=false,_mustChange=false;
 var _authPending=false;   // true while a saved session is being verified: render() holds back so a returning member never sees the login screen flash by
+var _sessionLost=false;   // the server refused this member's token while they were signed in (the session ended): the "You've been signed out" sheet is up until they sign in again
+var _reauth=false;        // the passcode prompt on screen is the one that follows that sheet
+var _unverified=false;    // the saved sign-in could not be checked (no network, slow or failing server): the member stays signed in on trust and the check is repeated quietly
+var _verifyTimer=null,_verifyTries=0,_sessionSheet=null;
 var _activeTab="match-centre",_currentWeek=1,_historyData=null,_historyViewWk=null;
 var _nwDraft={team:[],cap:null,vc:null};
 var _pickerSearch="",_pickerRole="All",_pickerTeams=[],_pickerSort="season";   // _pickerTeams: the teams switched on (several at once); empty = every team
@@ -103,6 +107,8 @@ function _initials(name){
 // (or whoami on bootstrap). It sets globals and triggers initial loads.
 function _establishSession(name, isAdmin, mustChange){
   _username=name;_isAdmin=!!isAdmin;_mustChange=!!mustChange;
+  _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
+  _rememberAdmin(_isAdmin);
   _activeTab="match-centre";_historyData=null;_historyViewWk=null;
   _adminMatches=null;_adminMembersList=null;
   window.dispatchEvent(new CustomEvent('ipl:state-updated'));
@@ -121,6 +127,8 @@ function attemptLogin(name){
 function logout(){
   if(window.IplApi&&IplApi.logoutClearToken)IplApi.logoutClearToken();
   _username=null;_isAdmin=false;_mustChange=false;
+  _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
+  try{localStorage.removeItem("ipl_is_admin");}catch(e){}
   clearUsername();_historyData=null;_historyViewWk=null;
   _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwRestored=false;_lockedWeek=null;_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
@@ -1163,13 +1171,16 @@ function _buildAdminMatchesCard(){
 // Opens when an existing member clicks their chip / pill. Asks for the 4-digit
 // passcode, calls IplApi.login, and either establishes the session or shows
 // an inline error and clears the boxes.
-function _showPasscodePromptModal(name){
+// note: a line that replaces the usual "Enter your 4-digit passcode to sign in." (for example why the member is being asked); reauth: this is the prompt
+// that follows the "You've been signed out" sheet, so closing it brings the sheet back (the member is still signed out).
+function _showPasscodePromptModal(name,note,reauth){
+  _reauth=!!reauth;
   var existing=document.getElementById('passcode-prompt-modal');
   if(existing)existing.remove();
   var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button type="button" class="modal-x" aria-label="Close" onclick="_closePasscodePrompt()">×</button></div>';
-  h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Enter your 4-digit passcode to sign in.</div>';
+  h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">'+esc(note||'Enter your 4-digit passcode to sign in.')+'</div>';
   h+=Ui.pin({id:"passcode-input",label:"4-digit passcode",describedby:"passcode-error"});
   h+='<div id="passcode-error" style="color:var(--danger-ink);font-size:12px;min-height:16px;margin-top:6px;text-align:center;"></div>';
   h+='<button id="passcode-submit-btn" onclick="_submitPasscode(\''+escAttr(name)+'\')" class="btn btn-teal" style="margin-top:8px;width:100%;padding:12px;">Sign in</button>';
@@ -1190,7 +1201,13 @@ function _showPasscodePromptModal(name){
     }
   },50);
 }
-function _closePasscodePrompt(){var m=document.getElementById('passcode-prompt-modal');if(m)m.remove();}
+// done: the sign-in worked (do not bring the "signed out" sheet back). Closing the prompt of a member whose session ended returns them to that sheet.
+function _closePasscodePrompt(done){
+  var m=document.getElementById('passcode-prompt-modal');if(m)m.remove();
+  var back=!done&&_reauth&&_sessionLost;
+  _reauth=false;
+  if(back)_showSessionEndedSheet();
+}
 function _submitPasscode(name){
   var inp=document.getElementById('passcode-input');
   var errEl=document.getElementById('passcode-error');
@@ -1205,8 +1222,9 @@ function _submitPasscode(name){
   if(errEl)errEl.textContent='';
   window.IplApi.login(name,pc).then(function(d){
     if(!d||!d.ok){throw new Error('login failed');}
-    _closePasscodePrompt();
-    _establishSession(d.name,d.is_admin,d.must_change);
+    _closePasscodePrompt(true);
+    if(_sessionLost)_reauthDone(d);   // signing in again after the session ended: carry on where they were
+    else _establishSession(d.name,d.is_admin,d.must_change);
   }).catch(function(e){
     var msg=(e&&e.serverMessage)?e.serverMessage:'Wrong passcode';
     if(errEl)errEl.textContent='⚠ '+msg;
@@ -1468,7 +1486,8 @@ function _openMoreMenu(){
 function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
   if(_authPending)return;   // keep the loader up until we know which screen to show
-  hideLoading();hideErrorBanner();
+  hideLoading();
+  if(_unverified)showErrorBanner("Can't confirm your sign-in — retrying…");else hideErrorBanner();   // a member who could not be checked stays signed in; the banner says why and offers "Retry now"
   if(_switching){_renderSwitching();return;}   // a competition switch is in flight: the app bar and a loading card, never the previous competition's content
   var _preserveSearchFocus=false,_preserveSearchPos=0;
   if(_activeTab==="next"){
@@ -1718,15 +1737,87 @@ function _staleState(s){
   if(!cur||s.competition===cur)return false;
   return (_competitions||[]).some(function(c){return c.slug===cur;});   // an unknown stored slug falls back on the server: not stale
 }
+// ─── SESSION: CHECKED AT LAUNCH, AND WHAT HAPPENS WHEN IT ENDS ─────────────────────────────────────────────────────────────────
+// The saved sign-in is checked with the server before it is trusted. Only a real "no" (401) signs the member out. No network, a slow server or a failing
+// one is not an answer: the member stays signed in, sees the league, and the check is repeated quietly (it used to sign them out, and to give up waiting
+// after 8 s, so a valid member could land on the login card during a cold start).
+function _rememberAdmin(v){try{localStorage.setItem("ipl_is_admin",v?"1":"0");}catch(e){}}
+function _cachedAdmin(){try{return localStorage.getItem("ipl_is_admin")==="1";}catch(e){return false;}}   // only decides whether the Admin tab shows meanwhile: the server still checks every admin action
+function _timeoutAfter(ms){return new Promise(function(_ok,fail){setTimeout(function(){var e=new Error("timeout");e.timedOut=true;fail(e);},ms);});}
+function _whoamiWithin(ms){return Promise.race([window.IplApi.whoami(),_timeoutAfter(ms)]);}
+var _VERIFY_DELAYS=[3000,8000,20000,60000];
+function _checkSavedSession(savedUser,state){
+  _whoamiWithin(25000).then(function(d){
+    _authPending=false;
+    if(d&&d.ok&&d.name===savedUser){_establishSession(d.name,d.is_admin,d.must_change);}
+    else{_username=null;_isAdmin=false;_mustChange=false;clearUsername();render(_state||state);}   // an answer that is not for this member: the login card
+  },function(err){
+    _authPending=false;
+    if(err&&err.status===401){   // a real "no": the saved sign-in is over. Ask for the passcode straight away, for the member who was signed in
+      _username=null;_isAdmin=false;_mustChange=false;clearUsername();render(_state||state);
+      _showPasscodePromptModal(savedUser,"Your session ended. Enter your 4-digit passcode to continue.");
+      return;
+    }
+    _username=savedUser;_isAdmin=_cachedAdmin();_mustChange=false;_unverified=true;   // anything else is not an answer: stay signed in on trust
+    render(_state||state);   // the league, with the banner that says why (render adds it while _unverified)
+    _scheduleVerify();
+  });
+}
+function _scheduleVerify(){
+  clearTimeout(_verifyTimer);
+  var d=_VERIFY_DELAYS[Math.min(_verifyTries,_VERIFY_DELAYS.length-1)];
+  _verifyTimer=setTimeout(function(){_verifyTries++;_recheckSession();},d);
+}
+function _recheckSession(){
+  if(!_unverified||!_username||_sessionLost)return;
+  clearTimeout(_verifyTimer);
+  _whoamiWithin(25000).then(function(d){
+    if(!_unverified)return;
+    if(d&&d.ok&&d.name===_username){
+      _unverified=false;_verifyTries=0;_isAdmin=!!d.is_admin;_mustChange=!!d.must_change;_rememberAdmin(_isAdmin);
+      if(_state)render(_state);   // the banner goes
+      if(_mustChange)_showResetPasscodeModal(true);
+    } else _sessionEnded();
+  },function(err){
+    if(!_unverified)return;
+    if(err&&err.status===401)_sessionEnded();
+    else _scheduleVerify();   // still cannot tell: keep trying, quietly
+  });
+}
+// A request the server refused with 401 while the member is signed in: their session is over (it ran out, or was ended elsewhere). Say so, keep the picks
+// (they live on this phone) and let them sign in again right where they were.
+function _sessionEnded(){
+  if(!_username||_sessionLost||_authPending)return;   // not signed in, already showing it, or the launch check is deciding it
+  _sessionLost=true;_unverified=false;clearTimeout(_verifyTimer);
+  hideErrorBanner();
+  _showSessionEndedSheet();
+}
+function _showSessionEndedSheet(){
+  if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
+  _sessionSheet=Ui.sheetBlocking({title:"You've been signed out",message:"Your picks on this phone are safe.",
+    primary:{label:"Sign in",onClick:function(){_sessionSheet=null;_showPasscodePromptModal(_username,"Your session ended. Enter your 4-digit passcode to continue.",true);}}});
+}
+// The member signed in again after their session ended: carry on exactly where they were (same tab, same unsaved picks), do not start over.
+function _reauthDone(d){
+  _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;
+  if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
+  _username=d.name;_isAdmin=!!d.is_admin;_mustChange=!!d.must_change;
+  saveUsername(d.name);_rememberAdmin(_isAdmin);
+  if(_state)render(_state);
+  if(_mustChange)_showResetPasscodeModal(true);
+  Ui.success("Signed in again. Your picks are as you left them.",{duration:4000});
+}
 var _bootTries=0;
 function _bootRetry(){if(!$loading||_bootTries>=12)return;_bootTries++;setTimeout(function(){if(!_state)_bootstrap();},Math.min(2000*_bootTries,10000));}
-window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();});
+window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();if(_unverified)_recheckSession();});
+window.addEventListener("ipl:session-ended",_sessionEnded);   // fired by IplApi when the server refuses a signed-in member's token (a 401)
+window.addEventListener("online",function(){if(_unverified)_recheckSession();});
 function _bootstrap(){
   var seq=_bootSeq;   // replies that arrive after a competition switch belong to the old competition: every handler below drops them
   var savedUser=getSavedUsername();
   var compP=(window.IplApi&&window.IplApi.getCompetitions)?window.IplApi.getCompetitions().catch(function(){return null;}):Promise.resolve(null);
   var t0=Date.now();   // the phone's clock when the request leaves: the server's time in the reply is matched to it (IplClock)
-  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}).then(function(j){if(j&&j.server_now_utc&&window.IplClock)IplClock.sync(j.server_now_utc,t0,Date.now());return j;});
+  var stP=fetch(_withComp("/api/state"),{headers:{"Accept":"application/json"}}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}).then(function(j){if(j&&j.server_now_utc&&window.IplClock)IplClock.sync(j.server_now_utc,t0,Date.now(),j.server_recv_utc);return j;});
   var hP=(savedUser&&window.IplApi)?window.IplApi.getHistory(savedUser).catch(function(){return null;}):Promise.resolve(null);
   var plP=(!_players&&window.IplApi)?window.IplApi.getPlayers().catch(function(){return null;}):Promise.resolve(null);
   var lbP=fetch(_withComp("/api/leaderboard"),{headers:{"Accept":"application/json"}}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
@@ -1750,22 +1841,11 @@ function _bootstrap(){
     if(!_username){
       var savedTok=(window.IplAuth&&window.IplAuth.getToken)?window.IplAuth.getToken():null;
       if(savedUser&&savedTok&&state.members&&state.members[savedUser]&&window.IplApi){
-        // Validate the token against the server before trusting localStorage.
-        // 401 inside _fetchJson auto-clears the token; we then drop to login.
-        _authPending=true;
-        var _authGuard=setTimeout(function(){if(_authPending){_authPending=false;if(_state)render(_state);}},8000);   // never leave the loader stuck
-        window.IplApi.whoami().then(function(d){
-          clearTimeout(_authGuard);_authPending=false;
-          if(d&&d.ok&&d.name===savedUser){
-            _establishSession(d.name,d.is_admin,d.must_change);
-          } else {
-            clearUsername();render(_state||state);
-          }
-        },function(){   // second argument: only a failed whoami signs the user out, never an error thrown while rendering
-          clearTimeout(_authGuard);_authPending=false;
-          clearUsername();render(_state||state);
-        });
-        return;  // skip render \u2014 _establishSession or the catch will render.
+        // Check the saved sign-in with the server before trusting localStorage. Only a real "no" (401) signs the member out: no network, a slow
+        // server or a failing one never does (it used to, and it gave up waiting after 8 s, so a valid member could land on the login card).
+        _authPending=true;_verifyTries=0;
+        _checkSavedSession(savedUser,state);
+        return;  // skip render: _checkSavedSession renders once it knows which screen to show
       } else if(savedUser){
         clearUsername();
       }
@@ -1807,7 +1887,7 @@ window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);}
 window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper6"></script>
-<script src="/static/mc_hub.js?v=paper6"></script>
+<script src="/static/ipl_glue.js?v=paper7"></script>
+<script src="/static/mc_hub.js?v=paper7"></script>
 </body>
 </html>

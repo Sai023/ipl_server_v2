@@ -45,8 +45,12 @@ backend context file should map its work back to one of these capabilities.
   wrong-passcode).
 - **How sessions persist:** the token is stored in `localStorage` under
   `ipl_session_token`. Together with `ipl_username`, the bootstrap calls
-  `/api/whoami` to validate; valid → auto-login, invalid → token cleared and
-  login card shown. The session lasts 60 days on the server side and is renewed
+  `/api/whoami` to validate; valid → auto-login; refused (401) → token cleared
+  and the passcode prompt for that member opens straight away; no network or a
+  slow server → they stay signed in (a banner says the sign-in could not be
+  confirmed and it is re-checked quietly). If a session ends while the app is
+  open, a "You've been signed out" sheet appears and signing in again carries on
+  where they were (changed 2026-11-20). The session lasts 60 days on the server side and is renewed
   whenever it is used with under 30 days left, so opening the app at least once
   in 60 days keeps you signed in (changed 2026-11-19; it was a fixed 30 days).
 

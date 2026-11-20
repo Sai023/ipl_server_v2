@@ -27,12 +27,17 @@ class TheRoutesAddTheServerClock(unittest.TestCase):
         i = src.index('@bp.route("' + path + '"')
         return src[i:src.index("\n@bp.route(", i + 10)]
 
-    def test_poll_carries_the_server_time(self):
-        self.assertIsNotNone(re.search(r'"server_now_utc"\s*:\s*datetime\.now\(timezone\.utc\)\.isoformat\(\)', self.route("/api/poll")))
+    def test_poll_carries_both_server_stamps(self):
+        body = self.route("/api/poll")
+        self.assertIsNotNone(re.search(r'"server_now_utc"\s*:\s*datetime\.now\(timezone\.utc\)\.isoformat\(\)', body))
+        self.assertIsNotNone(re.search(r'"server_recv_utc"\s*:\s*recv\.isoformat\(\)', body))
+        self.assertLess(body.index("recv = datetime.now(timezone.utc)"), body.index("db.get_etags"), "the arrival stamp is taken before any work is done")
 
-    def test_state_carries_the_server_time_after_the_304_check(self):
+    def test_state_carries_both_server_stamps_after_the_304_check(self):
         body = self.route("/api/state")
         self.assertIn('state["server_now_utc"]', body)
+        self.assertIn('state["server_recv_utc"]', body)
+        self.assertLess(body.index("recv = datetime.now(timezone.utc)"), body.index("db.get_state"), "the arrival stamp is taken before any work is done")
         self.assertLess(body.index('return "", 304'), body.index('state["server_now_utc"]'), "a 304 has no body, so the time is added on the 200 path only")
 
 
@@ -80,15 +85,22 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         self.assertTrue(lo <= t <= hi, f"{label}: {iso} is not the time of the call ({self.out['before']} .. {self.out['after']})")
         self.assertEqual(t.utcoffset(), timedelta(0), label + ": the time is UTC")
 
+    def assertStampsAreInOrder(self, recv, now, label):
+        self.assertLessEqual(datetime.fromisoformat(recv), datetime.fromisoformat(now), label + ": the request cannot arrive after the reply leaves")
+
     def test_poll_says_what_time_it_is(self):
         r = self.out["poll"]
         self.assertEqual(r["http"], 200); self.assertTrue(r["body"]["ok"]); self.assertTrue(r["body"]["state_etag"])
         self.assertIsServerNow(r["body"]["server_now_utc"], "/api/poll")
+        self.assertIsServerNow(r["body"]["server_recv_utc"], "/api/poll arrival")
+        self.assertStampsAreInOrder(r["body"]["server_recv_utc"], r["body"]["server_now_utc"], "/api/poll")
 
     def test_state_says_what_time_it_is_and_still_has_its_deadline(self):
         r = self.out["state"]
         self.assertEqual(r["http"], 200); self.assertTrue(r["etag"]); self.assertTrue(r["has_deadline"])
         self.assertIsServerNow(r["server_now_utc"], "/api/state")
+        self.assertIsServerNow(r["server_recv_utc"], "/api/state arrival")
+        self.assertStampsAreInOrder(r["server_recv_utc"], r["server_now_utc"], "/api/state")
 
     def test_an_unchanged_state_is_still_a_304_with_no_body(self):
         r = self.out["state_unchanged"]
