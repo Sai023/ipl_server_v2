@@ -215,3 +215,7 @@ through (seen on a phone, 2026-11-15: the Matches tab kept IPL's totals and week
   is how the admin "Match links" list and "Save link" were pointing at IPL while SA20 was selected.)
 - Before the first match `mc_hub.js` shows a pre-season note instead of four zero totals, and a week with nothing played shows a dash.
 - Regression test: `node tests/js/mc_hub_cache.test.js` (also run by `python -m unittest discover -s tests`; skipped when Node is missing).
+
+## Lock schedule per competition (2026-11-20)
+
+A competition can have a stored lock schedule (`competition_weeks`) and an auto-activate flag; the weekly handover, the pick lock and the `/api/state` deadline all follow it. Competitions without one keep the old Monday-14:00 rule and are never rolled. Set one with `POST /api/admin/competition` `{action:"schedule"}` (dry-run by default). See [rollover_plan.md](rollover_plan.md).

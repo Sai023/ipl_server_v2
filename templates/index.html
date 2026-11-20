@@ -528,7 +528,7 @@ function _buildBudgetBar(){
   var locked=_deadlineLocked(),dirty=_nwDirty(),saved=(_nwSaved!==null&&!dirty);
   // one calm line that says what is left to do (instead of a tooltip nobody sees on a phone), with the one button that does it
   var hint,hcls,hico,act="",k=XI_SIZE-count,pbMin=_priceBounds().min,back=(dirty&&_nwRestored)?"Restored your unsaved picks. ":"";   // back: said once, in front of whatever is left to do
-  if(locked){hint="Picks are locked until the next rollover.";hcls="bad";hico="lock";}
+  if(locked){hint=_finalWeek()?"Picks are closed: this is the final week.":"Picks are locked until the next rollover.";hcls="bad";hico="lock";}
   else if(_nwSaving){hint=_nwSlow?"Still saving. The server may have been asleep, so this can take up to a minute. Keep this screen open.":"Saving your team…";hcls="todo";hico="clock";}
   else if(rem<-0.001){hint="Over budget by "+Math.abs(rem).toFixed(1)+" CR. Swap someone for a cheaper player.";hcls="bad";hico="swap";}
   else if(count<XI_SIZE&&rem<k*pbMin-0.001){hint="Only "+rem.toFixed(1)+" CR left for "+k+" more player"+(k===1?"":"s")+" (the cheapest costs "+pbMin.toFixed(1)+"). Swap someone for a cheaper player.";hcls="bad";hico="swap";}
@@ -748,10 +748,11 @@ function _buildNextWeekCard(){
   if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
   var locked=_deadlineLocked();
   var h='<div class="card card-teal">';
-  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
+  h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_finalWeek()?'Final week':_currentWeek<=1?'Pick your team':'Week '+(_currentWeek+1)+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>';
   if(locked){
     // Past the deadline nothing on this screen can change the XI, so nothing here pretends it can: the XI that counts, and why.
-    h+='<div class="nw-lockbar" role="status">'+Ui.icon("lock",22)+'<div><b>Picks are locked</b><span>The deadline has passed, so your XI is set. New picks open again after the next rollover.</span>'+(_nwHasUnsaved()?'<span class="nw-lock-warn">Changes you had not saved cannot be saved now. The XI below is your last saved one.</span>':'')+'</div></div>';
+    var fw=_finalWeek();   // the last scheduled week: there is no next rollover to wait for
+    h+='<div class="nw-lockbar" role="status">'+Ui.icon("lock",22)+'<div><b>'+(fw?'Picks are closed':'Picks are locked')+'</b><span>'+(fw?'This is the final week, so there is no next week to pick for. The XI below is the one that counts.':'The deadline has passed, so your XI is set. New picks open again after the next rollover.')+'</span>'+(_nwHasUnsaved()?'<span class="nw-lock-warn">Changes you had not saved cannot be saved now. The XI below is your last saved one.</span>':'')+'</div></div>';
     h+=_buildNwSquad()+'</div>';
     return '<div class="nw-layout nw-locked"><div class="nw-left">'+h+'</div></div>';
   }
@@ -1602,10 +1603,14 @@ function _nowMs(){return(window.IplClock&&IplClock.now)?IplClock.now():Date.now(
 function _deadlineLocked(){
   var dl=_state&&_state.deadline; if(!dl)return false;
   if(dl.status==='completed')return true;
+  if(dl.season_over)return true;   // a competition on a lock schedule whose last week has begun: there is no next week left to pick for
   if(_lockedWeek!==null&&_lockedWeek===_currentWeek)return true;   // the server refused a save as too late: it is the authority, whatever this clock says
   if(!dl.next_lock_utc)return false;
   return _nowMs()>=new Date(dl.next_lock_utc).getTime();
 }
+// The final week of a competition on a stored lock schedule: every scheduled week has been handed over, so there is no next week left to pick for
+// (the server says so with deadline.season_over). Not the same as a completed competition, which has its own card.
+function _finalWeek(){var dl=_state&&_state.deadline;return !!(dl&&dl.season_over&&dl.status!=='completed');}
 // The last hour before the deadline: the countdown turns red (a draft saved at the last minute is the one that matters most).
 function _lockUrgent(){
   var dl=_state&&_state.deadline;if(!dl||!dl.next_lock_utc||dl.status==='completed')return false;
@@ -1615,6 +1620,7 @@ function _lockUrgent(){
 function _deadlineText(){
   var dl=_state&&_state.deadline; if(!dl)return '';
   if(dl.status==='completed')return '🏁 Season complete';
+  if(dl.season_over)return '🏁 Final week under way — picks are closed';
   if(_deadlineLocked())return '🔒 Locked — awaiting rollover';
   if(!dl.next_lock_utc)return '';
   var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();

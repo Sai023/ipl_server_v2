@@ -1,12 +1,13 @@
-"""The weekly rollover may only run for a competition that is ACTIVE and whose season has STARTED (2026-11-19).
+"""The weekly rollover may only run when the stored lock schedule says it is due, and only a signed-in admin may force it (2026-11-19, rewritten 2026-11-20).
 
 Why this exists: on scratch data the old endpoint moved an UPCOMING competition (week-1 anchor two months away) from week 1 to week 2 with one
 authorised call, and a second forced call to week 3. Three of the four ways to trigger it were also unsafe: a browser timer (admin only, whichever
-competition was selected), a red "Simulate rollover" admin button (a real write, no confirmation) and the scheduler token.
+competition was selected), a red "Simulate rollover" admin button (a real write, no confirmation) and the scheduler token. Phase 1.5 replaced the
+"move everyone one week per call" loop with the lock schedule + ledger (logic/rollover_plan.py, db.reconcile_competition); these tests keep the
+original promises true on the new design.
 
-1. the pure rule (logic.rollover_engine.rollover_refusal): no database, no Flask
-2. the browser timer and the red button must not come back (file guards)
-3. the real route on scratch data (needs Flask and TEST_DATABASE_URL; skipped otherwise), run in a subprocess"""
+1. the browser timer and the red button must not come back (file guards), and the route must use the ledger, not the old loop
+2. the real routes on scratch data (needs Flask and TEST_DATABASE_URL; skipped otherwise), run in a subprocess"""
 import json
 import os
 import re
@@ -14,85 +15,10 @@ import subprocess
 import sys
 import unittest
 import uuid
-from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from logic.rollover_engine import rollover_refusal  # noqa: E402
-
-NOW = datetime(2027, 1, 25, 14, 5, tzinfo=timezone.utc)
-ANCHOR = "2027-01-18T14:00:00+00:00"
-
-
-def refusal(**kw):
-    base = dict(slug="sa20_2027", status="active", week1_anchor_iso=ANCHOR, now=NOW, current_week=2, force=False, confirm="", is_admin=False)
-    base.update(kw)
-    return rollover_refusal(**base)
-
-
-class WhenARolloverMayRun(unittest.TestCase):
-    def test_an_active_competition_whose_season_has_started_may_roll(self):
-        self.assertIsNone(refusal())
-
-    def test_status_is_compared_case_insensitively(self):
-        self.assertIsNone(refusal(status="Active"))
-        self.assertIsNone(refusal(status=" active "))
-
-    def test_an_upcoming_competition_never_rolls(self):
-        r = refusal(status="upcoming")
-        self.assertEqual(r["http"], 200)                       # a harmless no-op: a scheduler must not retry it
-        self.assertIn("not active", r["reason"]); self.assertIn("sa20_2027", r["reason"]); self.assertIn("upcoming", r["reason"])
-
-    def test_a_completed_competition_never_rolls(self):
-        self.assertEqual(refusal(status="completed")["http"], 200)
-
-    def test_an_unknown_status_is_refused(self):
-        for s in ("", None, "paused"):
-            self.assertEqual(refusal(status=s)["http"], 200, s)
-
-    def test_the_season_must_have_started(self):
-        r = refusal(now=datetime(2026, 11, 23, 14, 0, tzinfo=timezone.utc))      # the Monday that worried us: two months early
-        self.assertEqual(r["http"], 200); self.assertIn("has not started", r["reason"]); self.assertIn("2027-01-18", r["reason"])
-
-    def test_the_anchor_instant_itself_counts_as_started(self):
-        self.assertIsNone(refusal(now=datetime(2027, 1, 18, 14, 0, tzinfo=timezone.utc)))
-        self.assertIsNotNone(refusal(now=datetime(2027, 1, 18, 13, 59, 59, tzinfo=timezone.utc)))
-
-    def test_a_missing_or_unreadable_start_date_is_refused_not_guessed(self):
-        for a in ("", None, "not a date"):
-            r = refusal(week1_anchor_iso=a)
-            self.assertEqual(r["http"], 200, a); self.assertIn("no usable week-1 start date", r["reason"])
-
-    def test_a_start_date_without_a_zone_is_read_as_utc(self):
-        self.assertIsNone(refusal(week1_anchor_iso="2027-01-18T14:00:00"))
-        self.assertIsNotNone(refusal(week1_anchor_iso="2027-01-25T14:30:00"))
-
-    def test_status_is_checked_before_the_start_date(self):
-        self.assertIn("not active", refusal(status="upcoming", week1_anchor_iso="2099-01-01T00:00:00+00:00")["reason"])
-
-
-class WhenARolloverIsForced(unittest.TestCase):
-    def test_the_scheduler_token_alone_is_not_enough(self):
-        r = refusal(force=True, is_admin=False)
-        self.assertEqual(r["http"], 403); self.assertIn("signed-in admin", r["reason"])
-
-    def test_an_admin_must_confirm_which_week_it_moves_to(self):
-        r = refusal(force=True, is_admin=True)
-        self.assertEqual(r["http"], 400)
-        self.assertIn("from week 2 to week 3", r["reason"]); self.assertIn("confirm=sa20_2027:3", r["reason"])
-
-    def test_a_confirmation_for_another_week_is_refused(self):
-        for c in ("sa20_2027:2", "sa20_2027:4", "other:3", "3", ""):
-            self.assertEqual(refusal(force=True, is_admin=True, confirm=c)["http"], 400, c)
-
-    def test_the_exact_confirmation_goes_through(self):
-        self.assertIsNone(refusal(force=True, is_admin=True, confirm="sa20_2027:3"))
-        self.assertIsNone(refusal(force=True, is_admin=True, confirm="  sa20_2027:3 "))
-
-    def test_force_does_not_bypass_the_status_or_the_start_date(self):
-        self.assertEqual(refusal(force=True, is_admin=True, confirm="sa20_2027:3", status="upcoming")["http"], 200)
-        self.assertEqual(refusal(force=True, is_admin=True, confirm="sa20_2027:3", now=datetime(2026, 11, 23, tzinfo=timezone.utc))["http"], 200)
 
 
 class TheBrowserAndTheAdminScreenCannotRollOver(unittest.TestCase):
@@ -111,14 +37,22 @@ class TheBrowserAndTheAdminScreenCannotRollOver(unittest.TestCase):
         for needle in ("rollover-btn", "_simulateRollover", "IplApi.rollover", "Simulate Monday", "Force-trigger"):
             self.assertTrue(needle not in html, 'the page still contains ' + needle)
 
-    def test_the_route_asks_the_rule_before_doing_anything(self):
+    def route_body(self):
         src = self.read("routes.py")
         i = src.index('@bp.route("/api/rollover"')
-        body = src[i:src.index('@bp.route("/api/matches-status"')]
-        self.assertIsNotNone(re.search(r"refusal\s*=\s*rollover_refusal\(", body), "the route must call the rule and keep its answer")
-        self.assertLess(body.index("rollover_refusal("), body.index("get_users_and_max_weeks"), "the guard must come before any member is touched")
-        i_ref = body.index("if refusal:")
-        self.assertIn('return jsonify(body),refusal["http"]', body[i_ref:i_ref + 500], "and it must return the refusal")
+        return src[i:src.index('@bp.route("/api/matches-status"')]
+
+    def test_the_route_applies_handovers_through_the_ledger_and_not_the_old_loop(self):
+        body = self.route_body()
+        self.assertIn("db.reconcile_competition(", body)
+        for gone in ("insert_rollover_week", "get_users_and_max_weeks", "pick_active_team", "set_last_rollover", "rollover_refusal"):
+            self.assertNotIn(gone, body, "the old move-everyone-one-week loop must not come back: " + gone)
+
+    def test_a_forced_run_is_previewed_and_confirmed_before_it_is_applied(self):
+        body = self.route_body()
+        self.assertLess(body.index("dry_run=True"), body.index('request.args.get("confirm"'), "the week a forced run would apply is worked out first ...")
+        self.assertLess(body.index("expect_week=expect_week"), body.index("max_steps=1 if force"), "... and the confirmed week is checked inside the transaction")
+        self.assertIn("scheduler token is not enough", body)
 
 
 def _flask_available():
@@ -131,7 +65,7 @@ def _flask_available():
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL") and _flask_available(), "needs Flask and TEST_DATABASE_URL (run with `py -3.14`)")
-class TheRealRouteOnScratchData(unittest.TestCase):
+class TheRealRoutesOnScratchData(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import psycopg
@@ -142,7 +76,7 @@ class TheRealRouteOnScratchData(unittest.TestCase):
         env = dict(os.environ, ROLLOVER_TOKEN="demo-token", PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1")
         env["DATABASE_URL"] = raw + ("&" if "?" in raw else "?") + "options=" + quote(f"-c search_path={cls.schema}")
         env.pop("HOSTED", None)
-        p = subprocess.run([sys.executable, "-B", os.path.join(ROOT, "tests", "helpers", "rollover_scenario.py")], env=env, capture_output=True, text=True, timeout=300)
+        p = subprocess.run([sys.executable, "-B", os.path.join(ROOT, "tests", "helpers", "rollover_scenario.py")], env=env, capture_output=True, text=True, timeout=900)
         marker = "@@RESULT@@"
         cls.err = (p.stderr or "")[-1500:]
         cls.out = json.loads(p.stdout.split(marker)[1]) if marker in p.stdout else None
@@ -157,36 +91,129 @@ class TheRealRouteOnScratchData(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(self.out, "the scenario script did not finish:\n" + self.err)
 
-    def test_an_upcoming_competition_is_not_rolled_even_when_forced(self):
-        for key in ("upcoming", "upcoming_forced_by_token", "upcoming_forced_by_admin"):
-            self.assertEqual(set(self.out[key]["weeks"].values()), {1}, key)               # nobody moved
-        self.assertEqual(self.out["upcoming"]["resp"]["http"], 200)
-        self.assertFalse(self.out["upcoming"]["resp"]["body"]["rolled"]); self.assertIn("not active", self.out["upcoming"]["resp"]["body"]["reason"])
+    def body(self, key):
+        return self.out[key]["resp"]["body"]
 
-    def test_an_active_competition_whose_season_has_not_started_is_not_rolled(self):
-        r = self.out["active_future"]
-        self.assertEqual(set(r["weeks"].values()), {1}); self.assertIn("has not started", r["resp"]["body"]["reason"])
+    def weeks(self, key):
+        return set(self.out[key]["weeks"].values())
+
+    # ── nothing rolls unless the schedule says so ───────────────────────────────────────────────────────────────
+    def test_a_competition_with_no_lock_schedule_is_never_rolled(self):
+        r = self.out["unscheduled"]
+        self.assertEqual(r["resp"]["http"], 200); self.assertFalse(r["resp"]["body"]["rolled"]); self.assertIn("no lock schedule", r["resp"]["body"]["reason"])
+        self.assertEqual((self.weeks("unscheduled"), r["ledger"]), ({1}, []))
+
+    def test_an_upcoming_competition_that_does_not_start_itself_is_not_rolled_even_when_forced(self):
+        for key in ("upcoming", "upcoming_forced"):
+            self.assertEqual((self.weeks(key), self.out[key]["ledger"], self.out[key]["status"]), ({1}, [], "upcoming"), key)
+            self.assertEqual(self.out[key]["resp"]["http"], 200); self.assertFalse(self.body(key)["rolled"]); self.assertIn("does not start itself", self.body(key)["reason"])
+
+    def test_a_competition_whose_first_lock_is_a_month_away_is_not_rolled(self):
+        self.assertEqual((self.weeks("future"), self.out["future"]["ledger"]), ({1}, [])); self.assertIn("nothing is due yet", self.body("future")["reason"])
 
     def test_a_completed_competition_is_left_alone(self):
-        self.assertEqual(set(self.out["completed"]["weeks"].values()), {1}); self.assertFalse(self.out["completed"]["resp"]["body"]["rolled"])
+        self.assertEqual((self.weeks("completed"), self.out["completed"]["ledger"]), ({1}, [])); self.assertFalse(self.body("completed")["rolled"])
+        self.assertIn("the season is over", self.body("completed")["reason"])
 
-    def test_an_active_started_competition_still_rolls_once(self):
-        first, again = self.out["active_first"], self.out["active_again"]
-        self.assertTrue(first["resp"]["body"]["rolled"]); self.assertEqual(first["resp"]["body"]["new_week_no"], 2)
-        self.assertEqual(set(first["weeks"].values()), {2})
-        self.assertFalse(again["resp"]["body"]["rolled"]); self.assertEqual(set(again["weeks"].values()), {2})   # the same deadline: no second roll
+    # ── what a due rollover does ─────────────────────────────────────────────────────────────────────────────────
+    def test_an_upcoming_competition_that_starts_itself_activates_at_the_lock_and_only_once(self):
+        first, again = self.out["auto_first"], self.out["auto_again"]
+        b = first["resp"]["body"]
+        self.assertTrue(b["rolled"]); self.assertEqual(b["new_week_no"], 1); self.assertEqual([a["kind"] for a in b["applied"]], ["start"]); self.assertTrue(b["applied"][0]["activated"])
+        self.assertEqual((first["status"], first["ledger"], set(first["weeks"].values())), ("active", [1], {1}))
+        self.assertFalse(again["resp"]["body"]["rolled"]); self.assertEqual(again["ledger"], [1])
 
+    def test_overdue_weeks_are_caught_up_in_order_in_one_call_and_a_second_call_does_nothing(self):
+        first, again = self.out["catchup_first"], self.out["catchup_again"]
+        b = first["resp"]["body"]
+        self.assertEqual((b["rolled"], b["new_week_no"], [a["to_week"] for a in b["applied"]]), (True, 2, [1, 2]))
+        self.assertEqual((first["ledger"], set(first["weeks"].values())), ([1, 2], {2}))
+        self.assertFalse(again["resp"]["body"]["rolled"]); self.assertEqual((again["ledger"], set(again["weeks"].values())), ([1, 2], {2}))
+
+    def test_a_dry_run_reports_what_would_happen_and_changes_nothing(self):
+        p, real = self.out["dry_preview"], self.out["dry_real"]
+        b = p["resp"]["body"]
+        self.assertTrue(b["dry_run"]); self.assertFalse(b["rolled"]); self.assertEqual([a["to_week"] for a in b["applied"]], [1, 2])
+        self.assertEqual((p["ledger"], set(p["weeks"].values())), ([], {1}), "nothing was written")
+        self.assertTrue(real["resp"]["body"]["rolled"]); self.assertEqual((real["ledger"], set(real["weeks"].values())), ([1, 2], {2}))
+
+    # ── who may force it ─────────────────────────────────────────────────────────────────────────────────────────
     def test_a_forced_rollover_needs_an_admin_and_the_exact_confirmation(self):
-        self.assertEqual(self.out["forced_by_token"]["resp"]["http"], 403)
-        self.assertEqual(self.out["forced_no_confirm"]["resp"]["http"], 400); self.assertIn("confirm=sa_active:3", self.out["forced_no_confirm"]["resp"]["body"]["error"])
+        self.assertEqual(self.out["forced_by_token"]["resp"]["http"], 403); self.assertIn("signed-in admin", self.body("forced_by_token")["error"])
+        self.assertEqual(self.out["forced_no_confirm"]["resp"]["http"], 400); self.assertIn("confirm=sa_catchup:3", self.body("forced_no_confirm")["error"])
         self.assertEqual(self.out["forced_wrong_confirm"]["resp"]["http"], 400)
         for key in ("forced_by_token", "forced_no_confirm", "forced_wrong_confirm"):
-            self.assertEqual(set(self.out[key]["weeks"].values()), {2}, key)               # still week 2
-        self.assertTrue(self.out["forced_ok"]["resp"]["body"]["rolled"]); self.assertEqual(set(self.out["forced_ok"]["weeks"].values()), {3})
+            self.assertEqual((self.weeks(key), self.out[key]["ledger"]), ({2}, [1, 2]), key)            # still week 2
+        ok = self.out["forced_ok"]["resp"]["body"]
+        self.assertEqual((ok["rolled"], ok["new_week_no"], [a["to_week"] for a in ok["applied"]]), (True, 3, [3]), "exactly the confirmed week, though its lock is ten days away")
+        self.assertEqual((self.weeks("forced_ok"), self.out["forced_ok"]["ledger"]), ({3}, [1, 2, 3]))
 
     def test_a_caller_without_the_token_or_an_admin_session_is_rejected(self):
         self.assertIn(self.out["anonymous"]["resp"]["http"], (401, 403))
-        self.assertEqual(set(self.out["anonymous"]["weeks"].values()), {3})
+        self.assertEqual((self.weeks("anonymous"), self.out["anonymous"]["ledger"]), ({3}, [1, 2, 3]))
+
+    # ── the lock the members feel ────────────────────────────────────────────────────────────────────────────────
+    def test_picking_stays_locked_from_the_lock_until_the_handover_has_run(self):
+        before = self.out["lock_state_before"]
+        self.assertTrue(before["managed"] and before["locked"]); self.assertEqual(before["awaiting"], {"kind": "start", "to_week": 1})
+        r = self.out["lock_save_awaiting"]
+        self.assertEqual(r["http"], 423); self.assertEqual(r["body"]["reason"], "locked"); self.assertIn("until the rollover has run", r["body"]["error"])
+
+    def test_after_the_handover_the_next_week_opens_and_the_countdown_moves_on(self):
+        self.assertTrue(self.out["lock_roll"]["resp"]["body"]["rolled"])
+        after = self.out["lock_state_after"]
+        self.assertTrue(after["managed"]); self.assertFalse(after["locked"]); self.assertIsNone(after["awaiting"]); self.assertEqual(after["applied_to"], 1)
+        self.assertGreater(after["next_lock_utc"], self.out["lock_state_before"]["next_lock_utc"])
+        r = self.out["lock_save_open"]
+        self.assertEqual(r["http"], 200); self.assertTrue(r["body"]["ok"])
+        self.assertEqual(self.out["saved_team"], [f"p{i}" for i in range(11, 0, -1)], "the save landed")
+
+    def test_a_competition_with_no_schedule_still_follows_the_old_rules(self):
+        self.assertEqual(self.out["unsched_save_open"]["http"], 200)                                     # pre-season: drafting is open
+        d = self.out["unsched_state"]
+        self.assertNotIn("managed", d); self.assertTrue(d["next_lock_utc"])
+
+    # ── the admin "schedule" action (the real SA20 fixtures) ─────────────────────────────────────────────────────
+    LOCKS = [(1, "2027-01-17T12:30:00+00:00"), (2, "2027-01-18T14:00:00+00:00"), (3, "2027-01-25T14:00:00+00:00"),
+             (4, "2027-02-01T14:00:00+00:00"), (5, "2027-02-08T14:00:00+00:00"), (6, "2027-02-15T14:00:00+00:00")]
+
+    def test_the_schedule_action_is_admin_only_and_a_dry_run_by_default(self):
+        self.assertEqual(self.out["sched_not_admin"]["http"], 403)
+        r = self.out["sched_dry"]
+        self.assertEqual(r["http"], 200); b = r["body"]
+        self.assertTrue(b["ok"] and b["dry_run"]); self.assertEqual(b["status"], "upcoming")
+        self.assertEqual([(w["week_no"], w["lock_utc"]) for w in b["weeks"]], self.LOCKS)
+        self.assertEqual([w["matches"] for w in b["weeks"]], [1, 8, 7, 7, 7, 4], "the fixture weeks as the import puts them")
+        self.assertEqual(b["weeks"][0]["lock_sast"], "Sun 17 Jan 2027 14:30 SAST"); self.assertEqual(b["weeks"][1]["lock_sast"], "Mon 18 Jan 2027 16:00 SAST")
+        self.assertEqual((b["changed_weeks"], b["already_run"], b["auto_activate"]), ([1, 2, 3, 4, 5, 6], [], True), "reports what it WOULD do")
+        self.assertEqual(self.out["sched_after_dry"], {"weeks": [], "auto": False}, "and wrote nothing")
+
+    def test_without_stored_fixtures_the_schedule_can_be_previewed_but_warns(self):
+        b = self.out["sched_before_import"]["body"]
+        self.assertTrue(b["ok"] and b["dry_run"]); self.assertTrue(any("no matches are stored" in w for w in b["warnings"]), b["warnings"])
+
+    def test_saving_the_schedule_stores_the_locks_and_the_auto_activate_flag_and_a_repeat_changes_nothing(self):
+        r = self.out["sched_real"]
+        self.assertEqual(r["http"], 200); self.assertFalse(r["body"]["dry_run"])
+        self.assertEqual(self.out["sched_after_real"], {"weeks": [list(x) for x in self.LOCKS], "auto": True})
+        again = self.out["sched_again"]["body"]
+        self.assertEqual(again["changed_weeks"], []); self.assertTrue(again["auto_activate"], "leaving auto_activate out keeps the setting")
+        self.assertEqual(self.out["sched_after_again"], self.out["sched_after_real"])
+
+    def test_a_schedule_that_disagrees_with_the_stored_matches_is_refused_and_writes_nothing(self):
+        r = self.out["sched_mismatch"]
+        self.assertEqual(r["http"], 409); self.assertIn("sa20_sched_m05", r["body"]["error"]); self.assertIn("stored in week 3", r["body"]["error"])
+        self.assertEqual(self.out["sched_after_mismatch"], self.out["sched_after_real"])
+
+    def test_the_schedule_action_rejects_bad_requests(self):
+        self.assertEqual(self.out["sched_missing_file"]["http"], 400); self.assertIn("fixture list", self.out["sched_missing_file"]["body"]["error"])
+        self.assertEqual(self.out["sched_bad_flag"]["http"], 400); self.assertIn("true or false", self.out["sched_bad_flag"]["body"]["error"])
+
+    # ── bookkeeping ──────────────────────────────────────────────────────────────────────────────────────────────
+    def test_every_trigger_leaves_a_heartbeat(self):
+        beats = self.out["heartbeats"]
+        self.assertIn("rollover:scheduler", beats); self.assertIn("rollover:admin", beats)
+        self.assertIn("applied week", beats["rollover:admin"])
 
     def test_the_old_meta_keys_belong_to_the_first_competition_only(self):
         m = self.out["meta"]

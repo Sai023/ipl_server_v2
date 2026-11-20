@@ -217,6 +217,27 @@ t('a phone that is 2 h SLOW: a lock that has passed on the server is locked, not
   assert.strictEqual(c._lockIn(), '');
 });
 
+// ---- a competition on a stored lock schedule (Phase 1.5): the server sends the lock the countdown points at, which may already have passed ----
+t('between a lock and its handover the countdown target is in the past: the page shows locked, not a negative countdown', () => {
+  const c = page();
+  c._state.deadline = { status: 'active', managed: true, locked: true, awaiting: { kind: 'rollover', to_week: 3 }, next_lock_utc: iso(Date.now() - 5 * 60e3) };
+  assert.strictEqual(c._deadlineLocked(), true); assert.match(c._deadlineText(), /Locked/); assert.strictEqual(c._lockIn(), '');
+});
+
+t('once the handover has run the lock moves on and the page opens again', () => {
+  const c = page();
+  c._state.deadline = { status: 'active', managed: true, locked: false, awaiting: null, next_lock_utc: iso(Date.now() + 3 * 86400e3 + 60e3) };
+  assert.strictEqual(c._deadlineLocked(), false); assert.match(c._deadlineText(), /locks in 3d/);
+});
+
+t('the final week of a scheduled competition is closed, with a clear message and no countdown', () => {
+  const c = page();
+  c._state.deadline = { status: 'active', managed: true, season_over: true, locked: true, next_lock_utc: null };
+  assert.strictEqual(c._deadlineLocked(), true);
+  assert.match(c._deadlineText(), /Final week under way/);
+  assert.strictEqual(c._lockUrgent(), false); assert.strictEqual(c._lockIn(), '');
+});
+
 t('the lock functions never read the phone clock directly any more', () => {
   for (const n of ['_deadlineLocked', '_lockUrgent', '_deadlineText', '_lockIn']) assert.ok(!/Date\.now\(\)/.test(fnSource(n)), n + ' still uses Date.now()');
   assert.ok(/IplClock\.now\(\)/.test(fnSource('_nowMs')));

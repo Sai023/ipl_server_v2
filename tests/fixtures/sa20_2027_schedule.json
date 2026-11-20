@@ -1,0 +1,369 @@
+{
+ "note": "SA20 2027 fixtures in the format the admin import reads (public information; copied from the official match feed). Used to test the admin 'schedule' action.",
+ "schema_version": "1.0",
+ "year": 2027,
+ "matches": [
+  {
+   "match_no": 1,
+   "cricbuzz_id": null,
+   "title": "SEC vs PC, 1st Match",
+   "teams": [
+    "SEC",
+    "PC"
+   ],
+   "date": "2027-01-17",
+   "time_ist": "19:00"
+  },
+  {
+   "match_no": 2,
+   "cricbuzz_id": null,
+   "title": "PR vs JSK, 2nd Match",
+   "teams": [
+    "PR",
+    "JSK"
+   ],
+   "date": "2027-01-18",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 3,
+   "cricbuzz_id": null,
+   "title": "PC vs DSG, 3rd Match",
+   "teams": [
+    "PC",
+    "DSG"
+   ],
+   "date": "2027-01-19",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 4,
+   "cricbuzz_id": null,
+   "title": "MICT vs JSK, 4th Match",
+   "teams": [
+    "MICT",
+    "JSK"
+   ],
+   "date": "2027-01-20",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 5,
+   "cricbuzz_id": null,
+   "title": "DSG vs SEC, 5th Match",
+   "teams": [
+    "DSG",
+    "SEC"
+   ],
+   "date": "2027-01-21",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 6,
+   "cricbuzz_id": null,
+   "title": "MICT vs PR, 6th Match",
+   "teams": [
+    "MICT",
+    "PR"
+   ],
+   "date": "2027-01-22",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 7,
+   "cricbuzz_id": null,
+   "title": "DSG vs PC, 7th Match",
+   "teams": [
+    "DSG",
+    "PC"
+   ],
+   "date": "2027-01-23",
+   "time_ist": "16:30"
+  },
+  {
+   "match_no": 8,
+   "cricbuzz_id": null,
+   "title": "JSK vs SEC, 8th Match",
+   "teams": [
+    "JSK",
+    "SEC"
+   ],
+   "date": "2027-01-23",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 9,
+   "cricbuzz_id": null,
+   "title": "PR vs MICT, 9th Match",
+   "teams": [
+    "PR",
+    "MICT"
+   ],
+   "date": "2027-01-24",
+   "time_ist": "19:00"
+  },
+  {
+   "match_no": 10,
+   "cricbuzz_id": null,
+   "title": "PC vs SEC, 10th Match",
+   "teams": [
+    "PC",
+    "SEC"
+   ],
+   "date": "2027-01-26",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 11,
+   "cricbuzz_id": null,
+   "title": "DSG vs PR, 11th Match",
+   "teams": [
+    "DSG",
+    "PR"
+   ],
+   "date": "2027-01-27",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 12,
+   "cricbuzz_id": null,
+   "title": "SEC vs JSK, 12th Match",
+   "teams": [
+    "SEC",
+    "JSK"
+   ],
+   "date": "2027-01-28",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 13,
+   "cricbuzz_id": null,
+   "title": "PR vs PC, 13th Match",
+   "teams": [
+    "PR",
+    "PC"
+   ],
+   "date": "2027-01-29",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 14,
+   "cricbuzz_id": null,
+   "title": "SEC vs MICT, 14th Match",
+   "teams": [
+    "SEC",
+    "MICT"
+   ],
+   "date": "2027-01-30",
+   "time_ist": "16:30"
+  },
+  {
+   "match_no": 15,
+   "cricbuzz_id": null,
+   "title": "JSK vs DSG, 15th Match",
+   "teams": [
+    "JSK",
+    "DSG"
+   ],
+   "date": "2027-01-30",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 16,
+   "cricbuzz_id": null,
+   "title": "PC vs PR, 16th Match",
+   "teams": [
+    "PC",
+    "PR"
+   ],
+   "date": "2027-01-31",
+   "time_ist": "19:00"
+  },
+  {
+   "match_no": 17,
+   "cricbuzz_id": null,
+   "title": "MICT vs DSG, 17th Match",
+   "teams": [
+    "MICT",
+    "DSG"
+   ],
+   "date": "2027-02-02",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 18,
+   "cricbuzz_id": null,
+   "title": "JSK vs PR, 18th Match",
+   "teams": [
+    "JSK",
+    "PR"
+   ],
+   "date": "2027-02-03",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 19,
+   "cricbuzz_id": null,
+   "title": "MICT vs SEC, 19th Match",
+   "teams": [
+    "MICT",
+    "SEC"
+   ],
+   "date": "2027-02-04",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 20,
+   "cricbuzz_id": null,
+   "title": "PC vs JSK, 20th Match",
+   "teams": [
+    "PC",
+    "JSK"
+   ],
+   "date": "2027-02-05",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 21,
+   "cricbuzz_id": null,
+   "title": "DSG vs MICT, 21st Match",
+   "teams": [
+    "DSG",
+    "MICT"
+   ],
+   "date": "2027-02-06",
+   "time_ist": "16:30"
+  },
+  {
+   "match_no": 22,
+   "cricbuzz_id": null,
+   "title": "PR vs SEC, 22nd Match",
+   "teams": [
+    "PR",
+    "SEC"
+   ],
+   "date": "2027-02-06",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 23,
+   "cricbuzz_id": null,
+   "title": "JSK vs PC, 23rd Match",
+   "teams": [
+    "JSK",
+    "PC"
+   ],
+   "date": "2027-02-07",
+   "time_ist": "19:00"
+  },
+  {
+   "match_no": 24,
+   "cricbuzz_id": null,
+   "title": "SEC vs DSG, 24th Match",
+   "teams": [
+    "SEC",
+    "DSG"
+   ],
+   "date": "2027-02-09",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 25,
+   "cricbuzz_id": null,
+   "title": "JSK vs MICT, 25th Match",
+   "teams": [
+    "JSK",
+    "MICT"
+   ],
+   "date": "2027-02-10",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 26,
+   "cricbuzz_id": null,
+   "title": "PR vs DSG, 26th Match",
+   "teams": [
+    "PR",
+    "DSG"
+   ],
+   "date": "2027-02-11",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 27,
+   "cricbuzz_id": null,
+   "title": "PC vs MICT, 27th Match",
+   "teams": [
+    "PC",
+    "MICT"
+   ],
+   "date": "2027-02-12",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 28,
+   "cricbuzz_id": null,
+   "title": "DSG vs JSK, 28th Match",
+   "teams": [
+    "DSG",
+    "JSK"
+   ],
+   "date": "2027-02-13",
+   "time_ist": "16:30"
+  },
+  {
+   "match_no": 29,
+   "cricbuzz_id": null,
+   "title": "SEC vs PR, 29th Match",
+   "teams": [
+    "SEC",
+    "PR"
+   ],
+   "date": "2027-02-13",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 30,
+   "cricbuzz_id": null,
+   "title": "MICT vs PC, 30th Match",
+   "teams": [
+    "MICT",
+    "PC"
+   ],
+   "date": "2027-02-14",
+   "time_ist": "19:00"
+  },
+  {
+   "match_no": 31,
+   "cricbuzz_id": null,
+   "title": "Qualifier 1",
+   "teams": [],
+   "date": "2027-02-16",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 32,
+   "cricbuzz_id": null,
+   "title": "Eliminator",
+   "teams": [],
+   "date": "2027-02-17",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 33,
+   "cricbuzz_id": null,
+   "title": "Qualifier 2",
+   "teams": [],
+   "date": "2027-02-19",
+   "time_ist": "21:00"
+  },
+  {
+   "match_no": 34,
+   "cricbuzz_id": null,
+   "title": "Final",
+   "teams": [],
+   "date": "2027-02-21",
+   "time_ist": "19:00"
+  }
+ ]
+}

@@ -11,7 +11,14 @@ Submodules
 scoring_engine     — calc_pts(), debug_calc_pts(), _normalise_overs(),
                      _SEMANTIC_MAP-free; CAP_MULT=2.0, VC_MULT=1.5.
 rollover_engine    — last_monday_deadline(), already_rolled(),
-                     pick_active_team(). All times in UTC.
+                     selections_locked() (the old Monday rules, only for a
+                     competition with no stored lock schedule) and
+                     pick_active_team() (draft -> XI). All times in UTC.
+rollover_plan      — build_schedule(), validate_schedule(), next_due(),
+                     lock_state(): the stored lock schedule (week 1 = opener
+                     - 60 min, later weeks Monday 14:00 UTC), which weekly
+                     handover is due, and whether picking is locked now
+                     (see context/rollover_plan.md).
 fuzzy_match        — _norm(), _build_player_index(), _fuzzy_match(),
                      _fuzzy_fielder(), _generate_dynamic_player()
                      (FIX-015 resilience fallback), plus _SEMANTIC_MAP

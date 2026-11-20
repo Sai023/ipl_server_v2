@@ -17,7 +17,7 @@ touching the database, the web server, or the scraper.
 A sideways box, called from anywhere that needs a business rule:
 
 - `db_manager.py` calls `scoring_engine` to convert raw stats to points.
-- `routes.py` calls `rollover_engine` to decide whether Monday's deadline has passed.
+- `routes.py` calls `rollover_engine` to decide whether Monday's deadline has passed, but only for a competition with no stored lock schedule; for one with a schedule `rollover_plan` (2026-11-20, [rollover_plan.md](rollover_plan.md)) decides what is due and whether picking is locked.
 - `scraper.py` calls `fuzzy_match` to identify players on a Cricbuzz scorecard.
 - `tasks.py` calls `cricbuzz_discovery` to find new match URLs each day.
 

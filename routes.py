@@ -109,11 +109,12 @@ from config import (
     APP_VERSION, VERSION_MAP,
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
-    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, SESSION_POLICY_VER, FUZZY_MATCH_VER,
+    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, FUZZY_MATCH_VER,
     CRICBUZZ_DISCOVERY_VER,
 )
 import tasks
-from logic.rollover_engine import last_monday_deadline, already_rolled, pick_active_team, selections_locked, rollover_refusal
+from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
+from logic import rollover_plan as _rp                                       # the stored lock schedule: what is due, and whether picking is locked (Phase 1.5)
 from logic.scoring_engine import debug_calc_pts as _debug_calc_pts
 from logic import competition_import as _ci
 
@@ -167,6 +168,7 @@ def api_version():
             "seed_matches":       SEED_MATCHES_VER,         # Phase 9
             "scoring_engine":     SCORING_ENGINE_VER,
             "rollover_engine":    ROLLOVER_ENGINE_VER,
+            "rollover_plan":      ROLLOVER_PLAN_VER,
             "session_policy":     SESSION_POLICY_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
@@ -573,13 +575,77 @@ def _admin_import(slug, comp, d):
     return jsonify(out)
 
 
+def _admin_schedule(slug, comp, d):
+    """Action "schedule" of POST /api/admin/competition (Phase 1.5): store a competition's lock schedule, the moments each week's XI locks and the
+    drafts become the teams that play. The locks are worked out from the fixture list (the same file the import takes): week 1 locks 60 minutes before
+    the opener, every later week on the Monday 14:00 UTC before its first match (logic/rollover_plan.py). Safe by default: unless the body says
+    "dry_run": false it only REPORTS (the DAO rolls back). "auto_activate": true lets an upcoming competition start and activate itself at its week-1
+    lock; leave the key out to keep the setting as it is. A week whose handover has already run keeps its lock time. Returns the Flask response."""
+    if comp["status"] == "completed":
+        return jsonify({"ok": False, "code": 409, "error": "this competition is completed and read-only - reopen it before scheduling"}), 409
+    schedule_raw = d.get("schedule")
+    if schedule_raw is None:
+        return jsonify({"ok": False, "code": 400, "error": "send the fixture list as `schedule` (the same file the import takes)"}), 400
+    auto = d.get("auto_activate")
+    if auto is not None and not isinstance(auto, bool):
+        return jsonify({"ok": False, "code": 400, "error": "auto_activate must be true or false"}), 400
+    dry = d.get("dry_run", True) is not False
+    anchor = _ci.parse_anchor(comp.get("week1_anchor_utc"))
+    if anchor is None:
+        return jsonify({"ok": False, "code": 400, "error": "the competition has no week-1 date yet - import its fixtures first"}), 400
+    r = _ci.parse_schedule(schedule_raw, slug=slug, valid_teams=comp.get("valid_teams") or [], anchor=anchor)
+    if r["errors"]:
+        return jsonify({"ok": False, "dry_run": dry, "slug": slug, "code": 400, "errors": ["schedule: " + e for e in r["errors"]],
+                        "warnings": ["schedule: " + w for w in r["warnings"]]}), 400
+    firsts, counts = {}, {}
+    for m in r["rows"]:
+        wk, t = m["week_no"], m["start_utc"]
+        firsts[wk] = min(t, firsts.get(wk, t)); counts[wk] = counts.get(wk, 0) + 1
+    built = _rp.build_schedule(firsts)
+    if built["errors"]:
+        return jsonify({"ok": False, "dry_run": dry, "slug": slug, "code": 400, "errors": ["schedule: " + e for e in built["errors"]]}), 400
+    with db._read() as con:    # the fixtures already stored must sit in the same weeks as this file says, or the locks would belong to other weeks
+        stored = {x["id"]: x["week_no"] for x in con.execute("SELECT id, week_no FROM matches WHERE competition_id=%s", (slug,)).fetchall()}
+    wrong = sorted("%s (stored in week %s, this file says week %s)" % (m["id"], stored[m["id"]], m["week_no"])
+                   for m in r["rows"] if m["id"] in stored and stored[m["id"]] != m["week_no"])
+    if wrong:
+        return jsonify({"ok": False, "dry_run": dry, "slug": slug, "code": 409,
+                        "error": "the matches stored for this competition are in different weeks than this file puts them: " + "; ".join(wrong[:6])
+                                 + (" ..." if len(wrong) > 6 else "") + ". Re-import the fixtures first."}), 409
+    file_ids = {m["id"] for m in r["rows"]}
+    warnings = ["schedule: " + w for w in r["warnings"]]
+    if not stored:
+        warnings.append("no matches are stored for this competition yet: import the fixtures too, or the weeks will have no games")
+    elif file_ids - set(stored):
+        warnings.append("%d match(es) in this file are not stored for this competition yet (import the fixtures)" % len(file_ids - set(stored)))
+    elif set(stored) - file_ids:
+        warnings.append("%d stored match(es) are not in this file" % len(set(stored) - file_ids))
+    try:
+        rep = db.set_schedule(slug, built["rows"], auto_activate=auto, dry_run=dry)
+    except LookupError as e:
+        return jsonify({"ok": False, "error": str(e), "code": 404}), 404
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e), "code": 409}), 409
+    sast = timezone(timedelta(hours=2))
+    weeks = [{"week_no": w["week_no"], "matches": counts.get(w["week_no"], 0), "first_match_utc": w["first_match_utc"], "lock_utc": w["lock_at_utc"],
+              "lock_sast": _rp.parse_utc(w["lock_at_utc"]).astimezone(sast).strftime("%a %d %b %Y %H:%M SAST")} for w in rep["schedule"]]
+    if not dry:
+        _push_if_hosted(f"comp-schedule:{slug}")
+        _log("admin schedule for %s: %d weeks, changed %s, already run %s, auto_activate %s" % (slug, rep["weeks"], rep["changed_weeks"], rep["already_run"], rep["auto_activate"]))
+    return jsonify({"ok": True, "dry_run": dry, "slug": slug, "weeks": weeks, "changed_weeks": rep["changed_weeks"], "already_run": rep["already_run"],
+                    "auto_activate": rep["auto_activate"], "status": comp["status"], "warnings": warnings})
+
+
 @bp.route("/api/admin/competition", methods=["POST"])
 def api_admin_competition():
-    """Admin-only competition lifecycle: create / import / activate / reopen / close.
+    """Admin-only competition lifecycle: create / import / schedule / activate / reopen / close.
 
     Body: {"action": "...", "slug": "...", ...}
       create  : + name, week1_anchor_utc, budget_total, xi_size, max_weeks,
                 series_id, series_slug, year, valid_teams[]
+      schedule: + schedule (the fixture list, as for import), dry_run (default TRUE), auto_activate (true/false; omit to keep it).
+                Stores the weekly lock schedule (week 1 = opener - 60 min, later weeks Monday 14:00 UTC) that drives the automatic weekly
+                handover; see _admin_schedule and logic/rollover_plan.py.
       import  : + players (list of {id,name,team,price,role}) and/or schedule
                 ({"matches":[...]} as in data/<slug>/schedule.json), dry_run
                 (default TRUE - writes only when "dry_run": false). Upserts the
@@ -627,6 +693,9 @@ def api_admin_competition():
         if action == "import":
             return _admin_import(slug, comp, d)
 
+        if action == "schedule":
+            return _admin_schedule(slug, comp, d)
+
         if action in ("activate", "reopen"):
             new_status = "active" if action == "activate" else "upcoming"
             db.set_competition_status(slug, new_status)
@@ -671,8 +740,15 @@ def api_get_state():
         # UX-2: deadline info so the client can show a live countdown + lock state.
         crow = db.get_competition(comp) or {}
         dh = crow.get("deadline_hour", DEADLINE_HOUR); dm = crow.get("deadline_min", DEADLINE_MIN)
-        nl = None
-        if crow.get("status") != "completed":
+        nl, managed = None, {}
+        ls = db.get_lock_state(comp)   # a competition with a stored lock schedule: the schedule and the ledger decide (None when it has none)
+        if ls is not None:
+            # next_lock_utc is the lock the countdown points at. It may already have passed: the transition has not run yet, picking stays locked
+            # (the page treats a passed next_lock_utc as locked) and the lock moves on when the transition runs (the state tag changes with it).
+            nl = _rp.iso(ls["next_lock"]) if ls["next_lock"] else None
+            managed = {"managed": True, "locked": ls["locked"], "awaiting": ls["awaiting"], "season_over": ls["season_over"],
+                       "applied_to": ls["applied_to"], "held": ls["held"], "reason": ls["reason"]}
+        elif crow.get("status") != "completed":
             now = datetime.now(timezone.utc)
             try:
                 anchor = datetime.fromisoformat(crow.get("week1_anchor_utc") or "")
@@ -683,7 +759,7 @@ def api_get_state():
                 nl = anchor.isoformat()  # pre-season: the draft locks at the week-1 anchor
             else:
                 nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
-        state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", "")}
+        state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", ""), **managed}
         state["competition"] = comp   # lets the browser discard a reply that belongs to another competition
         # The server's clock when the request arrived and when this reply leaves (the page cancels out the time spent here, as NTP does). The 304 path
         # above never carries a body, so /api/poll carries the clock too.
@@ -763,9 +839,13 @@ def api_save_next_week(n):
         if err: return err
         comp=_comp(); budget,xi,_mw,dh,dm=_comp_cfg(comp)
         crow=db.get_competition(comp) or {}
-        locked,lreason=selections_locked(datetime.now(timezone.utc), crow.get("status",""),
-                                         crow.get("week1_anchor_utc",""), dh, dm,
-                                         db.get_meta_comp("_last_rollover",comp,""))
+        ls=db.get_lock_state(comp)   # a stored lock schedule decides when picking is locked (fail closed from the lock until its transition has run)
+        if ls is not None:
+            locked,lreason=ls["locked"],ls["reason"]
+        else:                        # no schedule: the old Monday-14:00 rule
+            locked,lreason=selections_locked(datetime.now(timezone.utc), crow.get("status",""),
+                                             crow.get("week1_anchor_utc",""), dh, dm,
+                                             db.get_meta_comp("_last_rollover",comp,""))
         if locked:
             return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
         d=request.get_json(force=True,silent=True)
@@ -1429,75 +1509,82 @@ def api_match_details(match_id):
 
 @bp.route("/api/rollover", methods=["POST"])
 def api_rollover():
-    # Phase 3: optional bearer-token auth. If ROLLOVER_TOKEN is set in env
-    # (we set it on the host so the GitHub Actions monday_rollover workflow
-    # can trigger), require it. Local dev (no env var) stays open so the
-    # "Simulate Monday 2:00 PM Rollover" button in This Week → Dev Tools
-    # keeps working without setup. The in-browser auto-rollover from
-    # Static/ipl_glue.js also stays unauthenticated; the host's HOSTED+
-    # ROLLOVER_TOKEN combo means cloud only — see workflow design.
-    # Rollover is privileged: allow the GitHub Actions workflow (which sends the
-    # ROLLOVER_TOKEN as a bearer) OR an authenticated admin session. Everyone
-    # else is rejected — the old same-origin-no-header bypass is removed (SEC-1).
+    """Apply every weekly handover that is due for a competition (2026-11-20, Phase 1.5; before this the route moved everyone one week per call).
+
+    A competition with a stored lock schedule (competition_weeks) is MANAGED: at each lock the members' drafts become the XI that plays the week
+    ("start" = week 1, "rollover" = weeks 2..N). Every handover is one all-or-nothing transaction, recorded once in the rollover ledger, so it does not
+    matter how many triggers call this, or how late: a call applies whatever is overdue, in order, and repeating it changes nothing.
+
+      POST /api/rollover?comp=<slug>                       apply what is due
+      POST /api/rollover?comp=<slug>&dry_run=1             the same, then roll everything back: the report says what WOULD happen
+      POST /api/rollover?comp=<slug>&force=1&confirm=<slug>:<week>
+                                                           an admin's rehearsal or repair: apply the NEXT week now, whatever its lock time says (also
+                                                           re-applies a week an admin undid). Needs a signed-in admin (the scheduler token is not
+                                                           enough) and the exact confirmation, which the refusal spells out.
+
+    Callers: the scheduler token (Authorization: Bearer ROLLOVER_TOKEN) or a signed-in admin. A competition with no lock schedule is never rolled (a
+    harmless 200 no-op that says why). A call that hits a failure answers 500 with what it did manage (rolled / applied), and the next call carries on."""
     expected = os.environ.get("ROLLOVER_TOKEN", "").strip()
     auth = request.headers.get("Authorization", "")
     sent = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     via_token = bool(expected and sent == expected)
+    admin_name = ""
     if not via_token:
-        _u, err = _require_admin()
+        admin_name, err = _require_admin()      # rollover is privileged: the scheduler token or an authenticated admin, nobody else (SEC-1)
         if err: return err
-    force=request.args.get("force","").strip() in ("1","true","yes")
-    comp=_comp(); _b,_x,maxw,dh,dm=_comp_cfg(comp)
+    force = request.args.get("force", "").strip() in ("1", "true", "yes")
+    dry = request.args.get("dry_run", "").strip() in ("1", "true", "yes")
+    comp = _comp()
+    who = "scheduler" if via_token else f"admin:{admin_name}"
+
+    def body_for(rep, **extra):
+        applied = rep["applied"]; last = applied[-1] if applied else None
+        body = {"ok": not rep.get("error"), "rolled": bool(applied) and not dry, "new_week_no": last["to_week"] if last else None,
+                "season_complete": bool(last and last["season_complete"]), "competition": comp, "dry_run": dry, "applied": applied}
+        if not applied and rep.get("skipped"): body["reason"] = "Not rolled: " + rep["skipped"]
+        if rep.get("error"): body.update(error=rep["error"], code=500)
+        if rep.get("points_error"): body["warning"] = "the handover is done, but recomputing points failed (the next scoring pass redoes it): " + rep["points_error"]
+        body.update(extra)
+        return body
+
     try:
-        now=datetime.now(timezone.utc)
-        current_week=db.get_current_week(competition_id=comp)
-        crow=db.get_competition(comp) or {}
-        # 2026-11-19: a rollover moves EVERY member to the next week, so it only runs for a competition that is ACTIVE and whose season has
-        # started; a forced one also needs a signed-in admin and the exact confirmation. (Before this the route rolled whatever it was pointed at.)
-        refusal=rollover_refusal(slug=comp,status=crow.get("status",""),week1_anchor_iso=crow.get("week1_anchor_utc",""),now=now,
-                                 current_week=current_week,force=force,confirm=request.args.get("confirm",""),is_admin=not via_token)
-        if refusal:
-            _log(f"POST /api/rollover refused for {comp}: {refusal['reason']}")
-            ok=refusal["http"]==200
-            body={"ok":ok,"rolled":False,"new_week_no":None,"season_complete":False,"reason":refusal["reason"]}
-            if not ok: body.update({"error":refusal["reason"],"code":refusal["http"]})
-            return jsonify(body),refusal["http"]
-        if not force:
-            lmd=last_monday_deadline(now,dh,dm)
-            last_raw=db.get_meta_comp("_last_rollover",comp,"")
-            if already_rolled(last_raw,lmd):
-                return jsonify({"ok":True,"rolled":False,"new_week_no":None,
-                                "season_complete":False,"reason":"Already rolled for this deadline"})
-        if current_week>=maxw:
-            return jsonify({"ok":True,"rolled":False,"new_week_no":None,
-                            "season_complete":True,"reason":f"Season complete \u2014 {maxw} weeks reached"})
-        users=db.get_users_and_max_weeks(competition_id=comp)
-        if not users:
-            return jsonify({"ok":True,"rolled":False,"new_week_no":None,
-                            "season_complete":False,"reason":"No members found"})
-        new_week_no=int(users[0]["cur_wk"])+1; now_iso=now.isoformat()
-        for u in users:
-            uname=u["display_name"]; cur_wk=int(u["cur_wk"])
-            cur_row=db.get_selection_row(uname,cur_wk,competition_id=comp)
-            if not cur_row: continue
-            nw_team,nw_cap,nw_vc=pick_active_team(
-                cur_row["nw_team_json"],cur_row["nw_cap_id"],cur_row["nw_vc_id"],
-                cur_row["tw_team_json"],cur_row["tw_cap_id"],cur_row["tw_vc_id"],_jloads)
-            con=_db_con()
+        now = datetime.now(timezone.utc)
+        expect_week = None
+        if force:
+            if via_token:
+                return jsonify({"ok": False, "rolled": False, "new_week_no": None, "season_complete": False, "competition": comp, "applied": [],
+                                "error": "A forced rollover needs a signed-in admin (the scheduler token is not enough).", "code": 403}), 403
+            # What would a forced run apply? The same code path, rolled back; the admin must name that week to go ahead.
+            preview = db.reconcile_competition(comp, now, triggered_by=who, force_next=True, dry_run=True, max_steps=1)
+            if preview.get("error") or not preview["applied"]:
+                rep = {**preview, "applied": []}
+                _log(f"POST /api/rollover forced run refused for {comp}: {preview.get('error') or preview.get('skipped')}")
+                return jsonify(body_for(rep)), (500 if preview.get("error") else 200)
+            expect_week = preview["applied"][0]["to_week"]
+            want = f"{comp}:{expect_week}"
+            if request.args.get("confirm", "").strip() != want:
+                msg = (f"A forced rollover applies week {expect_week} of '{comp}' to every member now. To go ahead, repeat the call with confirm={want}")
+                return jsonify({"ok": False, "rolled": False, "new_week_no": None, "season_complete": False, "competition": comp, "applied": [],
+                                "error": msg, "reason": msg, "code": 400}), 400
+        rep = db.reconcile_competition(comp, now, triggered_by=who, force_next=force, expect_week=expect_week, dry_run=dry,
+                                       max_steps=1 if force else 12)
+        if not dry:
             try:
-                resolved,_=resolve_id_list(con,_jloads(nw_team,[])); nw_team=_json.dumps(resolved)
-            except Exception: pass
-            finally: con.close()
-            db.insert_rollover_week(uname,cur_wk+1,nw_team,nw_cap,nw_vc,competition_id=comp)
-        if not force: db.set_last_rollover(now_iso,competition_id=comp)
-        db.set_meta_comp("_saved",comp,now_iso)
-        db.update_week_points(competition_id=comp)
-        _push_if_hosted(f"rollover:{comp}:w{new_week_no}")
-        return jsonify({"ok":True,"rolled":True,"new_week_no":new_week_no,
-                        "season_complete":new_week_no>=maxw})
+                what = ("applied week " + ", ".join(str(a["to_week"]) for a in rep["applied"])) if rep["applied"] else (rep.get("error") or rep.get("skipped") or "nothing due")
+                db.touch_heartbeat("rollover:" + ("scheduler" if via_token else "admin"), f"{comp}: {what}")   # when something last asked for a rollover (Ops card, Phase 2)
+            except Exception as e:
+                _log(f"rollover heartbeat: {e}", "error")
+            if rep["applied"]:
+                _log(f"POST /api/rollover {comp} by {who}: applied weeks {[a['to_week'] for a in rep['applied']]}")
+                _push_if_hosted(f"rollover:{comp}:w{rep['applied'][-1]['to_week']}")
+        if rep.get("error"):
+            _log(f"POST /api/rollover {comp} by {who}: {rep['error']}", "error")
+        return jsonify(body_for(rep)), (500 if rep.get("error") else 200)
+    except LookupError as e:
+        return jsonify({"ok": False, "error": str(e), "code": 404}), 404
     except Exception as e:
-        _log(f"POST /api/rollover: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+        _log(f"POST /api/rollover: {e}", "error")
+        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 @bp.route("/api/matches-status", methods=["GET"])
 def api_matches_status():

@@ -133,7 +133,7 @@ results bar shows a removable chip per team. Reset on a competition switch (`_re
   history row). Storage that throws (private mode) is swallowed: the draft just stays in memory. `_nwHasUnsaved()` (non-empty AND different from saved)
   drives the dot on the Pick tab (`_navDot`), the hint "Restored your unsaved picks", the action banner ("not saved yet" + a one-tap **Save XI**) and
   `Discard changes` (`_nwDiscard`, with Undo). `_nwNewWeek()` restarts the draft when the rollover ran while the app was open (`_doStateRefresh`).
-- *A locked week is read-only.* `_deadlineLocked()` = the SERVER's clock (`_nowMs()`, see `IplClock` in ipl_glue.md) past `next_lock_utc` OR season over OR the server answered 423 for this week
+- *A locked week is read-only.* `_deadlineLocked()` = the SERVER's clock (`_nowMs()`, see `IplClock` in ipl_glue.md) past `next_lock_utc` (for a competition on a stored lock schedule this is the lock that is waiting for its handover, so it reads locked until the handover has run) OR `deadline.season_over` (the final week of a scheduled competition: "Final week under way — picks are closed") OR season over OR the server answered 423 for this week
   (`_lockedWeek === _currentWeek`, set by `_nwTooLate()`; the server is the authority, the device clock can be wrong). The 1-second tick flips the screen
   when the countdown runs out (`_lockSeen`) and, while locked, asks `/api/current-week` every 20 s (`_checkWeek`) so the draft reopens by itself after the
   rollover. Locked view: `_nwShown()` (the XI the server holds, never an unsaved edit), `.nw-lockbar` with the reason, rows as static `div`s, no budget bar,

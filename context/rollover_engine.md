@@ -1,4 +1,4 @@
-> **2026-11-19 - read this first.** The browser no longer schedules or sends a weekly rollover (the Monday 14:00 UTC `setTimeout` in `Static/ipl_glue.js`, `IplRollover` and `IplApi.rollover` are gone) and the red admin button "Simulate Monday rollover" is gone. They could roll a competition that had not started (reproduced on scratch data) and only ever worked for an admin who had the page open. `POST /api/rollover` now refuses a competition that is not `active` or whose week-1 anchor has not passed, and a forced rollover needs a signed-in admin plus `confirm=<slug>:<week>` (`logic/rollover_engine.rollover_refusal`, `tests/test_rollover_guards.py`). Nothing runs the rollover automatically until the new server-side catch-up is built (plan: the "Rollover automation plan"). Sections below that describe the browser timer or the button are historical.
+> **2026-11-20 - read this first.** The weekly handover is now driven by a stored **lock schedule** and a **ledger** ([rollover_plan.md](rollover_plan.md)): `POST /api/rollover` applies every overdue week, in order, one all-or-nothing transaction each, and a competition with no schedule is never rolled. `rollover_refusal()` (below, historical) was **removed** in v1.2.0: its rules (only an active competition, forced = admin + `confirm`) moved into `rollover_plan.next_due` and the route. This module keeps `last_monday_deadline`, `already_rolled` and `selections_locked` **only for a competition that has no stored schedule**, and `pick_active_team`, which `db_manager.reconcile_competition` uses to turn a draft into the XI. 2026-11-19 (earlier): the browser timer (`setTimeout` in `Static/ipl_glue.js`, `IplRollover`, `IplApi.rollover`) and the red admin button "Simulate Monday rollover" are gone; sections below that describe them are historical.
 
 # rollover_engine.py — The Weekly Lock-In Clock
 
@@ -20,11 +20,7 @@ no I/O, no project imports.
 
 ## Where it sits in the flow
 
-Called from one place: the `/api/rollover` route handler in `routes.py`.
-Since 2026-11-19 that endpoint has ONE legitimate caller: the scheduler token (the GitHub workflow, currently switched off) or a signed-in admin with curl.
-The browser timer and the red "Simulate" button were removed (see the note at the top of this file).
-
-Every call first asks `rollover_refusal()` (below) and only then goes through the three helpers.
+Since 2026-11-20: `pick_active_team` is called by `db_manager._apply_transition`; `last_monday_deadline` by `routes.api_get_state` and `already_rolled` / `selections_locked` by `routes.api_save_next_week` and `api_get_state`, all three only for a competition with no stored lock schedule (`db.get_lock_state` returns `None`). The weekly handover itself is `POST /api/rollover` -> `db.reconcile_competition` ([rollover_plan.md](rollover_plan.md)).
 
 ## Inputs / Outputs
 
@@ -79,31 +75,20 @@ From [user_capabilities.md](user_capabilities.md):
 - **§4.2 / §8.5 Dev Tools — Simulate Monday rollover** — REMOVED 2026-11-19 (a forced rollover is now `curl` only, with an admin session and `confirm=<slug>:<week>`).
 - **§10.2 Auto-rollover at Monday 14:00 UTC** — the browser timer was REMOVED 2026-11-19; the server alone will own it (rollover automation plan).
 
-## `rollover_refusal()` - when a rollover may run (v1.1.0, 2026-11-19)
+## `rollover_refusal()` - REMOVED in v1.2.0 (2026-11-20)
 
-A rollover moves EVERY member to the next week, so before anything else the route asks this pure function. It returns `None` (go ahead) or a refusal:
-
-| Situation | Answer |
-|---|---|
-| competition status is not `active` (upcoming, completed, unknown) | 200, `rolled:false`, reason "not active" (a scheduler must not retry it) |
-| no usable `week1_anchor_utc`, or `now` is before it | 200, `rolled:false`, reason "has no usable week-1 start date" / "the season has not started" |
-| `force=1` without a signed-in admin (the scheduler token is not enough) | 403 |
-| `force=1` without `confirm=<slug>:<week it would move to>` (or with another week) | 400 naming the exact value to send |
-
-Found by testing: on scratch data an authorised call rolled an UPCOMING competition from week 1 to 2 (and a forced one to 3). Still true and still dormant (nothing calls it any more):
-the loop is not one transaction, so a failure half way plus a retry leaves members in different weeks. That, week 1's promotion, fixture-driven lock times and the layered triggers
-are the next phases of the rollover automation plan. Also fixed the same day: `db.get_meta_comp` no longer lets every competition inherit the legacy un-suffixed meta keys
-(only `ipl_2026` does), so SA20 does not see IPL's `_last_rollover`.
+v1.1.0 (2026-11-19) added a pure rule that stopped a rollover of an upcoming / not-yet-started competition and demanded an admin + `confirm=<slug>:<week>` for a forced one. Its job is now done by the schedule: `rollover_plan.next_due` only returns a transition that is due and allowed for the competition's status (an upcoming competition only *starts*, and only with auto-activation), and the route keeps the forced rules (signed-in admin, `confirm=<slug>:<week the forced run would apply>`, checked inside the transaction). The same afternoon's other fix stays: `db.get_meta_comp` no longer lets every competition inherit the legacy un-suffixed meta keys (only `ipl_2026` does).
 
 ## Dead Code Audit
 
 | Symbol | Verdict |
 |--------|---------|
-| `last_monday_deadline` | **Live.** Single caller in `routes.py`. |
-| `already_rolled` | **Live.** Single caller in `routes.py`. |
-| `pick_active_team` | **Live.** Single caller in `routes.py`. |
+| `last_monday_deadline` | **Live**, only for a competition with no stored lock schedule (`routes.api_get_state`). |
+| `already_rolled` | **Live**, only inside `selections_locked` (the no-schedule rule). |
+| `selections_locked` | **Live**, only for a competition with no stored lock schedule (`routes.api_save_next_week`). |
+| `pick_active_team` | **Live**: `db_manager._apply_transition`. |
 
-**No dead code.** All three public functions have exactly one consumer.
+If every competition is one day given a schedule at creation, the first three can go together.
 
 ## Open Questions
 

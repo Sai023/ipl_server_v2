@@ -1,0 +1,210 @@
+{
+ "note": "SA20 2027 fixtures as the admin import reads them (match number, fantasy week, UTC start). Public information; used to replay the whole season in tests.",
+ "week1_anchor_utc": "2027-01-18T14:00:00+00:00",
+ "matches": [
+  {
+   "match_no": 1,
+   "week_no": 1,
+   "start_utc": "2027-01-17T13:30:00+00:00",
+   "title": "SEC vs PC, 1st Match"
+  },
+  {
+   "match_no": 2,
+   "week_no": 2,
+   "start_utc": "2027-01-18T15:30:00+00:00",
+   "title": "PR vs JSK, 2nd Match"
+  },
+  {
+   "match_no": 3,
+   "week_no": 2,
+   "start_utc": "2027-01-19T15:30:00+00:00",
+   "title": "PC vs DSG, 3rd Match"
+  },
+  {
+   "match_no": 4,
+   "week_no": 2,
+   "start_utc": "2027-01-20T15:30:00+00:00",
+   "title": "MICT vs JSK, 4th Match"
+  },
+  {
+   "match_no": 5,
+   "week_no": 2,
+   "start_utc": "2027-01-21T15:30:00+00:00",
+   "title": "DSG vs SEC, 5th Match"
+  },
+  {
+   "match_no": 6,
+   "week_no": 2,
+   "start_utc": "2027-01-22T15:30:00+00:00",
+   "title": "MICT vs PR, 6th Match"
+  },
+  {
+   "match_no": 7,
+   "week_no": 2,
+   "start_utc": "2027-01-23T11:00:00+00:00",
+   "title": "DSG vs PC, 7th Match"
+  },
+  {
+   "match_no": 8,
+   "week_no": 2,
+   "start_utc": "2027-01-23T15:30:00+00:00",
+   "title": "JSK vs SEC, 8th Match"
+  },
+  {
+   "match_no": 9,
+   "week_no": 2,
+   "start_utc": "2027-01-24T13:30:00+00:00",
+   "title": "PR vs MICT, 9th Match"
+  },
+  {
+   "match_no": 10,
+   "week_no": 3,
+   "start_utc": "2027-01-26T15:30:00+00:00",
+   "title": "PC vs SEC, 10th Match"
+  },
+  {
+   "match_no": 11,
+   "week_no": 3,
+   "start_utc": "2027-01-27T15:30:00+00:00",
+   "title": "DSG vs PR, 11th Match"
+  },
+  {
+   "match_no": 12,
+   "week_no": 3,
+   "start_utc": "2027-01-28T15:30:00+00:00",
+   "title": "SEC vs JSK, 12th Match"
+  },
+  {
+   "match_no": 13,
+   "week_no": 3,
+   "start_utc": "2027-01-29T15:30:00+00:00",
+   "title": "PR vs PC, 13th Match"
+  },
+  {
+   "match_no": 14,
+   "week_no": 3,
+   "start_utc": "2027-01-30T11:00:00+00:00",
+   "title": "SEC vs MICT, 14th Match"
+  },
+  {
+   "match_no": 15,
+   "week_no": 3,
+   "start_utc": "2027-01-30T15:30:00+00:00",
+   "title": "JSK vs DSG, 15th Match"
+  },
+  {
+   "match_no": 16,
+   "week_no": 3,
+   "start_utc": "2027-01-31T13:30:00+00:00",
+   "title": "PC vs PR, 16th Match"
+  },
+  {
+   "match_no": 17,
+   "week_no": 4,
+   "start_utc": "2027-02-02T15:30:00+00:00",
+   "title": "MICT vs DSG, 17th Match"
+  },
+  {
+   "match_no": 18,
+   "week_no": 4,
+   "start_utc": "2027-02-03T15:30:00+00:00",
+   "title": "JSK vs PR, 18th Match"
+  },
+  {
+   "match_no": 19,
+   "week_no": 4,
+   "start_utc": "2027-02-04T15:30:00+00:00",
+   "title": "MICT vs SEC, 19th Match"
+  },
+  {
+   "match_no": 20,
+   "week_no": 4,
+   "start_utc": "2027-02-05T15:30:00+00:00",
+   "title": "PC vs JSK, 20th Match"
+  },
+  {
+   "match_no": 21,
+   "week_no": 4,
+   "start_utc": "2027-02-06T11:00:00+00:00",
+   "title": "DSG vs MICT, 21st Match"
+  },
+  {
+   "match_no": 22,
+   "week_no": 4,
+   "start_utc": "2027-02-06T15:30:00+00:00",
+   "title": "PR vs SEC, 22nd Match"
+  },
+  {
+   "match_no": 23,
+   "week_no": 4,
+   "start_utc": "2027-02-07T13:30:00+00:00",
+   "title": "JSK vs PC, 23rd Match"
+  },
+  {
+   "match_no": 24,
+   "week_no": 5,
+   "start_utc": "2027-02-09T15:30:00+00:00",
+   "title": "SEC vs DSG, 24th Match"
+  },
+  {
+   "match_no": 25,
+   "week_no": 5,
+   "start_utc": "2027-02-10T15:30:00+00:00",
+   "title": "JSK vs MICT, 25th Match"
+  },
+  {
+   "match_no": 26,
+   "week_no": 5,
+   "start_utc": "2027-02-11T15:30:00+00:00",
+   "title": "PR vs DSG, 26th Match"
+  },
+  {
+   "match_no": 27,
+   "week_no": 5,
+   "start_utc": "2027-02-12T15:30:00+00:00",
+   "title": "PC vs MICT, 27th Match"
+  },
+  {
+   "match_no": 28,
+   "week_no": 5,
+   "start_utc": "2027-02-13T11:00:00+00:00",
+   "title": "DSG vs JSK, 28th Match"
+  },
+  {
+   "match_no": 29,
+   "week_no": 5,
+   "start_utc": "2027-02-13T15:30:00+00:00",
+   "title": "SEC vs PR, 29th Match"
+  },
+  {
+   "match_no": 30,
+   "week_no": 5,
+   "start_utc": "2027-02-14T13:30:00+00:00",
+   "title": "MICT vs PC, 30th Match"
+  },
+  {
+   "match_no": 31,
+   "week_no": 6,
+   "start_utc": "2027-02-16T15:30:00+00:00",
+   "title": "Qualifier 1"
+  },
+  {
+   "match_no": 32,
+   "week_no": 6,
+   "start_utc": "2027-02-17T15:30:00+00:00",
+   "title": "Eliminator"
+  },
+  {
+   "match_no": 33,
+   "week_no": 6,
+   "start_utc": "2027-02-19T15:30:00+00:00",
+   "title": "Qualifier 2"
+  },
+  {
+   "match_no": 34,
+   "week_no": 6,
+   "start_utc": "2027-02-21T13:30:00+00:00",
+   "title": "Final"
+  }
+ ]
+}

@@ -39,7 +39,7 @@ const clone = (x) => JSON.parse(JSON.stringify(x));
 
 const LOADED = ['_teamCost', '_remaining', '_priceBounds', '_nwSig', '_nwDirty', '_nwHasUnsaved', '_getCurrentWeekRow', '_nwLoadSaved', '_nwNewWeek', '_nwInit',
   '_draftKey', '_draftStore', '_draftRestore', '_nwChanged', '_nwSetRole', '_nwSetCap', '_nwSetVc', '_nwRemove', '_nwToggle', '_nwDiscard', '_nwSave', '_nwTooLate', '_nwCloseLayer',
-  '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
+  '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_finalWeek', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot'];
 
 function load(o = {}) {
   const c = { toasts: [], warns: [], fails: [], events: [], confirms: [], sheets: [], sent: [], timers: [], renders: 0, backs: 0, saveImpl: () => Promise.resolve({ ok: true }), store: o.store || new Map(), storeBroken: false };
@@ -370,6 +370,20 @@ test('locked card: a lock note, no budget bar, no Add players, no picker, one co
   assert.match(h, /nw-lockbar/); assert.match(h, /Picks are locked/); assert.match(h, /nw-layout nw-locked/);
   assert.ok(!/add-players|nw-budget-bar|nw-right|picker-stub/.test(h)); assert.ok(!/nw-lock-warn/.test(h));
   c._nwRemove('q13', true); h = c._buildNextWeekCard(); assert.match(h, /nw-lock-warn/);
+});
+test('the final week of a scheduled competition: no "Week N draft" for a week that does not exist, no promise of a next rollover', (c) => {
+  withSaved(c); c._currentWeek = 3;
+  c._state.deadline = { status: 'active', managed: true, season_over: true, next_lock_utc: null };
+  assert.strictEqual(c._finalWeek(), true);
+  const h = c._buildNextWeekCard();
+  assert.match(h, /Final week/); assert.match(h, /Picks are closed/); assert.match(h, /no next week to pick for/); assert.match(h, /nw-layout nw-locked/);
+  assert.ok(!/Week 4 draft|next rollover|Pick your team|Picks are locked/.test(h), 'the ordinary locked wording must not appear');
+  assert.match(c._buildBudgetBar(), /final week/); assert.ok(!/next rollover/.test(c._buildBudgetBar()));
+  // an ordinary locked week and a finished competition are unchanged
+  c._state.deadline = { status: 'active', next_lock_utc: PAST() };
+  assert.strictEqual(c._finalWeek(), false); assert.match(c._buildNextWeekCard(), /Week 4 draft/); assert.match(c._buildNextWeekCard(), /next rollover/);
+  c._state.deadline = { status: 'completed', season_over: true, next_lock_utc: null }; assert.strictEqual(c._finalWeek(), false);
+  c._state = null; assert.strictEqual(c._finalWeek(), false);
 });
 test('open card: the Add players button sits ABOVE the list (it stays put however long the list grows)', (c) => {
   withSaved(c);

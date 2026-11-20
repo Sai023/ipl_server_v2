@@ -7,6 +7,8 @@
 > current `fixed` / `kept` / `guarded` status of each.
 
 
+> **2026-11-20 (v6.7).** The database is Postgres (Neon) and has been since 2026-11-13; the SQLite wording below is historical. v6.7 adds the lock schedule and the weekly handover (section "Lock schedule and weekly handovers" below): three tables and the methods `set_schedule`, `reconcile_competition`, `undo_transition`, `get_lock_state`, `get_schedule`, `get_rollover_log`, `touch_heartbeat`, `get_heartbeats`. The *rules* (when a week locks, what is due) stay in `logic/rollover_plan.py`; this file only executes them inside a transaction.
+
 ## What it does (business view)
 
 `db_manager.py` is the **only file in the project allowed to talk to the
@@ -198,6 +200,30 @@ Doesn't live here directly — but `save_next_week()` and `upsert_member()`
 write whatever IDs the caller passes. `base.resolve_id_list` is what
 normalises typed names into IDs *before* calling the DAO; the DAO trusts
 its input.
+
+## Lock schedule and weekly handovers (v6.7, 2026-11-20)
+
+Three tables, created at boot with `CREATE TABLE IF NOT EXISTS` (additive; nothing existing is altered, booting twice is harmless):
+
+| Table | Holds |
+|---|---|
+| `competition_weeks` | the schedule: `(competition_id, week_no)` -> `lock_at_utc`, `first_match_utc` |
+| `rollover_log` | the ledger: one row per applied transition (`kind` start/rollover, `to_week`, `lock_at_utc`, `applied_at`, `triggered_by`, `members`, `detail_json` = per-member action + before-images, `undone_at`); `UNIQUE (competition_id, to_week)` is what makes a week apply at most once |
+| `ops_heartbeat` | `source` -> `last_at`, `detail`: when something that should be running last ran (the rollover endpoint writes `rollover:scheduler` / `rollover:admin`) |
+
+A competition with rows in `competition_weeks` is **managed**. Meta key `auto_activate:<slug>` = `1` lets an upcoming managed competition start and activate itself at its week-1 lock.
+
+| Method | What it does |
+|---|---|
+| `set_schedule(slug, rows, auto_activate=None, dry_run=False)` | validates (`rollover_plan.validate_schedule`), replaces the schedule, keeps the lock time of every week that has already run, moves the state tag; `dry_run` runs the same statements and rolls back. Raises `LookupError` / `ValueError` with a readable message. |
+| `reconcile_competition(slug, now, triggered_by, force_next, expect_week, dry_run, max_steps=12)` | applies every due transition in order: **one transaction per transition** under `SELECT ... FOR UPDATE` on the competition row; each writes its member rows, one ledger row, `_last_rollover:<slug>` and `_saved:<slug>`; afterwards `update_week_points` runs once. A failure is caught and returned as `error` (that week is rolled back, earlier weeks stay); a week is listed in `applied` only after its commit. `force_next` ignores the lock time (never the status) and re-applies an undone week; `expect_week` makes that step refuse unless it is that week; `dry_run` = everything in one transaction, then rollback. |
+| `undo_transition(slug, to_week, force=False)` | takes back the LAST applied week: deletes the rows it created (or puts week 1's XI, the status and the two meta keys back from the before-images), marks the ledger row `undone_at` (the week is then **held**: triggers skip it, picking stays locked, only a forced run re-applies it). Refused if a later week ran, if points exist for the week, or if a member saved a new draft into a row the handover created (undoing would delete that draft; the ledger records what the handover wrote, so a changed draft is detected), unless `force` (which also deletes that week's `user_match_points`). |
+| `get_lock_state(slug, now)` | `rollover_plan.lock_state` for a managed competition (plus `held`), `None` for one with no schedule |
+| `get_schedule`, `get_rollover_log`, `get_auto_activate`, `touch_heartbeat`, `get_heartbeats` | reads and the heartbeat upsert |
+
+The transition rules, the member semantics and the SA20 locks are in [rollover_plan.md](rollover_plan.md). Tests on a scratch schema: `tests/test_rollover_core.py`, `tests/test_rollover_safety.py` (a failed week leaves nothing behind, four triggers at once apply each week once, a dry run leaves no trace, undo restores everything, a randomised season ends with the right XIs).
+
+**Production note:** the three tables appear the first time the app boots on this version. They are empty until an admin stores a schedule (`POST /api/admin/competition` action `schedule`, dry-run by default); until then no competition is managed and behaviour is unchanged.
 
 ## Inputs / Outputs
 

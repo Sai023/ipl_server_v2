@@ -104,7 +104,7 @@ Phase 7.
 | 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
 | 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
 | 1.5 | Auth | `/api/admin/members` | GET | Phase 12 — admin-only. Lists every member with `must_change` + `is_admin` flags for the Member Passcodes card. |
-| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). Also `deadline` and, on a 200, `server_recv_utc` + `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
+| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). Also `deadline` (for a competition with a stored lock schedule: `next_lock_utc` = the lock the countdown points at, which may already have passed while the handover is still to run, plus `managed`, `locked`, `awaiting`, `season_over`, `applied_to`, `held`, `reason`; otherwise the old Monday-14:00 countdown) and, on a 200, `server_recv_utc` + `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
 | 2 | State | `/api/state` | POST | **DEAD** — see Dead Code. Was a generic "save anything" endpoint. |
 | 3 | Players | `/api/players` | GET | All players sorted by `season_pts DESC`. |
 | 3 | Players | `/api/resolve-player` | POST | Fuzzy-resolve a single name into a player ID. |
@@ -113,7 +113,7 @@ Phase 7.
 | 4 | History | `/api/player-points/<n>` | GET | **DEAD** (E1) — consumer was the dead Points tab. |
 | 4 | History | `/api/user-match-points/<n>` | GET | **DEAD** (E2 below) — consumer was the dead Matches tab. |
 | 4 | History | `/api/debug-points/<n>` | GET | **DEAD** (E3 below) — no consumer anywhere. |
-| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Auto-resolves typed names → IDs. Enforces budget = 100 CR and XI = 11. |
+| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Auto-resolves typed names → IDs. Enforces budget = 100 CR and XI = 11. Refused with 423 `reason:"locked"` from a week's lock until its handover has run (stored lock schedule), or by the old Monday rule for a competition with none. |
 | 5 | Save | `/api/member/<n>` | PUT | Create or update a member's `this_week` / `next_week` selections. |
 | 5 | Save | `/api/match` | POST | **DEAD** (E4 below) — generic match upsert; no UI calls it. |
 | 6 | Scoring | `/api/recalculate-points` | POST | Force-rebuild every points table. Wired in IplApi but admin-only manual use. |
@@ -124,12 +124,12 @@ Phase 7.
 | 6b | Audit | `/api/snapshot` | POST | Run both audits + leaderboard, write to `data/snapshot_<ts>.json`. Receipt for change reviews. |
 | 6c | Match Centre | `/api/match-centre` | GET | Hub endpoint — all matches grouped by week + per-match user pts + season summary. (§3.1) |
 | 6c | Match Centre | `/api/match-details/<id>` | GET | Box Score — historical XI for one match. Reads `tw_team_json` from the week the match belongs to. (§3.2) |
-| 7 | Admin | `/api/rollover` | POST | The weekly promotion. Since 2026-11-19: refuses a competition that is not `active` / not started (`rollover_refusal`); `force=1` needs a signed-in admin + `confirm=<slug>:<week>`. Callers: the scheduler token (workflow, off) or an admin with curl; the browser timer and the Simulate button were removed. |
+| 7 | Admin | `/api/rollover` | POST | The weekly handover (rewritten 2026-11-20, routes 1.12.0): applies **every overdue week of the stored lock schedule, in order**, one all-or-nothing transaction each, recorded once in the ledger (`db.reconcile_competition`); repeating it changes nothing. `?dry_run=1` reports what would happen and rolls back. `?force=1&confirm=<slug>:<week>` (signed-in admin only; the confirmation is the week the forced run would apply, named by the refusal, checked inside the transaction) applies the NEXT week now. A competition with no schedule is never rolled (200 no-op saying why); an upcoming one only starts, and only with auto-activation. A failure answers 500 with what was done; the next call carries on. Callers: the scheduler token or an admin; the browser timer and the Simulate button are gone. Writes heartbeat `rollover:scheduler` / `rollover:admin`. See [rollover_plan.md](rollover_plan.md). |
 | 7 | Admin | `/api/seed-history` | POST | **DEAD** (E5 below) — wired in IplApi but never called. Runs the W1-W4 re-seed. |
 | 7 | Admin | `/api/matches-status` | GET | All match rows + a `duplicate_url` flag computed server-side. Drives the Admin tab. (§8.1) |
 | 7 | Admin | `/api/update-match-url` | POST | Save a Cricbuzz URL + fire a background scrape. (§8.2) |
 | 7 | Admin | `/api/sync-now` | POST | Manual trigger for the daily discovery+scrape pipeline. (§9.1) |
-| 7 | Admin | `/api/admin/competition` | POST | Competition lifecycle (admin token): `create`, **`import`**, `activate`, `reopen`, `close` (crown). `import` uploads a roster and/or fixture list — body `{action:"import", slug, players?, schedule?, week1_anchor_utc?, dry_run}`; **`dry_run` defaults to true** (the DAO runs the same statements and rolls back), `false` saves. Validates via [competition_import.md](competition_import.md), upserts in one transaction (never deletes), returns a change report. 400 `{errors[], warnings[], needs_anchor}` on validation failure, 409 if the competition is completed, 413 over the app-wide 1 MB body cap. (§8.7) |
+| 7 | Admin | `/api/admin/competition` | POST | Competition lifecycle (admin token): `create`, **`import`**, **`schedule`**, `activate`, `reopen`, `close` (crown). `schedule` — body `{action:"schedule", slug, schedule (the fixture list as for import), dry_run (default true), auto_activate (true/false, omit to keep)}`: works the locks out of the fixtures (week 1 = opener − 60 min, later weeks Monday 14:00 UTC), cross-checks the weeks of the stored matches, stores the schedule (a week that already ran keeps its lock) and reports each lock in UTC and SAST. `import` uploads a roster and/or fixture list — body `{action:"import", slug, players?, schedule?, week1_anchor_utc?, dry_run}`; **`dry_run` defaults to true** (the DAO runs the same statements and rolls back), `false` saves. Validates via [competition_import.md](competition_import.md), upserts in one transaction (never deletes), returns a change report. 400 `{errors[], warnings[], needs_anchor}` on validation failure, 409 if the competition is completed, 413 over the app-wide 1 MB body cap. (§8.7) |
 | 8 | Static | `/` | GET | Renders `index.html`. |
 | 8 | Static | `/static/<path>` | GET | Serves files from `STATIC_DIR`. |
 | 8 | Static | `/manifest.json` | GET | PWA manifest with inline SVG icon. |
@@ -161,17 +161,13 @@ If the saved team contains *names* instead of *IDs* (an old client,
 a manual JSON post), `resolve_id_list` rewrites them in place and
 returns a `resolution_log` showing what changed. Same for `cap`/`vc`.
 
-### 5. Rollover idempotency
-`/api/rollover` always:
-1. Computes `lmd = last_monday_deadline(now, 14, 0)`.
-2. If `force=False` and `already_rolled(_last_rollover, lmd)` → no-op.
-3. If current_week ≥ MAX_WEEKS (=10 since 2026-05-18; was 8) → season complete, no-op.
-4. Otherwise: per-user, pick the active team (`pick_active_team`),
-   resolve IDs, insert a new week row, then update points.
-5. Set `_last_rollover` (unless `force=True`).
-
-The `force=1` query parameter skips the idempotency check but still
-updates state — used by the Dev Tools "Simulate" button.
+### 5. The weekly handover is idempotent and catches up (rewritten 2026-11-20)
+`/api/rollover` does not compute Mondays any more; the stored lock schedule decides:
+1. `db.reconcile_competition` asks `rollover_plan.next_due` for the first unapplied week whose lock has passed (and whose status allows it).
+2. It applies it in ONE transaction under a row lock on the competition (member rows, ledger row, `_last_rollover`, `_saved`), then asks again, up to 12 weeks per call.
+3. The ledger (`UNIQUE (competition_id, to_week)`) is what makes a week apply at most once, however many triggers call, however late.
+4. Afterwards `update_week_points` recomputes the derived points once.
+`force=1` ignores the lock time of the next week (never its status); `dry_run=1` is the same code path rolled back. The old per-call "move everyone one week" loop, `rollover_refusal` and the `already_rolled` check are gone from the route.
 
 ### 6. Wrong-scorecard recovery in Admin
 `/api/update-match-url` only validates that the URL contains a 5+

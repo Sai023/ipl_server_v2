@@ -24,6 +24,8 @@ from psycopg_pool import ConnectionPool
 
 from config import DB_VER  # noqa: F401
 from logic.session_policy import SESSION_TTL_DAYS, new_expiry, renewed_expiry
+from logic import rollover_plan as _plan
+from logic.rollover_engine import pick_active_team as _pick_active_team
 
 
 _SCHEMA = r"""
@@ -140,6 +142,32 @@ CREATE TABLE IF NOT EXISTS sessions (
     username    TEXT NOT NULL,
     expires_at  TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"')
+);
+CREATE TABLE IF NOT EXISTS competition_weeks (
+    competition_id  TEXT    NOT NULL,
+    week_no         INTEGER NOT NULL CHECK (week_no >= 1),
+    lock_at_utc     TEXT    NOT NULL,
+    first_match_utc TEXT,
+    PRIMARY KEY (competition_id, week_no)
+);
+CREATE TABLE IF NOT EXISTS rollover_log (
+    id             BIGSERIAL PRIMARY KEY,
+    competition_id TEXT    NOT NULL,
+    kind           TEXT    NOT NULL CHECK (kind IN ('start','rollover')),
+    to_week        INTEGER NOT NULL CHECK (to_week >= 1),
+    lock_at_utc    TEXT,
+    applied_at     TEXT    NOT NULL,
+    triggered_by   TEXT    NOT NULL DEFAULT '',
+    members        INTEGER NOT NULL DEFAULT 0,
+    detail_json    TEXT    NOT NULL DEFAULT '{}',
+    undone_at      TEXT,
+    UNIQUE (competition_id, to_week),
+    CHECK ((kind = 'start') = (to_week = 1))
+);
+CREATE TABLE IF NOT EXISTS ops_heartbeat (
+    source  TEXT PRIMARY KEY,
+    last_at TEXT NOT NULL,
+    detail  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_us_name      ON user_selections (display_name);
 CREATE INDEX IF NOT EXISTS idx_us_week      ON user_selections (week_no);
@@ -612,6 +640,327 @@ class DatabaseManager:
             con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) "
                         "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
                         (f"_last_rollover:{cid}", iso))
+
+    # ── Lock schedule and weekly transitions (Phase 1.5, 2026-11-20) ───────────────────────────────────────────────
+    # A competition with a stored schedule (competition_weeks) is MANAGED: when each week's XI locks, which transition is due and whether picking is
+    # locked all come from logic/rollover_plan.py. Every transition ("start" = the pre-season draft becomes the XI that plays week 1, "rollover" to week
+    # k = every member's draft becomes the XI that plays week k) runs in ONE transaction under a row lock on the competition (reconcile_competition), is
+    # recorded in rollover_log with what it changed (so it can be undone) and is applied at most once, whoever triggers it and however often.
+
+    def get_schedule(self, slug) -> list:
+        with self._read() as con:
+            return [dict(r) for r in con.execute(
+                "SELECT week_no, lock_at_utc, first_match_utc FROM competition_weeks WHERE competition_id=%s ORDER BY week_no", (slug,)).fetchall()]
+
+    def get_auto_activate(self, slug) -> bool:
+        return self.get_meta(f"auto_activate:{slug}", "") == "1"
+
+    @staticmethod
+    def _ledger_sets(con, slug):
+        """(applied, held): the weeks whose transition is in force, and the weeks an admin undid. A held week is NOT in force (picking stays locked, as the
+        competition is between two weeks) but no trigger applies it again by itself: only a forced run does."""
+        applied, held = set(), set()
+        for r in con.execute("SELECT to_week, undone_at FROM rollover_log WHERE competition_id=%s", (slug,)).fetchall():
+            (held if r["undone_at"] else applied).add(r["to_week"])
+        return applied, held
+
+    def get_lock_state(self, slug, now=None):
+        """The lock state of a managed competition (logic.rollover_plan.lock_state), or None when it has no schedule."""
+        now = _plan.parse_utc(now) or datetime.now(timezone.utc)
+        with self._read() as con:
+            comp = con.execute("SELECT status, max_weeks FROM competitions WHERE slug=%s", (slug,)).fetchone()
+            rows = [dict(r) for r in con.execute(
+                "SELECT week_no, lock_at_utc, first_match_utc FROM competition_weeks WHERE competition_id=%s ORDER BY week_no", (slug,)).fetchall()]
+            applied, held = self._ledger_sets(con, slug)
+        if not comp or not rows:
+            return None
+        state = _plan.lock_state(rows, applied, now, comp["status"], max_weeks=comp["max_weeks"])
+        state["held"] = sorted(held)
+        return state
+
+    def get_rollover_log(self, slug) -> list:
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT kind, to_week, lock_at_utc, applied_at, triggered_by, members, detail_json, undone_at "
+                "FROM rollover_log WHERE competition_id=%s ORDER BY to_week", (slug,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r); d["detail"] = _jloads(d.pop("detail_json"), {}); out.append(d)
+        return out
+
+    def set_schedule(self, slug, rows, *, auto_activate=None, dry_run=False) -> dict:
+        """Store a competition's lock schedule (validated by logic.rollover_plan). `auto_activate` (None = leave as it is) lets the competition start and
+        activate itself at its week-1 lock. A week whose transition has already run keeps its lock time. dry_run=True runs the same statements and ROLLS
+        BACK, so the report is exactly what a real call would do. Raises LookupError / ValueError with a readable message."""
+        with self._pool.connection() as con:
+            comp = con.execute("SELECT slug,status,max_weeks FROM competitions WHERE slug=%s FOR UPDATE", (slug,)).fetchone()
+            if not comp:
+                raise LookupError(f"competition '{slug}' not found")
+            if comp["status"] == "completed":
+                raise ValueError("this competition is completed and read-only")
+            errors = _plan.validate_schedule(rows, max_weeks=comp["max_weeks"])
+            if errors:
+                raise ValueError("; ".join(errors))
+            norm = [{"week_no": r["week_no"], "lock_at_utc": _plan.iso(_plan.parse_utc(r["lock_at_utc"])),
+                     "first_match_utc": _plan.iso(_plan.parse_utc(r.get("first_match_utc"))) if _plan.parse_utc(r.get("first_match_utc")) else None}
+                    for r in sorted(rows, key=lambda x: x["week_no"])]
+            old = {r["week_no"]: r["lock_at_utc"] for r in con.execute(
+                "SELECT week_no, lock_at_utc FROM competition_weeks WHERE competition_id=%s", (slug,)).fetchall()}
+            handled = sorted(self._ledger_sets(con, slug)[0])
+            for wk in handled:
+                new = next((r for r in norm if r["week_no"] == wk), None)
+                if new is None or _plan.parse_utc(new["lock_at_utc"]) != _plan.parse_utc(old.get(wk)):
+                    raise ValueError(f"week {wk} has already run; its lock time cannot change")
+            changed = [r["week_no"] for r in norm if _plan.parse_utc(old.get(r["week_no"])) != _plan.parse_utc(r["lock_at_utc"])]
+            con.execute("DELETE FROM competition_weeks WHERE competition_id=%s", (slug,))
+            for r in norm:
+                con.execute("INSERT INTO competition_weeks (competition_id, week_no, lock_at_utc, first_match_utc) VALUES (%s,%s,%s,%s)",
+                            (slug, r["week_no"], r["lock_at_utc"], r["first_match_utc"]))
+            if auto_activate is not None:
+                con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                            (f"auto_activate:{slug}", "1" if auto_activate else "0"))
+            con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                        (f"_saved:{slug}", datetime.now(timezone.utc).isoformat()))   # open browsers refresh their deadline
+            report = {"competition": slug, "weeks": len(norm), "schedule": norm, "changed_weeks": changed, "already_run": handled,
+                      "auto_activate": (auto_activate if auto_activate is not None else self.get_auto_activate(slug)), "dry_run": bool(dry_run)}
+            if dry_run:
+                con.rollback()
+        return report
+
+    def reconcile_competition(self, slug, now=None, *, triggered_by="app", force_next=False, expect_week=None, dry_run=False, max_steps=12) -> dict:
+        """Apply every transition that is due for a managed competition, in order. One transaction per transition (a failure leaves the weeks already
+        applied intact and nothing half done), each under a row lock on the competition and recorded once in rollover_log, so it does not matter how many
+        triggers call this or how late: it is a catch-up that is safe to repeat.
+
+        `force_next` applies exactly the next transition now whatever its lock time says, and also re-applies a week an admin undid (an explicit
+        rehearsal or repair; the status rules still hold). `expect_week` makes that step refuse unless it IS that week (the confirmation an admin typed
+        is checked inside the transaction, so a trigger that got there first cannot make a forced run apply a different week). dry_run=True applies
+        everything inside one transaction and ROLLS BACK, so the report is exactly what a real run would do.
+
+        Returns {"applied": [...], "skipped": reason or None, "error": text when a step failed (the steps before it are kept), ...}. A transition is
+        listed in "applied" only once its transaction has committed. Raises LookupError for an unknown competition."""
+        now = _plan.parse_utc(now) or datetime.now(timezone.utc)
+        rep = {"competition": slug, "now": now.isoformat(), "dry_run": bool(dry_run), "applied": [], "skipped": None}
+        steps = (lambda i: (force_next, expect_week) if i == 0 else (False, None))      # force and the confirmation belong to the first step only
+        if dry_run:
+            with self._pool.connection() as con:
+                try:
+                    for i in range(max_steps):
+                        f, ew = steps(i)
+                        entry = self._reconcile_one(con, slug, now, triggered_by, f, ew, rep)
+                        if entry is None:
+                            break
+                        rep["applied"].append(entry)
+                except LookupError:
+                    raise
+                except Exception as e:                                        # report it, as a real run would
+                    rep["error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    con.rollback()
+            return rep
+        for i in range(max_steps):
+            f, ew = steps(i)
+            try:
+                with self._pool.connection() as con:
+                    entry = self._reconcile_one(con, slug, now, triggered_by, f, ew, rep)
+            except LookupError:
+                raise
+            except Exception as e:                                            # this step is rolled back; the earlier ones stay
+                rep["error"] = f"{type(e).__name__}: {e}"
+                break
+            if entry is None:
+                break
+            rep["applied"].append(entry)                                      # only now: the transaction has committed
+        if rep["applied"]:
+            try:
+                self.update_week_points(competition_id=slug)                  # the derived points follow the new rows (idempotent)
+            except Exception as e:
+                rep["points_error"] = f"{type(e).__name__}: {e}"              # the transitions stand; the next scoring pass recomputes the points
+        return rep
+
+    def _reconcile_one(self, con, slug, now, triggered_by, force_next, expect_week, rep):
+        """Apply the next due transition inside `con` (None when nothing is due or it must not run; the reason goes into rep["skipped"])."""
+        comp = con.execute("SELECT slug,status,max_weeks FROM competitions WHERE slug=%s FOR UPDATE", (slug,)).fetchone()
+        if not comp:
+            raise LookupError(f"competition '{slug}' not found")
+        rows = [dict(r) for r in con.execute(
+            "SELECT week_no, lock_at_utc, first_match_utc FROM competition_weeks WHERE competition_id=%s ORDER BY week_no", (slug,)).fetchall()]
+
+        def skip(why):
+            if not rep["applied"]:
+                rep["skipped"] = why
+            return None
+
+        if not rows:
+            return skip("this competition has no lock schedule")
+        handled, held = self._ledger_sets(con, slug)
+        auto = (con.execute("SELECT value FROM meta WHERE key=%s", (f"auto_activate:{slug}",)).fetchone() or {}).get("value") == "1"
+        t = _plan.next_due(rows, handled, now, comp["status"], max_weeks=comp["max_weeks"], auto_activate=auto, force=force_next)
+        if t is None:
+            ls = _plan.lock_state(rows, handled, now, comp["status"], max_weeks=comp["max_weeks"])
+            if ls["season_over"]:
+                return skip("the season is over: " + ls["reason"])
+            if (ls["awaiting"] or force_next) and comp["status"] == "upcoming" and not auto:
+                return skip("the competition is upcoming and does not start itself (activate it, or turn on auto-activation)")
+            if ls["next_lock"]:
+                return skip("nothing is due yet: the next lock is " + _plan.iso(ls["next_lock"]))
+            return skip(ls["reason"] or "nothing is due")
+        if t["to_week"] in held and not force_next:
+            return skip(f"week {t['to_week']} was undone by an admin and is held: a forced run applies it again")
+        if expect_week is not None and t["to_week"] != expect_week:
+            return skip(f"the next week to apply is {t['to_week']}, not {expect_week}")
+        return self._apply_transition(con, slug, comp, t, now, triggered_by, redo=t["to_week"] in held)
+
+    def _apply_transition(self, con, slug, comp, t, now, triggered_by, redo=False) -> dict:
+        """One transition, inside the caller's transaction (and its row lock on the competition). Returns the report; the same facts, plus what it
+        changed, are written to rollover_log so the transition can be undone."""
+        now_iso = now.isoformat()
+        to_week, kind = t["to_week"], t["kind"]
+        names = sorted({r["username"] for r in con.execute("SELECT username FROM members").fetchall()}
+                       | {r["display_name"] for r in con.execute(
+                           "SELECT DISTINCT display_name FROM user_selections WHERE competition_id=%s", (slug,)).fetchall()})
+        known_ids = {r["id"] for r in con.execute("SELECT id FROM players WHERE competition_id=%s", (slug,)).fetchall()}
+        detail = {"before_status": comp["status"], "activated": False, "members": [], "inserted": [], "warnings": []}
+        cols = "tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id"
+        if kind == "start":
+            ahead = con.execute("SELECT MAX(week_no) AS wn FROM user_selections WHERE competition_id=%s", (slug,)).fetchone()["wn"]
+            if ahead is not None and ahead > 1:
+                raise ValueError(f"cannot start '{slug}': it already has selections for week {ahead}")
+        for name in names:
+            if kind == "start":
+                row = con.execute(f"SELECT week_no,{cols} FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=1 FOR UPDATE",
+                                  (slug, name)).fetchone()
+            else:
+                row = con.execute(f"SELECT week_no,{cols} FROM user_selections WHERE competition_id=%s AND display_name=%s "
+                                  "ORDER BY week_no DESC LIMIT 1 FOR UPDATE", (slug, name)).fetchone()
+            entry = {"name": name}
+            if row is None:                                                           # never drafted anything: an empty XI for the week (0 points)
+                con.execute("INSERT INTO user_selections (competition_id, display_name, week_no) VALUES (%s,%s,%s) "
+                            "ON CONFLICT (competition_id, display_name, week_no) DO NOTHING", (slug, name, to_week))
+                entry.update(action="created_empty", team_size=0, before=None, wrote={"team": "[]", "cap": None, "vc": None})
+                detail["inserted"].append(name)
+            elif kind == "rollover" and row["week_no"] >= to_week:
+                entry.update(action="skipped_ahead", team_size=len(_jloads(row["tw_team_json"], [])), week=row["week_no"])
+                detail["warnings"].append(f"{name} was already at week {row['week_no']}")
+            else:
+                team, cap, vc = _pick_active_team(row["nw_team_json"], row["nw_cap_id"], row["nw_vc_id"],
+                                                  row["tw_team_json"], row["tw_cap_id"], row["tw_vc_id"], _jloads)
+                ids = _jloads(team, [])
+                promoted = bool(_jloads(row["nw_team_json"], []))
+                bad = [i for i in ids if i not in known_ids]
+                if bad:
+                    detail["warnings"].append(f"{name}: {len(bad)} id(s) not in the roster: {', '.join(map(str, bad[:5]))}")
+                if kind == "start":
+                    entry.update(action="promoted" if promoted else ("kept" if ids else "empty"), team_size=len(ids),
+                                 before={"tw_team_json": row["tw_team_json"], "tw_cap_id": row["tw_cap_id"], "tw_vc_id": row["tw_vc_id"]})
+                    con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s "
+                                "WHERE competition_id=%s AND display_name=%s AND week_no=1", (team, cap, vc, slug, name))
+                else:
+                    entry.update(action="promoted" if promoted else ("carried" if ids else "empty"), team_size=len(ids), before=None,
+                                 wrote={"team": team, "cap": cap, "vc": vc})
+                    con.execute("INSERT INTO user_selections (competition_id,display_name,week_no,tw_team_json,tw_cap_id,tw_vc_id,nw_team_json,nw_cap_id,nw_vc_id) "
+                                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (competition_id,display_name,week_no) DO NOTHING",
+                                (slug, name, to_week, team, cap, vc, team, cap, vc))
+                    detail["inserted"].append(name)
+            detail["members"].append(entry)
+        if kind == "start" and comp["status"] == "upcoming":
+            con.execute("UPDATE competitions SET status='active' WHERE slug=%s", (slug,))
+            detail["activated"] = True
+        before = {}
+        for key in (f"_last_rollover:{slug}", f"_saved:{slug}"):
+            r = con.execute("SELECT value FROM meta WHERE key=%s", (key,)).fetchone()
+            before[key] = r["value"] if r else None
+        detail["meta_before"] = before
+        for key in (f"_last_rollover:{slug}", f"_saved:{slug}"):
+            con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, now_iso))
+        detail["redo"] = bool(redo)
+        cur = con.execute(
+            "INSERT INTO rollover_log (competition_id, kind, to_week, lock_at_utc, applied_at, triggered_by, members, detail_json) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (competition_id, to_week) DO UPDATE SET lock_at_utc=EXCLUDED.lock_at_utc, applied_at=EXCLUDED.applied_at, "
+            "triggered_by=EXCLUDED.triggered_by, members=EXCLUDED.members, detail_json=EXCLUDED.detail_json, undone_at=NULL "
+            "WHERE rollover_log.undone_at IS NOT NULL",                 # only a week an admin undid may be written again; a live one never is
+            (slug, kind, to_week, _plan.iso(t["lock_at"]), now_iso, triggered_by, len(names), json.dumps(detail)))
+        if cur.rowcount != 1:
+            raise RuntimeError(f"week {to_week} of '{slug}' is already in the ledger")
+        summary = {}
+        for e in detail["members"]:
+            summary[e["action"]] = summary.get(e["action"], 0) + 1
+        return {"kind": kind, "to_week": to_week, "lock_at": _plan.iso(t["lock_at"]), "applied_at": now_iso, "triggered_by": triggered_by,
+                "members": len(names), "summary": summary, "activated": detail["activated"], "warnings": detail["warnings"],
+                "season_complete": to_week >= comp["max_weeks"]}
+
+    def undo_transition(self, slug, to_week, *, force=False) -> dict:
+        """Take back the LAST transition of a competition: the rows it created are deleted (or week 1's XI is put back as it was), the status and the
+        two meta keys are restored, and the ledger row is kept with `undone_at` set so the transition is NOT applied again by itself (it stays held
+        until the row is forgotten on purpose). Refused if a later week has run, or (unless `force`) if points have already been worked out for the
+        week. Raises LookupError / ValueError with a readable message."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._pool.connection() as con:
+            if not con.execute("SELECT 1 FROM competitions WHERE slug=%s FOR UPDATE", (slug,)).fetchone():
+                raise LookupError(f"competition '{slug}' not found")
+            row = con.execute("SELECT id, kind, to_week, detail_json, undone_at FROM rollover_log WHERE competition_id=%s AND to_week=%s",
+                              (slug, to_week)).fetchone()
+            if not row:
+                raise LookupError(f"week {to_week} of '{slug}' has not been applied")
+            if row["undone_at"]:
+                raise ValueError(f"week {to_week} of '{slug}' was already undone")
+            later = [r["to_week"] for r in con.execute(
+                "SELECT to_week FROM rollover_log WHERE competition_id=%s AND to_week>%s AND undone_at IS NULL", (slug, to_week)).fetchall()]
+            if later:
+                raise ValueError(f"week {later[0]} has run after it: undo that one first")
+            detail = _jloads(row["detail_json"], {})
+            wrote = {m["name"]: m.get("wrote") for m in detail.get("members", [])}
+
+            def saved_since(name, week):
+                """Did this member save a draft into the row the handover created, after it ran? (the row's next-week columns no longer hold what it put there)"""
+                w = wrote.get(name)
+                r = con.execute("SELECT nw_team_json, nw_cap_id, nw_vc_id FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s",
+                                (slug, name, week)).fetchone() if w else None
+                return bool(r) and (r["nw_team_json"], r["nw_cap_id"], r["nw_vc_id"]) != (w["team"], w["cap"], w["vc"])
+
+            def refuse_if_drafts_would_be_lost(names):
+                lost = [n for n in names if saved_since(n, to_week if row["kind"] == "rollover" else 1)]
+                if lost and not force:
+                    raise ValueError(f"{', '.join(lost)} saved a new draft since this week was handed over, and undoing it would delete that draft; pass force to undo anyway")
+
+            if row["kind"] == "rollover":
+                if not force and con.execute("SELECT 1 FROM user_match_points WHERE competition_id=%s AND week_no=%s LIMIT 1", (slug, to_week)).fetchone():
+                    raise ValueError(f"points have already been worked out for week {to_week}; pass force to undo anyway")
+                refuse_if_drafts_would_be_lost(detail.get("inserted", []))
+                for name in detail.get("inserted", []):
+                    con.execute("DELETE FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s", (slug, name, to_week))
+                    con.execute("DELETE FROM user_match_points WHERE competition_id=%s AND display_name=%s AND week_no=%s", (slug, name, to_week))   # only a forced undo has any
+            else:
+                refuse_if_drafts_would_be_lost([m["name"] for m in detail.get("members", []) if m.get("action") == "created_empty"])
+                for m in detail.get("members", []):
+                    if m.get("action") == "created_empty":
+                        con.execute("DELETE FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=1", (slug, m["name"]))
+                    elif m.get("before"):
+                        b = m["before"]
+                        con.execute("UPDATE user_selections SET tw_team_json=%s, tw_cap_id=%s, tw_vc_id=%s WHERE competition_id=%s AND display_name=%s AND week_no=1",
+                                    (b["tw_team_json"], b["tw_cap_id"], b["tw_vc_id"], slug, m["name"]))
+                if detail.get("activated"):
+                    con.execute("UPDATE competitions SET status=%s WHERE slug=%s", (detail.get("before_status") or "upcoming", slug))
+            for key, val in (detail.get("meta_before") or {}).items():
+                if val is None:
+                    con.execute("DELETE FROM meta WHERE key=%s", (key,))
+                else:
+                    con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, val))
+            con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (f"_saved:{slug}", now_iso))
+            con.execute("UPDATE rollover_log SET undone_at=%s WHERE id=%s", (now_iso, row["id"]))
+        self.update_week_points(competition_id=slug)
+        return {"competition": slug, "undone_week": to_week, "kind": row["kind"], "undone_at": now_iso}
+
+    def touch_heartbeat(self, source, detail="") -> None:
+        """Record that something that should be running (the app, a clock, the PC runner) has just run."""
+        with self._write() as con:
+            con.execute("INSERT INTO ops_heartbeat (source,last_at,detail) VALUES (%s,%s,%s) ON CONFLICT (source) DO UPDATE SET last_at=EXCLUDED.last_at, detail=EXCLUDED.detail",
+                        (source, datetime.now(timezone.utc).isoformat(), str(detail or "")[:500]))
+
+    def get_heartbeats(self) -> list:
+        with self._read() as con:
+            return [dict(r) for r in con.execute("SELECT source, last_at, detail FROM ops_heartbeat ORDER BY source").fetchall()]
 
     # ── Rebuild / hydrate (JSON archives) ─────────────────────────────────
     def rebuild_scores_and_points(self, json_dir=None, competition_id=None) -> dict:
