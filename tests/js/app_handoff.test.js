@@ -64,7 +64,7 @@ function glue(response, token) {
 const ended = (c) => c.events.filter((e) => e.type === 'ipl:session-ended');
 
 t('GLUE: the browser asks for a code with ITS session and the app redeems it with no session; only the redeem stores a token', async () => {
-  const c = glue({ status: 200, body: { ok: true, code: CODE, expires_in: 120 } }, 'tok-browser');
+  const c = glue({ status: 200, body: { ok: true, code: CODE, expires_in: 120, token: 'must-never-be-stored' } }, 'tok-browser');      // (a reply with a stray token: it is the browser's session, not a sign-in)
   const d = await c.IplApi.authHandoff(CHALLENGE);
   assert.strictEqual(d.code, CODE);
   const ask = c.sent[0];

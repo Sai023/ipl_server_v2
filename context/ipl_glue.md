@@ -126,7 +126,7 @@ from the quickest trip (any trip under 300 ms always replaces the previous one; 
 ### 2c. A refused token ends the session in the open (2026-11-20; the rule changed 2026-11-21)
 `_fetchJson` reads a 401's `reason` first. A 401 with no reason, `session_ended` or `auth_required` means the session is gone: the token is forgotten and, when a token
 WAS sent (a signed-in member) and the call was not a sign-in attempt, `ipl:session-ended` is dispatched; the page answers with the blocking "You've been signed out" sheet
-(see index_html.md, "Session handling"). A sign-in attempt (`/api/login`, `/api/register`, `/api/auth/google`, `/api/auth/claim`, `/api/auth/join`) never ends a session, but a 401 there still clears a
+(see index_html.md, "Session handling"). A sign-in attempt (`/api/login`, `/api/register`, `/api/auth/google`, `/api/auth/claim`, `/api/auth/join`, `/api/auth/handoff/redeem`) never ends a session, but a 401 there still clears a
 stale token, as before. **Any other 401 reason is not a session ending**: a Google token that did not check out at `/api/auth/link` (`token_invalid`, `nonce_invalid` ...)
 is a refusal for a member who IS signed in; before 2026-11-21 every 401 was taken for a session ending. Tests: `tests/js/session_flow.test.js`, `tests/js/google_signin.test.js`.
 
@@ -285,8 +285,8 @@ What changed in this file: the overlay section, `MAINTENANCE_DELAY`, `SAFE_BOOT_
 ## Phase 3 additions (2026-11-21): Google sign-in
 
 New `IplApi` methods: `authConfig`, `authNonce`, `authGoogle(credential, nonce)` (stores the session token like `login`), `authLink(credential, nonce)`, `authClaim(ticket, name, passcode)` (a Google account nobody has linked is claimed with a member's name and passcode; stores the session token like `login`), `authJoin(ticket, name)` (a NEW
-member joins with that Google account and a display name, no passcode; stores the session token like `login`), `adminSetJoining(open)` (admin: open or close joining; answers `{joining_open, member_count, member_cap}`), `authLogout()`
-(ends THIS device's session on the server; the page calls it before it forgets the token), `adminUnlinkGoogle(name)`. The 401 rule changed (2c): `/api/auth/join` is a sign-in attempt too. The page's half is
+member joins with that Google account and a display name, no passcode; stores the session token like `login`), `adminSetJoining(open)` (admin: open or close joining; answers `{joining_open, member_count, member_cap}`), `authHandoff(challenge)` (the signed-in BROWSER asks for a one-time code for the app; stores nothing), `authHandoffRedeem(code, verifier)` (the APP gives the code back with its secret; the reply is the app's own session, stored like a login), `authLogout()`
+(ends THIS device's session on the server; the page calls it before it forgets the token), `adminUnlinkGoogle(name)`. The 401 rule changed (2c): `/api/auth/join` and `/api/auth/handoff/redeem` are sign-in attempts too. The page's half is
 `Static/auth_google.js`, see [google_signin.md](google_signin.md).
 
 The owner of the pattern is `Ui.connection` in `Static/ui.js` (see [index_html.md](index_html.md), "Server trouble, Phase 1.7"). `tests/js/connection.test.js` loads this file too and pins the three glue behaviours above.

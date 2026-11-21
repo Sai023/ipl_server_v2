@@ -57,7 +57,7 @@ class TheStore(unittest.TestCase):
 
     def test_a_code_is_redeemed_once_by_whoever_holds_the_verifier(self):
         c = self.code()
-        self.assertTrue(isinstance(c, str) and len(c) >= 40 and ah.CODE_RE.match(c))
+        self.assertTrue(isinstance(c, str) and len(c) == 43 and ah.CODE_RE.match(c), "32 random bytes, url-safe")
         self.assertEqual(self.s.redeem(c, V1), "Moe")
         self.assertIsNone(self.s.redeem(c, V1), "single-use")
 
@@ -108,6 +108,21 @@ class TheStore(unittest.TestCase):
         self.assertTrue(s.issue("Moe", ah.challenge_of("%043d" % 9)), "a used code made room")
         self.clock.now += 121
         self.assertTrue(s.issue("Sai", ah.challenge_of("%043d" % 10)), "expired codes make room")
+
+    def test_every_part_of_a_code_is_random(self):
+        codes = [self.s.issue("Moe", ah.challenge_of("%043d" % i)) for i in range(300)]
+        self.assertTrue(all(len(c) == 43 for c in codes))
+        for i in range(43):
+            self.assertGreater(len({c[i] for c in codes}), 1, "position %d of the code never varies: part of it is not random" % i)
+
+    def test_used_and_expired_codes_leave_nothing_behind(self):
+        s = ah.HandoffStore(clock=self.clock)
+        codes = [s.issue("Moe", ah.challenge_of("%043d" % i)) for i in range(50)]
+        for i in range(25):
+            self.assertEqual(s.redeem(codes[i], "%043d" % i), "Moe")
+        self.clock.now += 121                                  # the other twenty-five expire
+        self.assertTrue(s.issue("Sai", ah.challenge_of("%043d" % 99)))      # any call tidies up
+        self.assertEqual((len(s._items), len(s._by_key)), (1, 1), "the stores hold only the one live code: no index grows without limit")
 
     def test_codes_do_not_repeat_and_are_url_safe(self):
         seen = {self.s.issue("Moe", ah.challenge_of("%043d" % i)) for i in range(200)}
@@ -192,7 +207,7 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         self.assertEqual(r["http"], 200)
         self.assertEqual(sorted(r["body"]), ["code", "expires_in", "ok"])
         self.assertEqual((r["body"]["ok"], r["body"]["expires_in"]), (True, 120))
-        self.assertRegex(r["body"]["code"], r"^[A-Za-z0-9_-]{40,}$")
+        self.assertRegex(r["body"]["code"], r"^[A-Za-z0-9_-]{43}$")
 
     def test_both_routes_are_post_only(self):
         self.assertEqual(self.r("a_methods"), [405, 405])

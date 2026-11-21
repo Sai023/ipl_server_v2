@@ -1,9 +1,10 @@
-# Google sign-in (Phase 3, steps 1 to 3; 2026-11-21, app 2.22.0, 2.23.0 and 2.24.0)
+# Google sign-in (Phase 3, steps 1 to 4; 2026-11-21, app 2.22.0 to 2.25.0)
 
-`logic/google_identity.py` (the server's check of Google's ID token, and the claim tickets), the `identities` table and nine routes in `routes.py` (section 1.6), and
-`Static/auth_google.js` (the page's half). It replaces the 4-digit passcode over time (SA20 readiness plan, Phase 3). **Step 1** (2.22.0): the three current members switch from
+`logic/google_identity.py` (the server's check of Google's ID token, and the claim tickets), `logic/app_handoff.py` (the browser-to-app hand-off codes), the `identities` table and eleven routes
+in `routes.py` (section 1.6), and `Static/auth_google.js` (the page's half). It replaces the 4-digit passcode over time (SA20 readiness plan, Phase 3). **Step 1** (2.22.0): the three current members switch from
 the passcode to Google. **Step 2** (2.23.0): a Google account that belongs to nobody yet is claimed in ONE visit (see "Claiming a name"). **Step 3** (2.24.0): a NEW member joins
-with Google and a display name, no passcode (see "Joining with Google"). The devices list, the hand-off sign-in for installed apps and removing the passcode code are the next releases.
+with Google and a display name, no passcode (see "Joining with Google"). **Step 4** (2.25.0): the Android app signs in through the phone's browser and a one-time code (see "Signing in
+from the app"). The devices list and removing the passcode code are the next releases.
 
 ## What it does (business view)
 
@@ -41,6 +42,8 @@ never issued is refused. The store is capped (5,000 live nonces: a flood is answ
 | `POST /api/auth/claim` | `{ticket, name, passcode}`: that member proves who they are, ONCE; the account is linked, the passcode retired (one transaction) and they are signed in (`claimed: true`). 401 `claim_expired`, 429 `claim_locked`, 409 `member_taken`, 409 `temp_passcode`, 401 `bad_credentials` + `attempts_left`, 404 `member_not_found`, 400 `credentials_required`. |
 | `POST /api/auth/join` | `{ticket, name}`: a NEW member joins with the Google account the ticket stands for; the member and the identity are created in ONE transaction and they are signed in (`joined: true`). No passcode. 401 `claim_expired`, 400 `name_invalid`, 409 `name_taken`, 403 `joining_closed`, 409 `members_full`, 409 `google_account_in_use`, 400 `credentials_required`, 503 `google_not_configured`. |
 | `POST /api/admin/joining` | Admin only: `{open: true\|false}` opens or closes joining (meta key `joining_open`; open until an admin closes it). Answers `{joining_open, member_count, member_cap}`. 400 `bad_request` unless `open` is a boolean. |
+| `POST /api/auth/handoff` | `{challenge}` with the BROWSER's session: base64url(SHA-256(verifier)) of a secret the app made. Answers `{code, expires_in: 120}`, a single-use code bound to this member and challenge (see "Signing in from the app"). 401 `auth_required` / `session_ended`, 400 `bad_request` (not a 43-character base64url hash), 429 `rate_limited` (the store is full). Does not need Google. |
+| `POST /api/auth/handoff/redeem` | `{code, verifier}`, no session: the app proves it holds the secret and gets its OWN new session for the member the code was issued to (a sign-in reply). 401 `handoff_expired` for an unknown, used, expired or wrongly proven code or a member who no longer exists (never says which), 400 `credentials_required` for a malformed one (burns nothing). |
 | `POST /api/auth/link` | A signed-in member switches: links their Google account and **retires their passcode in the same transaction** (`db.link_identity`). 409 `google_account_in_use` (it belongs to another member) or 409 `already_linked` (they have a different one: an admin must unlink first). Linking the same account again is a harmless repeat. |
 | `POST /api/auth/logout` | Ends THIS device's session on the server (the page used to just forget its token). Safe to repeat. |
 | `POST /api/admin/auth/unlink` | Admin only: removes a member's link, gives them the temporary passcode `1234` (must be changed at the next sign-in) and ends their sessions, so the name can be claimed again. An admin who unlinks THEMSELVES keeps the session of the device they use (`self: true` in the reply). |
@@ -99,6 +102,37 @@ member joins like this:
    left with no way in. A Google-joined member who loses their Google account (an admin unlink) signs in with that temporary passcode, then chooses their own.
 6. The sign-in card has no registration form while Google is on (a hint says "New here? Continue with Google, then choose I'm new here."); with Google off (the variable unset) it is
    exactly as before, which is what makes the rollback safe.
+
+## Signing in from the app (step 4, 2.25.0): the browser hand-off
+
+The Android app (the separate project `ipl_fantasy_app`, outside this repo) is a WebView, and Google refuses to sign anybody in inside a WebView (`disallowed_useragent`). Disguising
+the app as a browser is against Google's rules and brittle, so the app does what native apps do (RFC 8252): the Google step happens in the phone's own browser and the browser hands
+the member back through a link of the app's own, with the PKCE proof (RFC 7636) that the app that asked is the app that receives the session. It needs **APK 1.5**; the old app keeps
+showing the "open in Chrome" notice.
+
+1. **In the app.** APK 1.5 adds the token `BCLFantasyApp/<version>` to the WebView's user agent. The page (`IplGoogle.appShell()`) sees it and, where the "open in Chrome" notice was,
+   shows **Sign in with Google in your browser**. A tap makes a random 43-character *verifier* (`crypto.getRandomValues`), keeps it in the app's own localStorage (`ipl_handoff_v`,
+   `{v, t}`, good for 15 minutes) and "loads" `/app-signin?c=<challenge>`, challenge = base64url(SHA-256(verifier)). The APK intercepts that address in `shouldOverrideUrlLoading` and
+   opens `APP_URL?handoff=<challenge>` in the phone's browser instead (only for a well-formed 43-character challenge and only on our own address). The verifier never leaves the app.
+2. **In the browser.** The page opens with `?handoff=<challenge>` (taken out of the address at once, kept in `sessionStorage` for 15 minutes, acted on only in an Android browser that is
+   not the app). The sign-in card says "You are signing in to the BCL Fantasy app. Sign in here, then tap Return to the app." The member signs in any way (Google, a claim, a join, a
+   passcode). After every sign-in `_googleAccount` calls `IplGoogle.offerHandoff(name)`: `POST /api/auth/handoff {challenge}` with the browser's session answers a **one-time code**
+   (single-use, 120 s, bound to this member and this challenge) and the sheet **Sign in to the app** shows **Return to the app**, an Android intent
+   `intent://auth?code=<code>#Intent;scheme=bclfantasy;package=com.iplfantasy.app;S.browser_fallback_url=<the site>;end` (the explicit package stops another app taking the link; the
+   fallback opens the site when the app is not installed). The sheet renews the code before it dies, goes to "Opening the app…" when tapped (so the code is not offered twice) and offers
+   "Open the app again" if nothing happened; "Not now" forgets the challenge. The "switch to Google" offer waits while this is pending.
+3. **Back in the app.** The intent opens the app (`bclfantasy://auth?code=...`: an intent filter on `MainActivity`; `onNewIntent` when it was running, `onCreate` when it was not) which loads
+   `APP_URL?handoff_code=<code>` after its server wake-up ping. The page takes the code out of the address, shows "Signing you in…" and calls `POST /api/auth/handoff/redeem {code, verifier}`
+   (no session needed): the server takes the code out of the store, checks SHA-256(verifier) against the challenge in constant time and creates the app's OWN session (a sign-in reply:
+   name, token, is_admin, must_change, linked, masked email). The page signs in exactly as for Google (`ipl:google-signed-in`) and says "Signed in as NAME. Welcome back to the app."
+
+Why it is safe. The code travels through a link, and another app can register `bclfantasy://auth` too, so a code on its own is worth nothing: redeeming needs the verifier, which only the
+app that started the sign-in holds. A wrong verifier burns the code (no guessing), a code lives two minutes, is single-use, is bound to the member whose browser session asked for it,
+and every failure is the same 401 `handoff_expired` (the reply never says which part failed). The browser's session is untouched; the app gets a separate one (signing out of one does not
+sign out the other). The routes work for ANY signed-in member and do not depend on Google (a member who still has a passcode can use them too). Nothing secret is echoed or logged.
+
+`logic/app_handoff.py` (`HandoffStore`, standard library only: no Flask, no database; in memory like the nonces and claim tickets; capped at 2,000 live codes; one live code per
+member + challenge) holds the codes. No schema change.
 
 ## Data (db_manager.py v6.11)
 
@@ -166,6 +200,10 @@ runtime twin) fails if anybody changes the policy, or adds a COOP without `same-
 12. The league takes at most `MAX_MEMBERS` (30) members and an admin can close joining at any time; both only stop NEW members. The member, their identity and (after the ticket is spent) their
     league row exist together or not at all.
 13. A Google account belongs to at most one member, whether it got there by switching, claiming or joining; the server decides which account (the ticket), the page never does.
+14. The app never gets a session from the browser's session: it gets a NEW one, by proving it holds the secret behind the challenge the browser was opened with. A hand-off code is single-use (also
+    when the proof is wrong), lives two minutes, and is bound to the member whose browser session asked for it and to the challenge it asked for.
+15. The hand-off is for ANY signed-in member (Google or passcode) and does not depend on Google being on; it is Android only (the intent link) and needs APK 1.5 (the user-agent token).
+16. The secret half lives in the app's own storage for at most fifteen minutes and is thrown away when it is used or refused; the address bar never keeps a challenge or a code.
 
 ## Tests
 
@@ -209,9 +247,17 @@ and 20 page-side mutants, all killed; the page run first showed that nothing cov
 11. **The passcode chips on the sign-in card list every member**, also a Google-only member (who has no passcode). Tapping such a chip asks for a passcode that cannot exist; the server answers
     `pin_retired` and the page moves the member on to Google. The chips go away once nobody has a passcode (`pin_enabled` false); until then the list grows with every member who joins.
 12. **Inside the old Android app (APK 1.4 and earlier) a new member cannot join**: Google refuses to sign anybody in inside the app's WebView, so the card shows the "open in Chrome" notice and
-    the hint "Continue with Google, then choose I'm new here" cannot be followed there. They join in Chrome. The hand-off release (2.25.0 with APK 1.5) lets the app do the Google step in the browser.
+    the hint "Continue with Google, then choose I'm new here" cannot be followed there. They join in Chrome. With APK 1.5 and release 2.25.0 the app does the Google step in the browser (see "Signing in from the app"), and joining works from there too.
+13. **The hand-off is Android only and needs APK 1.5.** The way back is an Android intent link (the app's user-agent token is what tells the page it is the app); an installed web app on iPhone needs a different
+    hand-off (the plan's Spike S). The old app (1.4) keeps the notice.
+14. **Hand-off codes are in memory too** (same limit as #1 and #5): a restart between the browser sign-in and the tap on Return to the app means "That browser sign-in has expired", and the member taps the
+    in-app button again.
+15. **`intent:` links need a browser that follows them** (Chrome and Samsung Internet do). Another Android browser may ignore the link: the sheet's hint says to check that the app is installed, and the member
+    can open the page in Chrome.
+16. **The secret half must survive the trip.** If Android clears the app's data (or the member clears it) between tapping the in-app button and coming back, the code is refused locally ("did not start in
+    this app") and the member starts again.
 
 ## Open questions / next releases
 
-An alert to the admin when somebody joins, the devices list and "sign out other devices", the browser-tab hand-off for installed apps (needed for the Android app, and on iPhone), draft
+An alert to the admin when somebody joins, the devices list and "sign out other devices", the hand-off for an installed web app on iPhone (the Android hand-off is step 4), draft
 privacy, "Delete my account", removing the passcode code once everyone has switched, and the Android real-phone checks of Google in an installed web app (the plan's Spike S).
