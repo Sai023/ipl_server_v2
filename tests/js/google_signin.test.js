@@ -781,6 +781,22 @@ t('PAGE: the admin switch calls the server, remembers the answer and says what i
   assert.strictEqual(bad.log.filter((x) => x[0] === 'fail').length, 1); assert.strictEqual(bad._adminJoining, null);
 });
 
+t('PAGE: the admin member list remembers how open the league is and redraws the admin tab, but only when the server says so (an older server says nothing: nothing is invented)', async () => {
+  const mk = (reply) => {
+    const c = page({ fns: ['_loadAdminMembers'], google: false });
+    c._adminMembersList = null; c._adminJoining = null; c._state = {}; c._activeTab = 'admin'; c.log = [];
+    c.render = () => c.log.push(['render']); c.IplApi = { adminListMembers: () => Promise.resolve(reply) };
+    return c;
+  };
+  const c = mk({ ok: true, members: [{ name: 'Sai' }], joining_open: false, member_count: 3, member_cap: 30 });
+  c._loadAdminMembers(); await flush();
+  assert.deepStrictEqual(plain(c._adminJoining), { open: false, count: 3, cap: 30 }); assert.strictEqual(c._adminMembersList.length, 1);
+  assert.ok(c.log.some((x) => x[0] === 'render'), 'the admin tab is drawn again once the list is in');
+  const old = mk({ ok: true, members: [] });
+  old._loadAdminMembers(); await flush();
+  assert.strictEqual(old._adminJoining, null); assert.deepStrictEqual(plain(old._adminMembersList), []);
+});
+
 t('PAGE: a new member is welcomed: the page listens for ipl:google-joined and names the member and the masked address', () => {
   assert.ok(/addEventListener\("ipl:google-joined",function\(e\)\{[^]*?Ui\.success\("Welcome"/.test(HTML), 'no listener that welcomes a new member');
   assert.ok(/From now on just tap Continue with Google/.test(HTML));
