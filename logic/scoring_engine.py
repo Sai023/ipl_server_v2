@@ -22,7 +22,7 @@ debug_calc_pts(s, player_id, cap_id, vc_id)
     Audit utility — same maths as calc_pts() but returns a step-by-step
     breakdown dict (base_pts, multiplier, final_pts, per-component steps)
     for validation and console inspection. Calls calc_pts(s) internally so
-    the totals always agree. Used by /api/audit-scores.
+    the totals always agree. (Its only caller, /api/audit-scores, was removed 2026-11-21; kept for a competition-aware trace later.)
 
 CAP_MULT = 2.0
 VC_MULT  = 1.5

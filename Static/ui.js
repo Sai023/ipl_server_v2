@@ -4,8 +4,9 @@
      Ui.confirm({title,message,confirmText,danger})  -> Promise<boolean>
      Ui.prompt({title,message,label,validate})        -> Promise<string|null>
      Ui.notice({title,message})                       -> Promise<void>
-     Ui.errorMessage(err, fallback)  plain-language text for any failed request (uses the server's machine `reason` when we have a sentence for it)
-     Ui.errorFor(reason, fallback) / Ui.errorReason(err)  the sentence for a server `reason`, and the reason carried by a failed request
+     Ui.errorMessage(err, fallback)  plain-language text for any failed request (uses the server's machine `reason` when we have a sentence for it; an unexpected
+                                     server failure also shows its short request id as "(ref ...)")
+     Ui.errorFor(reason, fallback) / Ui.errorReason(err) / Ui.errorRef(err)  the sentence for a server `reason`, the reason carried by a failed request, and its request id
      Ui.stateHtml(kind, {title,message,retry})  loading | empty | error | offline cards
      Ui.connection  one slim banner for any trouble reaching the server (health from every /api/ call, quiet probe, backoff, Retry now; Phase 1.7)
      Ui.boot  staged loading messages for a slow first load (server waking up), with a real failure screen + Retry
@@ -29,17 +30,23 @@
     locked:          "Picks are locked right now. Your last saved XI is the one that counts.",
     name_taken:      "Someone already has that name. Try another.",
     bad_credentials: "Wrong name or passcode.",
+    not_found:       "That could not be found.",
+    too_large:       "That is too large to send.",
+    bad_request:     "That request was not understood. Please try again.",
     server_error:    "The server had a problem. Please try again in a moment."
   };
   Ui.errorFor = function (reason, fallback) { return Object.prototype.hasOwnProperty.call(REASON_COPY, reason) ? REASON_COPY[reason] : (fallback || ""); };
   Ui.errorReason = function (err) { var d = err && typeof err === "object" ? err.serverData : null; return (d && typeof d.reason === "string") ? d.reason : ""; };
+  /* An unexpected server failure carries a short request id (the same id is in the server log next to the real error). Showing it as "(ref 3fa9c2d1)" lets a
+     member who sends a screenshot give us the exact failure. Only a plain short id is shown, never anything else the server might have put there. */
+  Ui.errorRef = function (err) { var d = err && typeof err === "object" ? err.serverData : null, id = d && d.request_id; return (typeof id === "string" && /^[A-Za-z0-9]{4,16}$/.test(id)) ? " (ref " + id + ")" : ""; };
   Ui.errorMessage = function (err, fallback) {
     fallback = fallback || "Something went wrong. Please try again.";
     if (!err) return fallback;
     if (typeof err === "string") return err;
     var byReason = Ui.errorFor(Ui.errorReason(err));
-    if (byReason) return byReason;                                 // a reason we have a sentence for
-    if (err.serverMessage) return err.serverMessage;               // otherwise the server's own readable explanation wins
+    if (byReason) return byReason + Ui.errorRef(err);              // a reason we have a sentence for
+    if (err.serverMessage) return err.serverMessage + Ui.errorRef(err);   // otherwise the server's own readable explanation wins
     var s = err.status;
     if (s === 401) return "Your session has expired. Please sign in again.";
     if (s === 403) return "You don't have permission to do that.";
@@ -262,7 +269,7 @@
 
   /* ---------- connection health: ONE slim banner for every kind of trouble reaching the server (2026-11-21, Phase 1.7) ----------
      Evidence comes from every /api/ call (Ui.connection.watch wraps fetch once): an answer below 500 means the server is fine; a 5xx, or no answer, is trouble.
-     One failure shows nothing: a probe of /api/ping follows 3 s later and only a second failure raises the banner, so a single blip never flashes.
+     One failure shows nothing: a probe of /api/health follows 3 s later and only a second failure raises the banner, so a single blip never flashes.
      While in trouble the probe backs off (3, 5, 10, 20, 40, then every 60 s, paused while the tab is hidden); the first good answer clears the banner and fires
      "ipl:recovered" so the page refreshes at once. The banner sits in the flow ABOVE the app (never over the app bar) and blocks nothing: what happened, what is safe,
      what to do (Retry now). Offline outranks server trouble, which outranks "can't confirm your sign-in". */
@@ -330,7 +337,7 @@
     health.probes++;
     var f = rawFetch || (typeof window.fetch === "function" ? window.fetch : null);
     if (!f) return;
-    f.call(window, "/api/ping", { cache: "no-store", headers: { "Accept": "application/json" } })
+    f.call(window, "/api/health", { cache: "no-store", headers: { "Accept": "application/json" } })   // one SELECT 1 on the server (/api/ping costs five statements)
       .then(function (r) { Ui.connection.report(r.status); }, function () { Ui.connection.report(0); });
   }
   function scheduleProbe() {

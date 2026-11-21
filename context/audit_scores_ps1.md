@@ -1,5 +1,10 @@
 # Audit_Scores.ps1 — The Operator's "Are the Scores Right?" Tool
 
+> **2026-11-21: this script no longer works.** The two routes it calls, `/api/audit-scores/<n>` and `/api/clean-scores`, were removed in the
+> hardening release (2.21.0): three of the audit routes answered anyone with no sign-in, `audit-scores` mixed competitions together, and `clean-scores`
+> wiped a competition's scores. The script is kept only until the INF-1 leftovers are cleared; delete it or rebuild it on a competition-aware, admin-only
+> trace (`logic.scoring_engine.debug_calc_pts` is still there).
+
 ## What it does (business view)
 
 `Audit_Scores.ps1` is the **operator-side validation tool**. Given a

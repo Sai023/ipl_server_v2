@@ -13,7 +13,7 @@ Fix — clean linear dependency graph:
 base.py owns ALL shared state:
   • Flask app singleton
   • DatabaseManager singleton (db)
-  • Logging, rate limiter, _db_con, player resolver
+  • Logging, rate limiter, the central error handling (one door for HTTP errors, one for unexpected ones), the player resolver (read-only, one competition)
   • Path / game constants
   • CURRENT_PUBLIC_URL (mutable — updated by server.py via `base.CURRENT_PUBLIC_URL = url`)
 
@@ -26,13 +26,12 @@ import json as _json
 import logging as _logging
 import re
 import secrets as _secrets
-import psycopg
-from psycopg.rows import dict_row
 import threading
 import time
 import unicodedata
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
+from werkzeug.exceptions import HTTPException
 from db_manager import DatabaseManager
 from config import DATABASE_URL, BASE_DIR, DATA_DIR  # paths + DB DSN — single source of truth
 from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated here
@@ -78,14 +77,15 @@ def _token_set_ratio(a, b):
     inter = exp & tb; union = exp | tb
     return len(inter)/len(union) if union else 0.0
 
-def _load_all_players(con):
-    return [dict(r) for r in con.execute("SELECT id,name,team,role,price FROM players").fetchall()]
+def _load_all_players(con, competition_id):
+    # ONE competition's players. Ids and names repeat across competitions (an SA20 "p7" is not an IPL "p7"), so the resolver must never look at another one.
+    return [dict(r) for r in con.execute("SELECT id,name,team,role,price FROM players WHERE competition_id=%s", (competition_id,)).fetchall()]
 
-def resolve_player_id(con, input_str, team_hint=None, fuzzy_threshold=0.40):
+def resolve_player_id(con, input_str, team_hint=None, fuzzy_threshold=0.40, *, competition_id):
     if not input_str: return None
     raw=str(input_str).strip(); norm=_normalise(raw)
     th=(team_hint or "").strip().upper() if team_hint else None
-    players=_load_all_players(con)
+    players=_load_all_players(con, competition_id)
     if not players: return None
     for p in players:
         if p["id"]==raw: return {**p,"_match_tier":1}
@@ -118,27 +118,28 @@ def resolve_player_id(con, input_str, team_hint=None, fuzzy_threshold=0.40):
             return {**hits[0],"_match_tier":6}
     return None
 
-def resolve_id_list(con, id_or_name_list, display_name=None, week_no=None):
-    resolved=[]; log=[]; needs_patch=False
+def needs_resolving(*items):
+    """True when any of these is not a canonical player id (a name, a typo, an old id): only then does a save need the player list. The page always
+    sends canonical ids, so a normal save never touches it."""
+    return any(x and not _ID_RE.match(str(x).strip()) for x in items)
+
+def resolve_id_list(con, id_or_name_list, *, competition_id):
+    """Turn what a caller sent into player ids of THIS competition. READ-ONLY: it never writes (it used to patch the member's stored draft, in every
+    competition, before the save was even validated, so a REJECTED save could still change a draft; the save writes the resolved team itself).
+    `con` is only used for an item that is not a canonical id; with canonical ids only, it may be None."""
+    resolved=[]; log=[]
     for item in id_or_name_list:
         s=str(item).strip() if item else ""
         if _ID_RE.match(s):
             resolved.append(s); log.append({"input":s,"output":s,"tier":0,"action":"passthrough"}); continue
-        match=resolve_player_id(con,s)
+        match=resolve_player_id(con,s,competition_id=competition_id)
         if match:
             canonical=match["id"]; action="corrected" if canonical!=s else "resolved"
-            if action=="corrected": needs_patch=True
             resolved.append(canonical)
             log.append({"input":s,"output":canonical,"name":match["name"],"team":match["team"],"tier":match["_match_tier"],"action":action})
         else:
             resolved.append(s); log.append({"input":s,"output":s,"tier":-1,"action":"unresolved"})
             _log(f"[resolver] UNRESOLVED: '{s}'","warning")
-    if needs_patch and display_name and week_no is not None:
-        try:
-            con.execute("UPDATE user_selections SET nw_team_json=%s WHERE display_name=%s AND week_no=%s",
-                        (_json.dumps(resolved),display_name,week_no))
-        except Exception as e:
-            _log(f"[resolver] Write-back failed: {e}","warning")
     return resolved, log
 
 
@@ -166,15 +167,6 @@ def _setup_logging():
 
 _logger=_setup_logging()
 def _log(msg,level="info"): getattr(_logger,level,_logger.info)(msg)
-
-
-# ── DB connection factory ────────────────────────────────────────────────────────────────
-
-def _db_con():
-    # Standalone psycopg connection for the player resolver (get + close pattern).
-    # autocommit so resolve_id_list's write-back commits without an explicit commit.
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row,
-                           prepare_threshold=None, autocommit=True)
 
 
 # ── Rate limiter ────────────────────────────────────────────────────────────────────
@@ -215,34 +207,69 @@ app = Flask(
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
 
-# ── Flask error handlers + middleware ────────────────────────────────────────────────
+# ── Flask error handling + middleware ────────────────────────────────────────────────
+# Every failure leaves through ONE of two doors (2026-11-21, hardening release 2.21.0):
+#   * an HTTP error (404, 405, 413 ...)         -> _handle_http: a small JSON body on /api/, plain text elsewhere. NEVER the app page: an unknown /api/ path
+#     used to answer 200 with the whole HTML page, and a missing /static/ file too, so a typo or a removed endpoint looked like success.
+#   * anything unexpected (a bug, the database)  -> _handle_unexpected: the traceback goes to the log under a short request id; the caller gets a fixed
+#     sentence plus that id, never the exception's own text (a failed-connection message names the database host, a constraint error names a table).
+# Routes therefore do not catch Exception themselves: they only answer the failures they EXPECT, with their own sentence and `reason`.
 
-@app.errorhandler(psycopg.IntegrityError)
-def _handle_integrity(e):
-    msg=str(e)
-    if "unique" in msg.lower() or "duplicate" in msg.lower(): return jsonify({"error":f"Duplicate record: {msg}","code":400}),400
-    if "check" in msg.lower() or "foreign key" in msg.lower(): return jsonify({"error":f"Constraint: {msg}","code":400}),400
-    return jsonify({"error":msg,"code":400}),400
+_SERVER_ERROR_TEXT = "The server had a problem. Please try again in a moment."
 
-@app.errorhandler(psycopg.OperationalError)
-def _handle_operational(e):
-    _log(f"Database error: {e}","error")
-    return jsonify({"error":"Database error","detail":str(e),"code":500,"reason":"server_error"}),500
+def _is_api(path):
+    return path == "/api" or path.startswith("/api/")
 
-@app.errorhandler(500)
-def _handle_500(e):
-    _log(f"500: {e}","error"); return jsonify({"error":"Internal error","code":500,"reason":"server_error"}),500
+def _wants_page():
+    """True for a person opening a link: GET or HEAD, not the API, not a static file, and the last part of the path does not name a file (no dot, or
+    index.html). Only such a request gets the app page when no route matches, so a bookmarked or mistyped address still opens the app; a bot asking for
+    /robots.txt or /wp-login.php, and anything that is not a GET, gets a real 404."""
+    if request.method not in ("GET","HEAD"): return False
+    p = request.path
+    if _is_api(p) or p.startswith("/static/"): return False
+    leaf = p.rsplit("/",1)[-1]
+    return leaf in ("","index.html") or "." not in leaf
 
-@app.errorhandler(404)
-def _handle_404(e):
-    try: return render_template("index.html"),200
-    except: return jsonify({"error":"Not found","code":404}),404
+def _unexpected(e):
+    """Log the real failure with a short request id and answer with a fixed sentence plus that id (also in the X-Request-Id header). A member who
+    screenshots the sentence gives us the id, and the id finds the traceback in the log."""
+    e = getattr(e,"original_exception",None) or e
+    rid = _secrets.token_hex(4)
+    _logger.error("[%s] %s %s failed: %r", rid, request.method, request.path, e, exc_info=e)
+    if _is_api(request.path):
+        resp = jsonify({"error":_SERVER_ERROR_TEXT,"ok":False,"code":500,"reason":"server_error","request_id":rid})
+    else:
+        resp = Response(f"{_SERVER_ERROR_TEXT} (ref {rid})\n", mimetype="text/plain")
+    resp.status_code = 500
+    resp.headers["X-Request-Id"] = rid
+    return resp
+
+@app.errorhandler(HTTPException)
+def _handle_http(e):
+    code = e.code or 500
+    if code >= 500: return _unexpected(e)
+    if code < 400: return e.get_response()                 # a redirect is not an error: leave it alone
+    if _is_api(request.path):
+        if code == 404: body = {"error":"Not found","code":404,"reason":"not_found"}
+        elif code == 405: body = {"error":"Method not allowed","code":405,"reason":"method_not_allowed"}
+        elif code == 413: body = {"error":"That is too large to send","code":413,"reason":"too_large"}
+        else: body = {"error":"That request was not understood","code":code,"reason":"bad_request"}
+        resp = jsonify(body); resp.status_code = code
+        if code == 405 and getattr(e,"valid_methods",None): resp.headers["Allow"] = ", ".join(e.valid_methods)
+        return resp
+    if code == 404 and _wants_page(): return render_template("index.html"),200
+    return Response(f"{e.name}\n", status=code, mimetype="text/plain")
+
+@app.errorhandler(Exception)
+def _handle_unexpected(e):
+    return _unexpected(e)
 
 @app.after_request
 def _security_headers(response):
     response.headers["X-Content-Type-Options"]="nosniff"
     response.headers["X-Frame-Options"]="DENY"
     response.headers["Referrer-Policy"]="same-origin"
+    response.headers["Strict-Transport-Security"]="max-age=31536000"   # the app is https-only; no includeSubDomains (the host is Render's, not ours)
     p = request.path
     if p.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"

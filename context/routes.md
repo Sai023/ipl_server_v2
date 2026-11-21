@@ -17,6 +17,14 @@
 > `competitions` row via `_comp_cfg()`. See
 > [multi_competition.md](multi_competition.md).
 
+> **Hardening release (2026-11-21, routes 1.14.0, app 2.21.0).** Failures leave through two doors in [base.py](../base.py): an HTTP error
+> (404, 405, 413 ...) is a small JSON body on `/api/` (`not_found`, `method_not_allowed`, `too_large`, `bad_request`) and plain text elsewhere, never
+> the app page (the page is only for a person opening a link: a GET with no file name in the path); anything unexpected is logged with a short request
+> id and answered `{error: <fixed sentence>, reason: "server_error", request_id}` (also in `X-Request-Id`), never the exception's own text. Routes no
+> longer catch `Exception` themselves; they only answer failures they expect. New: `GET /api/health` (one `SELECT 1`, the banner's probe). `/api/state`
+> reads its tag before the data. The player resolver is read-only and looks at one competition. HSTS is sent. Removed: `/api/audit-scores/<n>`,
+> `/api/clean-scores`, `/api/audit-player-ids`, `/api/audit-blobs`, `/api/snapshot`.
+
 ## What it does (business view)
 
 `routes.py` is the **whole HTTP API** of the league — every URL the
@@ -35,12 +43,10 @@ Every handler follows the same shape:
 5. Wrap the result in `jsonify()` with `ok: True/False` and a
    sensible HTTP status code.
 
-The handlers themselves contain almost no business logic. The two
-exceptions are the **rollover handler** (which orchestrates the
+The handlers themselves contain almost no business logic. The
+exception is the **rollover handler** (which orchestrates the
 `logic.rollover_engine` + `db_manager` rollover DAO into a single
-transaction) and the **audit-scores handler** (which re-computes
-points from raw stats using `logic.scoring_engine.calc_pts` and
-compares against the stored totals).
+transaction). (The audit-scores handler that re-computed points was removed 2026-11-21.)
 
 ## Multi-competition (rebuild)
 
@@ -94,7 +100,8 @@ Phase 7.
 | # | Group | Route | Method | Purpose |
 |---|-------|-------|--------|---------|
 | 1 | System | `/api/version` | GET | Returns `APP_VERSION` + every module's version pin + `VERSION_MAP` changelog. |
-| 1 | System | `/api/ping` | GET | Liveness check + `public_url` + budget constants. |
+| 1 | System | `/api/ping` | GET | Liveness check + `public_url` + budget constants (the page loads its competition config from it at start; Render's health check). Five statements. |
+| 1 | System | `/api/health` | GET | **(2026-11-21)** Is the server up and can it reach its database? One `SELECT 1`, answers `{ok:true}`; 500 (the usual `server_error` body) when the database is gone. The page's connection banner probes this while the server is in trouble. |
 | 1 | System | `/api/_test-push` | POST | **HOSTED-only diagnostic.** Bumps `meta._last_test_push`, calls `db.checkpoint()`, then `cloud_sync.commit_and_push` directly. Returns raw `(ok, msg)` from the push attempt — the only way to verify the host→git write path on Render free tier (no shell available). Returns 400 in local mode. No auth — only side effect is one extra commit and no secrets leak (token is sanitised). Added post-launch when zero `ui:` commits appeared in the first 24h of HOSTED operation. |
 | 1 | System | `/api/poll` | GET | Returns just the state ETag — the polling endpoint — plus `server_recv_utc` and `server_now_utc` (the server's clock when the request arrived and when the reply leaves, 2026-11-20: the page counts down to a lock on it, not on the phone's clock; see ipl_glue.md `IplClock`). |
 | 1 | System | `/api/current-week` | GET | Just the integer week number. |
@@ -104,25 +111,20 @@ Phase 7.
 | 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
 | 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
 | 1.5 | Auth | `/api/admin/members` | GET | Phase 12 — admin-only. Lists every member with `must_change` + `is_admin` flags for the Member Passcodes card. |
-| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware (304 on match). Also `deadline` (for a competition with a stored lock schedule: `next_lock_utc` = the lock the countdown points at, which may already have passed while the handover is still to run, plus `managed`, `locked`, `awaiting`, `season_over`, `applied_to`, `held`, `reason`; otherwise the old Monday-14:00 countdown) and, on a 200, `server_recv_utc` + `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
+| 2 | State | `/api/state` | GET | The biggest read — members, matches, scores, `player_pts`. ETag-aware: the tag is read FIRST and a matching `If-None-Match` answers 304 (with the `ETag`) before any heavy read; the body's `_saved` is that same tag (2026-11-21). Also `deadline` (for a competition with a stored lock schedule: `next_lock_utc` = the lock the countdown points at, which may already have passed while the handover is still to run, plus `managed`, `locked`, `awaiting`, `season_over`, `applied_to`, `held`, `reason`; otherwise the old Monday-14:00 countdown) and, on a 200, `server_recv_utc` + `server_now_utc` (a 304 has no body, so `/api/poll` carries the time too). |
 | 2 | State | `/api/state` | POST | **DEAD** — see Dead Code. Was a generic "save anything" endpoint. |
 | 3 | Players | `/api/players` | GET | All players sorted by `season_pts DESC`. |
-| 3 | Players | `/api/resolve-player` | POST | Fuzzy-resolve a single name into a player ID. |
+| 3 | Players | `/api/resolve-player` | POST | Fuzzy-resolve a single name into a player ID of the competition `?comp=` names (2026-11-21: that competition only; pooled connection). |
 | 3 | Players | `/api/leaderboard` | GET | The 73-line CTE from [db_manager.py:178](../db_manager.py:178). Supports `?week=N`. |
 | 4 | History | `/api/history/<n>` | GET | Week-by-week XI history for one user. Each week row also carries `next_week_touched_at`: when the member last saved or kept that week's draft (null = not since the row was created). |
 | 4 | History | `/api/player-points/<n>` | GET | **DEAD** (E1) — consumer was the dead Points tab. |
 | 4 | History | `/api/user-match-points/<n>` | GET | **DEAD** (E2 below) — consumer was the dead Matches tab. |
 | 4 | History | `/api/debug-points/<n>` | GET | **DEAD** (E3 below) — no consumer anywhere. |
-| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Auto-resolves typed names → IDs. Enforces budget = 100 CR and XI = 11. Refused with 423 `reason:"locked"` from a week's lock until its handover has run (stored lock schedule), or by the old Monday rule for a competition with none. Body may carry `week` = the week the page says its draft is FOR (the handover it will be promoted at: on a lock schedule the first week not yet handed over, otherwise the week after the current one): if a handover moved that on since the page loaded (this includes the week-1 start, which does not change the row week) nothing is written and the answer is 409 `reason:"week_changed"` with `current_week` and `draft_week`. A save marks the draft touched (`nw_touched_at`) and answers `touched_at`. (2026-11-20, routes 1.13.0) |
+| 5 | Save | `/api/save-next-week/<n>` | POST | Save a user's next-week draft. Resolves typed names → IDs within this competition (read-only: canonical ids never touch the player list, and a refused save changes nothing). Enforces budget = 100 CR and XI = 11. Refused with 423 `reason:"locked"` from a week's lock until its handover has run (stored lock schedule), or by the old Monday rule for a competition with none. Body may carry `week` = the week the page says its draft is FOR (the handover it will be promoted at: on a lock schedule the first week not yet handed over, otherwise the week after the current one): if a handover moved that on since the page loaded (this includes the week-1 start, which does not change the row week) nothing is written and the answer is 409 `reason:"week_changed"` with `current_week` and `draft_week`. A save marks the draft touched (`nw_touched_at`) and answers `touched_at`. (2026-11-20, routes 1.13.0) |
 | 5 | Save | `/api/keep-xi/<n>` | POST | **"Keep this XI"** (2026-11-20): the member confirms the draft they already have, usually last week's XI carried over; nothing about the team changes, the draft is only marked touched, which is what a reminder looks at ("no changes" = no save and no keep since the week began). Same lock rules as a save (423), optional `week` as for a save (409 `week_changed`), 409 `nothing_to_keep` when there is no team (draft or XI) to keep, self-only (403 `not_your_team`). Answers `{ok, week_no, touched_at}`. |
 | 5 | Save | `/api/member/<n>` | PUT | Create or update a member's `this_week` / `next_week` selections. |
 | 5 | Save | `/api/match` | POST | **DEAD** (E4 below) — generic match upsert; no UI calls it. |
 | 6 | Scoring | `/api/recalculate-points` | POST | Force-rebuild every points table. Wired in IplApi but admin-only manual use. |
-| 6 | Scoring | `/api/audit-scores/<n>` | GET | Re-derives every week's pts from `match_scores` + `calc_pts` and compares to stored. Consumed by `Audit_Scores.ps1`. |
-| 6 | Scoring | `/api/clean-scores` | POST | Wipe scoring tables. `?delete_json=1` also deletes `data/matches/*.json`. Used by `Audit_Scores.ps1` reset flow. |
-| 6b | Audit | `/api/audit-player-ids` | GET | Sweep `user_selections` for player IDs not in `players` table. Returns ghosts with prefix-based suggestions. |
-| 6b | Audit | `/api/audit-blobs` | GET | Verify `sum(points_per_match.values()) == week_pts` for every row. |
-| 6b | Audit | `/api/snapshot` | POST | Run both audits + leaderboard, write to `data/snapshot_<ts>.json`. Receipt for change reviews. |
 | 6c | Match Centre | `/api/match-centre` | GET | Hub endpoint — all matches grouped by week + per-match user pts + season summary. (§3.1) |
 | 6c | Match Centre | `/api/match-details/<id>` | GET | Box Score — historical XI for one match. Reads `tw_team_json` from the week the match belongs to. (§3.2) |
 | 7 | Admin | `/api/rollover` | POST | The weekly handover (rewritten 2026-11-20, routes 1.12.0): applies **every overdue week of the stored lock schedule, in order**, one all-or-nothing transaction each, recorded once in the ledger (`db.reconcile_competition`); repeating it changes nothing. `?dry_run=1` reports what would happen and rolls back. `?force=1&confirm=<slug>:<week>` (signed-in admin only; the confirmation is the week the forced run would apply, named by the refusal, checked inside the transaction) applies the NEXT week now. A competition with no schedule is never rolled (200 no-op saying why); an upcoming one only starts, and only with auto-activation. A failure answers 500 with what was done; the next call carries on. Callers: the scheduler token or an admin; the browser timer and the Simulate button are gone. Writes heartbeat `rollover:scheduler` / `rollover:admin`. See [rollover_plan.md](rollover_plan.md). |
@@ -157,10 +159,11 @@ unlimited.
 and `db.validate_budget(team, BUDGET_TOTAL=100)`. The UI's checks
 catch most cases; the server is the final gate.
 
-### 4. Player name → ID auto-correction on save
-If the saved team contains *names* instead of *IDs* (an old client,
-a manual JSON post), `resolve_id_list` rewrites them in place and
-returns a `resolution_log` showing what changed. Same for `cap`/`vc`.
+### 4. Player name → ID resolution on save (rewritten 2026-11-21)
+The page always sends canonical ids, and those pass straight through with no database work. A *name*, a typo or an old id (an old client, a manual
+JSON post) is looked up among THIS competition's players only (ids and names repeat across competitions) on a pooled connection, and the answer
+carries a `resolution_log` of what changed. Same for `cap`/`vc`. The resolver never writes: it used to patch the member's stored draft (in every
+competition) before the save was validated, so a refused save could still change a draft; the save itself writes the resolved team.
 
 ### 5. The weekly handover is idempotent and catches up (rewritten 2026-11-20)
 `/api/rollover` does not compute Mondays any more; the stored lock schedule decides:
@@ -176,11 +179,11 @@ digit Cricbuzz ID. The scraper does the deeper validation
 (team-pair match, IPL-team check) and resets the URL if needed via
 `_reset_url` ([scraper.py:448](../scraper.py:448)).
 
-### 7. Snapshots are receipts, not backups
-`/api/snapshot` writes a JSON file with the current leaderboard and
-both audit results to `data/snapshot_<ts>.json`. The intended use:
-take a snapshot **before** a risky change, then take another after,
-and diff them. Not for full DB backup — see Open Questions.
+### 7. (Removed 2026-11-21) Snapshots and the audit routes
+`/api/snapshot`, and the audit routes beside it (`audit-scores`, `audit-player-ids`, `audit-blobs`, `clean-scores`), are gone: nothing called them but the
+old local `Audit_Scores.ps1`, three answered with no sign-in and walked whole tables (`audit-scores` alone runs hundreds of statements and mixed
+competitions together), `clean-scores` wiped a competition's scores, and `snapshot` wrote to a disk Render throws away.
+`logic.scoring_engine.debug_calc_pts` stays for a competition-aware trace later.
 
 ### 8. Passcode change requires no current passcode (Phase 12)
 Both flows that mutate a member's passcode — the header **Reset Passcode**
@@ -393,11 +396,10 @@ the rollover handler is wide-open — fine for local, not for cloud.
 
 - **Called by:**
   - The browser (via `ipl_glue.js` / `mc_hub.js` / `index.html`).
-  - `Audit_Scores.ps1` (operator-side, hits `/api/audit-scores` and
-    `/api/clean-scores`).
+  - (`Audit_Scores.ps1` used to hit `/api/audit-scores` and `/api/clean-scores`; both routes were removed 2026-11-21, so that script no longer works.)
   - Manual `curl` from the README's troubleshooting examples.
 - **Calls into:**
-  - `base.*` (`db`, `_db_con`, `_log`, `_write_limiter`,
+  - `base.*` (`db`, `_log`, `_write_limiter`,
     `_check_rate`, `resolve_player_id`, `resolve_id_list`, …).
   - `logic.rollover_engine.*` (3 functions).
   - `logic.scoring_engine.calc_pts`, `CAP_MULT`, `VC_MULT`.
@@ -428,7 +430,7 @@ Direct mapping from [user_capabilities.md](user_capabilities.md):
 | §9.1 Refresh | `/api/sync-now`, `/api/state`, `/api/leaderboard`, `/api/history/<n>` |
 | §10.1 Polling | `/api/poll` |
 | §10.2 Auto-rollover | `/api/rollover` |
-| (no UI) | `/api/recalculate-points`, `/api/audit-scores/<n>`, `/api/clean-scores`, `/api/audit-player-ids`, `/api/audit-blobs`, `/api/snapshot` — all reachable only via `Audit_Scores.ps1` or `curl` |
+| (no UI) | `/api/recalculate-points` (admin; `curl` only) |
 
 ## Dead Code Audit
 
@@ -452,7 +454,7 @@ suggest the API client was speculatively over-built.
 1. **Partial authentication after Phase 12.** Login and passcode endpoints
    now require a bearer token, but every other write endpoint
    (`/api/save-next-week`, `PUT /api/member`, `/api/rollover`,
-   `/api/update-match-url`, `/api/recalculate-points`, `/api/clean-scores`)
+   `/api/update-match-url`, `/api/recalculate-points`)
    still trusts `?user=<n>`. A user who knows another member's name can
    still act as them on those endpoints. To close the gap, extend
    `_require_token()` to every `_check_rate(_write_limiter)` site and check
@@ -461,13 +463,13 @@ suggest the API client was speculatively over-built.
 2. **The IplApi client is over-broad.** Five endpoints (E2–E6) are
    defined on the client *and* the server but called nowhere. Worth
    either trimming the client or restoring a use for the endpoints.
-3. **`/api/clean-scores` is destructive and rate-limited but
+3. **(Resolved 2026-11-21: the route was removed.) `/api/clean-scores` was destructive and rate-limited but
    unauthenticated.** Anyone who knows the URL can wipe `match_scores`,
    `player_match_points`, `user_match_points`, `season_pts`, and
    optionally every `*.json` cache file. The rate limiter doesn't help
    when one request is enough to do damage. Consider an explicit
    `confirm=YES_REALLY` body field.
-4. **`/api/snapshot` writes to a permission-loose path.** Saves to
+4. **(Resolved 2026-11-21: the route was removed.) `/api/snapshot` wrote to a permission-loose path.** Saves to
    `data/snapshot_<ts>.json`. Filename uses `now_iso.replace(":", "-")`
    which is fine; but `data/` is the same directory `fantasy.db` lives
    in. Worth a `data/snapshots/` subdirectory.
@@ -482,7 +484,7 @@ suggest the API client was speculatively over-built.
    documenting in [seed_matches.md](seed_matches.md) that the seed-only
    path produces `points_per_match` blob entries with no matching
    `user_match_points` rows, and the API handles both.
-7. **`audit-scores` reimplements the trace** rather than calling
+7. **(Resolved 2026-11-21: the route was removed; `debug_calc_pts` has no caller again.) `audit-scores` reimplemented the trace** rather than calling
    `logic.scoring_engine.debug_calc_pts`. Tracked as D2 in the
    register. If the cleanup pass restores `debug_calc_pts`, this is
    the single caller to refactor.

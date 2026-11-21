@@ -57,7 +57,7 @@ and `server.py`. It must never import from those upper layers.
     matches; with 8, the W8→W9 Monday rollover silently no-op'd
     because `api_rollover` short-circuits on `current_week >= MAX_WEEKS`)
   - **Paths:** `BASE_DIR`, `DATA_DIR`, `STATIC_DIR`
-  - **Helpers:** `_db_con`, `_log`, `_jloads`, `_check_rate`
+  - **Helpers:** `_log`, `_jloads`, `_check_rate`, `needs_resolving`
   - **Player resolution:** `resolve_player_id`, `resolve_id_list`, `_ID_RE`
   - **Passcode + sessions (Phase 12):** `PASSCODE_RE` (4-digit regex),
     `hash_passcode(passcode, username)`, `verify_passcode(...)` (constant-time
@@ -84,21 +84,30 @@ and `server.py`. It must never import from those upper layers.
    4. **Nickname** (via `_SEMANTIC_MAP`: "vk" → Virat Kohli, "sky" → Suryakumar Yadav, etc.).
    5. **Fuzzy match** at ≥40% token-set ratio, with a 12-point bonus if teams agree.
    6. **Last-name match** as a last resort, preferring same-team hits.
-4. **Auto-correction on save.** When a user's saved team has player *names*
-   instead of *IDs*, `resolve_id_list` rewrites the saved JSON in place — so
-   the next read finds clean IDs.
+4. **Resolution on save (rewritten 2026-11-21).** A saved team with player *names*
+   instead of *IDs* is resolved against THIS competition's players only (ids and
+   names repeat across competitions). The resolver is read-only (the save writes
+   the resolved team itself, after validating it) and canonical ids never touch
+   the database.
 5. **Unresolved names are logged, never silently dropped.** Tier-(-1) entries
    produce a warning in `server.log`.
-6. **Every database connection uses WAL mode.** `_db_con` sets
-   `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=30000` — giving the
-   scraper and the web server safe concurrent access.
+6. **(Removed 2026-11-21.)** `_db_con`, the resolver's own unpooled connection
+   (a brand-new connection on every save), is gone: the resolver uses the pool
+   (`db._read()`). (The old WAL / busy-timeout text here was SQLite-era.)
 7. **Write throttle = 30 requests / 60 seconds per IP.** `_RateLimiter` is
    applied to mutating endpoints via `_check_rate`.
 8. **Security headers on every response.** `X-Content-Type-Options: nosniff`,
-   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, and
-   `Cache-Control: no-store` on `/api/*` paths.
-9. **404 falls back to the SPA.** Unknown paths re-render `index.html`, so
-   client-side routes work on hard reload.
+   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`,
+   `Strict-Transport-Security: max-age=31536000` (2026-11-21; no includeSubDomains)
+   and `Cache-Control: no-store` on `/api/*` paths.
+9. **Two doors for failures (2026-11-21).** An HTTP error (`_handle_http`) is JSON on
+   `/api/` (`not_found` / `method_not_allowed` / `too_large` / `bad_request`) and plain
+   text elsewhere; only a GET or HEAD for a path with no file name (`/`,
+   `/some/link`, `/index.html`) that matches no route gets the app page, so a
+   bookmarked address still opens the app. Anything unexpected (`_handle_unexpected`)
+   is logged with a short request id and answered with a fixed sentence plus that id
+   (`X-Request-Id`), never the exception's text. Before this, an unknown `/api/` path
+   and a missing `/static/` file both answered 200 with the whole page.
 10. **Passcode hashing is salted-but-cheap (Phase 12).** `hash_passcode`
     returns `sha256("<username>:<passcode>")`. Username acts as the salt so
     two users picking `1234` produce different hashes. SHA-256 (not bcrypt)
@@ -146,14 +155,14 @@ Cross-references to [user_capabilities.md](user_capabilities.md):
 | `_SEMANTIC_MAP` | Used by `resolve_player_id` tier 4 | **Live, but parallel to `logic/fuzzy_match.py`.** See Open Questions. |
 | `_jloads` | `routes.py` | **Live.** |
 | `_setup_logging` / `_log` | Whole project | **Live.** |
-| `_db_con` | `routes.py`, `server.py` | **Live.** |
+| `_db_con` | — | **Removed 2026-11-21** (the resolver uses the pool). |
 | `_RateLimiter`, `_write_limiter`, `_check_rate` | `routes.py` write endpoints | **Live.** |
 | `db`, `app` | Everything | **Live singletons.** |
 | `STATIC_DIR` | `routes.py` (`/static/<filename>`); Flask `static_folder` argument | **Live.** Capital-S **`"Static"`** since Phase 11 — Windows is case-insensitive so lowercase worked locally, but Linux (Render / Codespaces) treats `static` ≠ `Static` and 404s every `/static/*` asset, leaving the UI stuck on "Loading your league..." |
 | `BASE_DIR`, `DATA_DIR` | Re-derived from `config.py` | **Duplicated** — not dead, just redundant. |
 | `BUDGET_TOTAL`, `XI_SIZE`, `MAX_WEEKS` | `routes.py`, `server.py` | **Live.** |
 | `CURRENT_PUBLIC_URL` | `server.py` writes, `routes.py` reads | **Live.** |
-| Flask error handlers (`_handle_integrity`, `_handle_operational`, `_handle_500`, `_handle_404`) | Wired via `@app.errorhandler` decorators | **Live.** |
+| Flask error handlers (`_handle_http`, `_handle_unexpected`, helper `_unexpected`) | Wired via `@app.errorhandler` decorators | **Live.** The two doors described in rule 9 (replaced `_handle_integrity`, `_handle_operational`, `_handle_500`, `_handle_404`). |
 | `_security_headers` (after_request) | Wired via `@app.after_request` | **Live.** |
 | `PASSCODE_RE`, `hash_passcode`, `verify_passcode`, `new_session_token`, `get_bearer_token` (Phase 12) | `routes.py` AUTH group | **Live.** |
 

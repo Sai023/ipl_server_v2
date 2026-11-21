@@ -1,6 +1,12 @@
 """
 IPL Fantasy 2026 — API Route Handlers                       routes v1.4.0
 ===========================================================================
+v1.14.0 (hardening release, 2026-11-21, app 2.21.0):
+  Routes no longer catch `Exception`: base.py answers every unexpected failure (a logged traceback under a short request id, a fixed sentence to the
+  caller) and every HTTP error (JSON on /api/, never the app page). A route only answers failures it EXPECTS, with its own sentence and `reason`.
+  GET /api/health — one SELECT 1, the page's banner probe. /api/state reads its tag before the data and answers 304 before any heavy read.
+  The player resolver (base.py) is read-only and looks at one competition. Removed: /api/audit-scores/<n>, /api/clean-scores, /api/audit-player-ids,
+  /api/audit-blobs, /api/snapshot (the v1.2.0 entry below lists three of them).
 v1.4.0 (Phase 9 — Daily auto-sync):
   /api/sync-now (POST) — manual trigger for the discovery+scrape pipeline.
     Spawns tasks.start_bg_sync() in a daemon thread; returns immediately
@@ -34,7 +40,6 @@ Dependency: base.py → routes.py  (routes never imports from server)
 import json as _json
 import os
 import re
-import psycopg
 from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, jsonify, render_template, send_from_directory
@@ -97,8 +102,8 @@ def _push_if_hosted(reason: str, extra_paths: list | None = None) -> None:
 
 import base as _base
 from base import (
-    db, _db_con, _log, _write_limiter, _check_rate,
-    resolve_player_id, resolve_id_list, _ID_RE, _jloads,
+    db, _log, _write_limiter, _check_rate,
+    resolve_player_id, resolve_id_list, needs_resolving, _ID_RE, _jloads,
     BASE_DIR, DATA_DIR, STATIC_DIR,
     BUDGET_TOTAL, XI_SIZE, MAX_WEEKS,
     PASSCODE_RE, hash_passcode, verify_passcode,
@@ -177,16 +182,23 @@ def api_version():
 
 @bp.route("/api/ping")
 def api_ping():
-    try:
-        comp = _comp()
-        stats = db.ping_stats(competition_id=comp)
-        budget, xi, maxw, _dh, _dm = _comp_cfg(comp)
-        stats.update({"ok": True, "public_url": _base.CURRENT_PUBLIC_URL,
-                      "competition": comp,
-                      "budget": budget, "xi_size": xi, "max_weeks": maxw})
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    comp = _comp()
+    stats = db.ping_stats(competition_id=comp)
+    budget, xi, maxw, _dh, _dm = _comp_cfg(comp)
+    stats.update({"ok": True, "public_url": _base.CURRENT_PUBLIC_URL,
+                  "competition": comp,
+                  "budget": budget, "xi_size": xi, "max_weeks": maxw})
+    return jsonify(stats)
+
+
+@bp.route("/api/health")
+def api_health():
+    """Is the server up, and can it reach its database? One `SELECT 1` and nothing else: the page's banner probes this again and again while the server is in
+    trouble, so it must be the lightest honest answer (`/api/ping` costs five statements). `/api/ping` stays for what it also carries: the competition's
+    config the page loads at start, the counts, and Render's health check."""
+    with db._read() as con:
+        con.execute("SELECT 1")
+    return jsonify({"ok": True})
 
 
 @bp.route("/api/_test-push", methods=["POST"])
@@ -214,80 +226,67 @@ def api_test_push():
                                  "(set HOSTED=true)"}), 400
     _u, err = _require_admin()
     if err: return err
-    try:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        db.set_meta("_last_test_push", now_iso)
-        # Same WAL-flush as _push_if_hosted — without this, the meta-table
-        # write sits in fantasy.db-wal and the test push reports
-        # "nothing to commit" while actually doing nothing useful.
-        db.checkpoint()
-        ok, msg = cloud_sync.commit_and_push(
-            paths=["data/fantasy.db"],
-            message=f"diag: test-push at {now_iso}",
-        )
-        if ok:
-            _log(f"/api/_test-push SUCCESS: {msg}")
-        else:
-            _log(f"/api/_test-push FAILED: {msg}", "warn")
-        return jsonify({
-            "ok": True,
-            "test_push_succeeded": ok,
-            "git_result": msg,
-            "instructions": (
-                "If test_push_succeeded=true, a commit titled "
-                "'diag: test-push at <iso>' should appear on "
-                "github.com/<owner>/<repo>/commits/main within 5s. "
-                "If false, git_result contains the raw error — paste it "
-                "to the operator."
-            ),
-        })
-    except Exception as e:
-        _log(f"/api/_test-push crashed: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db.set_meta("_last_test_push", now_iso)
+    # Same WAL-flush as _push_if_hosted — without this, the meta-table
+    # write sits in fantasy.db-wal and the test push reports
+    # "nothing to commit" while actually doing nothing useful.
+    db.checkpoint()
+    ok, msg = cloud_sync.commit_and_push(
+        paths=["data/fantasy.db"],
+        message=f"diag: test-push at {now_iso}",
+    )
+    if ok:
+        _log(f"/api/_test-push SUCCESS: {msg}")
+    else:
+        _log(f"/api/_test-push FAILED: {msg}", "warn")
+    return jsonify({
+        "ok": True,
+        "test_push_succeeded": ok,
+        "git_result": msg,
+        "instructions": (
+            "If test_push_succeeded=true, a commit titled "
+            "'diag: test-push at <iso>' should appear on "
+            "github.com/<owner>/<repo>/commits/main within 5s. "
+            "If false, git_result contains the raw error — paste it "
+            "to the operator."
+        ),
+    })
 
 @bp.route("/api/poll", methods=["GET"])
 def api_poll():
     recv = datetime.now(timezone.utc)   # when the request reached us
-    try:
-        # The server's clock, so the page can count down to a lock on IT and not on a phone clock that may be wrong. Two stamps (when the request
-        # arrived and when the reply leaves) let the page cancel out the time we spent on it, as NTP does.
-        etag = db.get_etags(competition_id=_comp())["state"]
-        return jsonify({"state_etag": etag, "ok": True,
-                        "server_recv_utc": recv.isoformat(), "server_now_utc": datetime.now(timezone.utc).isoformat()})
-    except Exception as e:
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    # The server's clock, so the page can count down to a lock on IT and not on a phone clock that may be wrong. Two stamps (when the request
+    # arrived and when the reply leaves) let the page cancel out the time we spent on it, as NTP does.
+    etag = db.get_etags(competition_id=_comp())["state"]
+    return jsonify({"state_etag": etag, "ok": True,
+                    "server_recv_utc": recv.isoformat(), "server_now_utc": datetime.now(timezone.utc).isoformat()})
 
 @bp.route("/api/current-week", methods=["GET"])
 def api_current_week():
-    try:
-        comp = _comp()
-        _b, _x, maxw, _dh, _dm = _comp_cfg(comp)
-        return jsonify({"week_no": db.get_current_week(competition_id=comp),
-                        "max_weeks": maxw, "ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    comp = _comp()
+    _b, _x, maxw, _dh, _dm = _comp_cfg(comp)
+    return jsonify({"week_no": db.get_current_week(competition_id=comp),
+                    "max_weeks": maxw, "ok": True})
 
 
 @bp.route("/api/competitions", methods=["GET"])
 def api_competitions():
     """List all competitions + the active slug + the championship tally.
     Drives the header competition switcher and per-competition IplConfig."""
-    try:
-        comps = db.list_competitions()
-        return jsonify({
-            "ok": True,
-            "active": db._active_slug(),
-            "competitions": [
-                {"slug": c["slug"], "name": c["name"], "status": c["status"],
-                 "format": c["format"], "budget_total": c["budget_total"],
-                 "xi_size": c["xi_size"], "max_weeks": c["max_weeks"],
-                 "champion": c["champion"]}
-                for c in comps
-            ],
-            "championship": db.get_championship_tally(),
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    comps = db.list_competitions()
+    return jsonify({
+        "ok": True,
+        "active": db._active_slug(),
+        "competitions": [
+            {"slug": c["slug"], "name": c["name"], "status": c["status"],
+             "format": c["format"], "budget_total": c["budget_total"],
+             "xi_size": c["xi_size"], "max_weeks": c["max_weeks"],
+             "champion": c["champion"]}
+            for c in comps
+        ],
+        "championship": db.get_championship_tally(),
+    })
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -329,129 +328,106 @@ def _require_self(n):
 def api_register():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
-    try:
-        d = request.get_json(force=True, silent=True) or {}
-        name = (d.get("name") or "").strip()
-        passcode = str(d.get("passcode") or "").strip()
-        if not name or len(name) > 30:
-            return jsonify({"ok": False, "error": "name must be 1-30 chars", "code": 400, "reason": "name_invalid"}), 400
-        if not PASSCODE_RE.match(passcode):
-            return jsonify({"ok": False, "error": "passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
-        if db.get_member_auth(name):
-            return jsonify({"ok": False, "error": "name already registered", "code": 409, "reason": "name_taken"}), 409
-        # Create empty user_selections row using existing helper.
-        db.upsert_member(name, {"this_week": {"team": [], "cap": None, "vc": None},
-                                "next_week": {"team": [], "cap": None, "vc": None}})
-        db.upsert_member_auth(name, hash_passcode(passcode, name),
-                              must_change=0, is_admin=0)
-        token = new_session_token()
-        db.create_session(token, name)
-        _push_if_hosted(f"register:{name}")
-        return jsonify({"ok": True, "name": name, "token": token,
-                        "must_change": False, "is_admin": False})
-    except Exception as e:
-        _log(f"POST /api/register: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    d = request.get_json(force=True, silent=True) or {}
+    name = (d.get("name") or "").strip()
+    passcode = str(d.get("passcode") or "").strip()
+    if not name or len(name) > 30:
+        return jsonify({"ok": False, "error": "name must be 1-30 chars", "code": 400, "reason": "name_invalid"}), 400
+    if not PASSCODE_RE.match(passcode):
+        return jsonify({"ok": False, "error": "passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
+    if db.get_member_auth(name):
+        return jsonify({"ok": False, "error": "name already registered", "code": 409, "reason": "name_taken"}), 409
+    # Create empty user_selections row using existing helper.
+    db.upsert_member(name, {"this_week": {"team": [], "cap": None, "vc": None},
+                            "next_week": {"team": [], "cap": None, "vc": None}})
+    db.upsert_member_auth(name, hash_passcode(passcode, name),
+                          must_change=0, is_admin=0)
+    token = new_session_token()
+    db.create_session(token, name)
+    _push_if_hosted(f"register:{name}")
+    return jsonify({"ok": True, "name": name, "token": token,
+                    "must_change": False, "is_admin": False})
 
 
 @bp.route("/api/login", methods=["POST"])
 def api_login():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
-    try:
-        d = request.get_json(force=True, silent=True) or {}
-        name = (d.get("name") or "").strip()
-        passcode = str(d.get("passcode") or "").strip()
-        if not name or not PASSCODE_RE.match(passcode):
-            return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400, "reason": "credentials_required"}), 400
-        m = db.get_member_auth(name)
-        if not m or not verify_passcode(passcode, name, m["passcode_hash"]):
-            # Same error message for unknown-user vs wrong-passcode — don't
-            # leak which member names exist beyond what /api/state already shows.
-            return jsonify({"ok": False, "error": "wrong name or passcode", "code": 401, "reason": "bad_credentials"}), 401
-        token = new_session_token()
-        db.create_session(token, name)
-        return jsonify({"ok": True, "name": name, "token": token,
-                        "must_change": bool(m["must_change"]),
-                        "is_admin": bool(m["is_admin"])})
-    except Exception as e:
-        _log(f"POST /api/login: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    d = request.get_json(force=True, silent=True) or {}
+    name = (d.get("name") or "").strip()
+    passcode = str(d.get("passcode") or "").strip()
+    if not name or not PASSCODE_RE.match(passcode):
+        return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400, "reason": "credentials_required"}), 400
+    m = db.get_member_auth(name)
+    if not m or not verify_passcode(passcode, name, m["passcode_hash"]):
+        # Same error message for unknown-user vs wrong-passcode — don't
+        # leak which member names exist beyond what /api/state already shows.
+        return jsonify({"ok": False, "error": "wrong name or passcode", "code": 401, "reason": "bad_credentials"}), 401
+    token = new_session_token()
+    db.create_session(token, name)
+    return jsonify({"ok": True, "name": name, "token": token,
+                    "must_change": bool(m["must_change"]),
+                    "is_admin": bool(m["is_admin"])})
 
 
 @bp.route("/api/whoami", methods=["GET"])
 def api_whoami():
-    try:
-        username, err = _require_token()
-        if err: return err
-        m = db.get_member_auth(username) or {}
-        return jsonify({"ok": True, "name": username,
-                        "must_change": bool(m.get("must_change")),
-                        "is_admin": bool(m.get("is_admin"))})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    username, err = _require_token()
+    if err: return err
+    m = db.get_member_auth(username) or {}
+    return jsonify({"ok": True, "name": username,
+                    "must_change": bool(m.get("must_change")),
+                    "is_admin": bool(m.get("is_admin"))})
 
 
 @bp.route("/api/passcode/change", methods=["POST"])
 def api_passcode_change():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
-    try:
-        username, err = _require_token()
-        if err: return err
-        d = request.get_json(force=True, silent=True) or {}
-        new_pc = str(d.get("new") or "").strip()
-        if not PASSCODE_RE.match(new_pc):
-            return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
-        # No current-passcode check by design — user is already authenticated via
-        # bearer token; for forced resets (must_change=1) the user can't verify
-        # the current passcode anyway because the admin reset it without telling
-        # them. Matches the user's stated UX: "no verification is needed".
-        db.set_passcode(username, hash_passcode(new_pc, username), must_change=0)
-        # Rotate all sessions for this user so any other tab is forced to re-login.
-        db.delete_sessions_for_user(username)
-        token = new_session_token()
-        db.create_session(token, username)
-        _push_if_hosted(f"passcode-change:{username}")
-        return jsonify({"ok": True, "token": token, "must_change": False})
-    except Exception as e:
-        _log(f"POST /api/passcode/change: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    username, err = _require_token()
+    if err: return err
+    d = request.get_json(force=True, silent=True) or {}
+    new_pc = str(d.get("new") or "").strip()
+    if not PASSCODE_RE.match(new_pc):
+        return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
+    # No current-passcode check by design — user is already authenticated via
+    # bearer token; for forced resets (must_change=1) the user can't verify
+    # the current passcode anyway because the admin reset it without telling
+    # them. Matches the user's stated UX: "no verification is needed".
+    db.set_passcode(username, hash_passcode(new_pc, username), must_change=0)
+    # Rotate all sessions for this user so any other tab is forced to re-login.
+    db.delete_sessions_for_user(username)
+    token = new_session_token()
+    db.create_session(token, username)
+    _push_if_hosted(f"passcode-change:{username}")
+    return jsonify({"ok": True, "token": token, "must_change": False})
 
 
 @bp.route("/api/admin/passcode/reset", methods=["POST"])
 def api_admin_passcode_reset():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
-    try:
-        username, err = _require_admin()
-        if err: return err
-        d = request.get_json(force=True, silent=True) or {}
-        target = (d.get("target_username") or "").strip()
-        if not target:
-            return jsonify({"ok": False, "error": "target_username required", "code": 400, "reason": "target_required"}), 400
-        m = db.get_member_auth(target)
-        if not m:
-            return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
-        db.set_passcode(target, hash_passcode("1234", target), must_change=1)
-        # Force the target to re-login with 1234 on whatever device they're on.
-        db.delete_sessions_for_user(target)
-        _push_if_hosted(f"admin-passcode-reset:{target}")
-        return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True})
-    except Exception as e:
-        _log(f"POST /api/admin/passcode/reset: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    username, err = _require_admin()
+    if err: return err
+    d = request.get_json(force=True, silent=True) or {}
+    target = (d.get("target_username") or "").strip()
+    if not target:
+        return jsonify({"ok": False, "error": "target_username required", "code": 400, "reason": "target_required"}), 400
+    m = db.get_member_auth(target)
+    if not m:
+        return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
+    db.set_passcode(target, hash_passcode("1234", target), must_change=1)
+    # Force the target to re-login with 1234 on whatever device they're on.
+    db.delete_sessions_for_user(target)
+    _push_if_hosted(f"admin-passcode-reset:{target}")
+    return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True})
 
 
 @bp.route("/api/admin/members", methods=["GET"])
 def api_admin_members():
-    try:
-        username, err = _require_admin()
-        if err: return err
-        return jsonify({"ok": True, "members": db.list_members_admin_view()})
-    except Exception as e:
-        _log(f"GET /api/admin/members: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    username, err = _require_admin()
+    if err: return err
+    return jsonify({"ok": True, "members": db.list_members_admin_view()})
 
 
 @bp.route("/api/admin/health", methods=["GET"])
@@ -459,25 +435,21 @@ def api_admin_health():
     """INF-2: admin-only system health — PAT validity + data freshness. Lets an
     admin catch a silently-expired GitHub token (which stops writes persisting)
     before it bites, and see when data last changed."""
-    try:
-        username, err = _require_admin()
-        if err: return err
-        comp = _comp()
-        out = {"ok": True, "hosted": _IS_HOSTED, "competition": comp,
-               "last_saved": db.get_meta_comp("_saved", comp, "never"),
-               "last_rollover": db.get_meta_comp("_last_rollover", comp, "never"),
-               "scraping": "disabled until SA20 (Phase 3b-4)"}
-        if _IS_HOSTED:
-            pok, pmsg = cloud_sync.check_token(log=_log)
-            out["pat_ok"] = pok
-            out["pat_msg"] = pmsg
-        else:
-            out["pat_ok"] = None
-            out["pat_msg"] = "local mode — PAT only used in HOSTED"
-        return jsonify(out)
-    except Exception as e:
-        _log(f"GET /api/admin/health: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
+    username, err = _require_admin()
+    if err: return err
+    comp = _comp()
+    out = {"ok": True, "hosted": _IS_HOSTED, "competition": comp,
+           "last_saved": db.get_meta_comp("_saved", comp, "never"),
+           "last_rollover": db.get_meta_comp("_last_rollover", comp, "never"),
+           "scraping": "disabled until SA20 (Phase 3b-4)"}
+    if _IS_HOSTED:
+        pok, pmsg = cloud_sync.check_token(log=_log)
+        out["pat_ok"] = pok
+        out["pat_msg"] = pmsg
+    else:
+        out["pat_ok"] = None
+        out["pat_msg"] = "local mode — PAT only used in HOSTED"
+    return jsonify(out)
 
 
 def _admin_import(slug, comp, d):
@@ -720,9 +692,6 @@ def api_admin_competition():
         return jsonify({"ok": False, "error": f"unknown action '{action}'", "code": 400}), 400
     except RequestEntityTooLarge:
         return jsonify({"ok": False, "error": "upload too large (the limit is 1 MB)", "code": 413}), 413
-    except Exception as e:
-        _log(f"POST /api/admin/competition: {e}", "error")
-        return jsonify({"ok": False, "error": str(e), "code": 500}), 500
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -732,40 +701,41 @@ def api_admin_competition():
 @bp.route("/api/state", methods=["GET"])
 def api_get_state():
     recv = datetime.now(timezone.utc)   # when the request reached us (see server_recv_utc below)
-    try:
-        comp = _comp()
-        state = db.get_state(competition_id=comp); etag = state.get("_saved", "")
-        if request.headers.get("If-None-Match") == etag: return "", 304
-        # UX-2: deadline info so the client can show a live countdown + lock state.
-        crow = db.get_competition(comp) or {}
-        dh = crow.get("deadline_hour", DEADLINE_HOUR); dm = crow.get("deadline_min", DEADLINE_MIN)
-        nl, managed = None, {}
-        ls = db.get_lock_state(comp)   # a competition with a stored lock schedule: the schedule and the ledger decide (None when it has none)
-        if ls is not None:
-            # next_lock_utc is the lock the countdown points at. It may already have passed: the transition has not run yet, picking stays locked
-            # (the page treats a passed next_lock_utc as locked) and the lock moves on when the transition runs (the state tag changes with it).
-            nl = _rp.iso(ls["next_lock"]) if ls["next_lock"] else None
-            managed = {"managed": True, "locked": ls["locked"], "awaiting": ls["awaiting"], "season_over": ls["season_over"],
-                       "applied_to": ls["applied_to"], "held": ls["held"], "reason": ls["reason"]}
-        elif crow.get("status") != "completed":
-            now = datetime.now(timezone.utc)
-            try:
-                anchor = datetime.fromisoformat(crow.get("week1_anchor_utc") or "")
-                if anchor.tzinfo is None: anchor = anchor.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                anchor = None
-            if anchor and now < anchor:
-                nl = anchor.isoformat()  # pre-season: the draft locks at the week-1 anchor
-            else:
-                nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
-        state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", ""), **managed}
-        state["competition"] = comp   # lets the browser discard a reply that belongs to another competition
-        # The server's clock when the request arrived and when this reply leaves (the page cancels out the time spent here, as NTP does). The 304 path
-        # above never carries a body, so /api/poll carries the clock too.
-        state["server_recv_utc"] = recv.isoformat(); state["server_now_utc"] = datetime.now(timezone.utc).isoformat()
-        resp = jsonify(state); resp.headers["ETag"] = etag; return resp
-    except Exception as e:
-        _log(f"GET /api/state: {e}", "error"); return jsonify({"error": str(e), "code": 500}), 500
+    comp = _comp()
+    # The state tag is read BEFORE the data, and the 304 is decided before any of the heavy queries. Read in this order, a save that lands in between can only
+    # make the tag OLDER than the data (the next poll then refetches, harmlessly). Read after the data (as it used to be) the tag could end up NEWER than
+    # the data, and a page holding that tag would never refetch what it missed.
+    etag = db.get_etags(competition_id=comp)["state"]
+    if request.headers.get("If-None-Match") == etag: return "", 304, {"ETag": etag}
+    state = db.get_state(competition_id=comp); state["_saved"] = etag   # the body carries the very tag the header does
+    # UX-2: deadline info so the client can show a live countdown + lock state.
+    crow = db.get_competition(comp) or {}
+    dh = crow.get("deadline_hour", DEADLINE_HOUR); dm = crow.get("deadline_min", DEADLINE_MIN)
+    nl, managed = None, {}
+    ls = db.get_lock_state(comp)   # a competition with a stored lock schedule: the schedule and the ledger decide (None when it has none)
+    if ls is not None:
+        # next_lock_utc is the lock the countdown points at. It may already have passed: the transition has not run yet, picking stays locked
+        # (the page treats a passed next_lock_utc as locked) and the lock moves on when the transition runs (the state tag changes with it).
+        nl = _rp.iso(ls["next_lock"]) if ls["next_lock"] else None
+        managed = {"managed": True, "locked": ls["locked"], "awaiting": ls["awaiting"], "season_over": ls["season_over"],
+                   "applied_to": ls["applied_to"], "held": ls["held"], "reason": ls["reason"]}
+    elif crow.get("status") != "completed":
+        now = datetime.now(timezone.utc)
+        try:
+            anchor = datetime.fromisoformat(crow.get("week1_anchor_utc") or "")
+            if anchor.tzinfo is None: anchor = anchor.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            anchor = None
+        if anchor and now < anchor:
+            nl = anchor.isoformat()  # pre-season: the draft locks at the week-1 anchor
+        else:
+            nl = (last_monday_deadline(now, dh, dm) + timedelta(days=7)).isoformat()
+    state["deadline"] = {"hour": dh, "min": dm, "next_lock_utc": nl, "status": crow.get("status", ""), **managed}
+    state["competition"] = comp   # lets the browser discard a reply that belongs to another competition
+    # The server's clock when the request arrived and when this reply leaves (the page cancels out the time spent here, as NTP does). The 304 path
+    # above never carries a body, so /api/poll carries the clock too.
+    state["server_recv_utc"] = recv.isoformat(); state["server_now_utc"] = datetime.now(timezone.utc).isoformat()
+    resp = jsonify(state); resp.headers["ETag"] = etag; return resp
 
 
 
@@ -775,12 +745,9 @@ def api_get_state():
 
 @bp.route("/api/players", methods=["GET"])
 def api_players():
-    try:
-        players = db.get_players(competition_id=_comp())
-        return jsonify({"players": players, "by_id": {p["id"]: p for p in players},
-                        "by_name": {p["name"].lower(): p for p in players}, "ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    players = db.get_players(competition_id=_comp())
+    return jsonify({"players": players, "by_id": {p["id"]: p for p in players},
+                    "by_name": {p["name"].lower(): p for p in players}, "ok": True})
 
 @bp.route("/api/resolve-player", methods=["POST"])
 def api_resolve_player():
@@ -788,26 +755,21 @@ def api_resolve_player():
     if re_: return re_
     _u, err = _require_token()
     if err: return err
-    try:
-        d = request.get_json(force=True, silent=True) or {}
-        query = (d.get("query") or "").strip(); team = (d.get("team") or "").strip() or None
-        if not query: return jsonify({"error": "query required", "code": 400}), 400
-        con = _db_con(); match = resolve_player_id(con, query, team_hint=team); con.close()
-        if not match: return jsonify({"ok": False, "error": "No match", "input": query}), 404
-        tier = match.pop("_match_tier", None)
-        return jsonify({"ok": True, "input": query, "match_tier": tier,
-                        "resolved": {k: match[k] for k in ("id","name","team","role","price")}})
-    except Exception as e:
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    d = request.get_json(force=True, silent=True) or {}
+    query = (d.get("query") or "").strip(); team = (d.get("team") or "").strip() or None
+    if not query: return jsonify({"error": "query required", "code": 400}), 400
+    with db._read() as con:
+        match = resolve_player_id(con, query, team_hint=team, competition_id=_comp())
+    if not match: return jsonify({"ok": False, "error": "No match", "input": query}), 404
+    tier = match.pop("_match_tier", None)
+    return jsonify({"ok": True, "input": query, "match_tier": tier,
+                    "resolved": {k: match[k] for k in ("id","name","team","role","price")}})
 
 @bp.route("/api/leaderboard", methods=["GET"])
 def api_leaderboard():
-    try:
-        wp = request.args.get("week", "").strip()
-        wn = int(wp) if wp.isdigit() else None
-        return jsonify(db.get_leaderboard(week_no=wn, competition_id=_comp()))
-    except Exception as e:
-        return jsonify({"error": str(e), "code": 500}), 500
+    wp = request.args.get("week", "").strip()
+    wn = int(wp) if wp.isdigit() else None
+    return jsonify(db.get_leaderboard(week_no=wn, competition_id=_comp()))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -816,11 +778,8 @@ def api_leaderboard():
 
 @bp.route("/api/history/<n>", methods=["GET"])
 def api_history(n):
-    try:
-        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        return jsonify(db.get_history(n, competition_id=_comp()))
-    except Exception as e:
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+    if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+    return jsonify(db.get_history(n, competition_id=_comp()))
 
 
 
@@ -861,43 +820,41 @@ def _week_moved(result):
 def api_save_next_week(n):
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try:
-        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        _self,err=_require_self(n)
-        if err: return err
-        comp=_comp(); budget,xi,_mw,dh,dm=_comp_cfg(comp)
-        locked,lreason=_picks_lock(comp)
-        if locked:
-            return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
-        d=request.get_json(force=True,silent=True)
-        if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
-        week,werr=_stated_week(d)
-        if werr: return jsonify({"error":werr,"code":400}),400
-        team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")
-        if not isinstance(team,list): return jsonify({"error":"team must be list","code":400}),400
-        rlog=[]
-        if team:
-            con=_db_con()
-            team,rlog=resolve_id_list(con,team,display_name=n,week_no=db.get_current_week(competition_id=comp))
-            if cap and not _ID_RE.match(str(cap)):
-                m=resolve_player_id(con,cap)
-                if m: cap=m["id"]
-            if vc and not _ID_RE.match(str(vc)):
-                m=resolve_player_id(con,vc)
-                if m: vc=m["id"]
-            con.close()
-        ok,verr,total_cost=db.validate_selection(team,cap,vc,budget,xi,competition_id=comp)
-        if not ok:
-            return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422,"reason":"invalid_team"}),422
-        result=db.save_next_week(n,team,cap,vc,competition_id=comp,expect_week=week)
-        if result.get("conflict"): return _week_moved(result)      # the week moved on while the page was open: nothing was written
-        _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
-        return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"],"total_cost":total_cost,"resolution_log":rlog})
-    except psycopg.IntegrityError as e:
-        return jsonify({"error":str(e),"code":400}),400
-    except Exception as e:
-        _log(f"POST /api/save-next-week/{n}: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+    if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+    _self,err=_require_self(n)
+    if err: return err
+    comp=_comp(); budget,xi,_mw,dh,dm=_comp_cfg(comp)
+    locked,lreason=_picks_lock(comp)
+    if locked:
+        return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
+    d=request.get_json(force=True,silent=True)
+    if not isinstance(d,dict): return jsonify({"error":"expected JSON object","code":400}),400
+    week,werr=_stated_week(d)
+    if werr: return jsonify({"error":werr,"code":400}),400
+    team=d.get("team",[]); cap=d.get("cap"); vc=d.get("vc")
+    if not isinstance(team,list): return jsonify({"error":"team must be list","code":400}),400
+    rlog=[]
+    if team:
+        # Canonical ids (all the page ever sends) pass straight through: no database work at all. Only a name, a typo or an old id is looked up, in THIS
+        # competition's players, on a pooled connection. Nothing here writes: a save that is then refused (422) leaves the stored draft exactly as it was.
+        if needs_resolving(*team,cap,vc):
+            with db._read() as con:
+                team,rlog=resolve_id_list(con,team,competition_id=comp)
+                if cap and not _ID_RE.match(str(cap)):
+                    m=resolve_player_id(con,cap,competition_id=comp)
+                    if m: cap=m["id"]
+                if vc and not _ID_RE.match(str(vc)):
+                    m=resolve_player_id(con,vc,competition_id=comp)
+                    if m: vc=m["id"]
+        else:
+            team,rlog=resolve_id_list(None,team,competition_id=comp)
+    ok,verr,total_cost=db.validate_selection(team,cap,vc,budget,xi,competition_id=comp)
+    if not ok:
+        return jsonify({"error":verr,"total_cost":total_cost,"budget":budget,"code":422,"reason":"invalid_team"}),422
+    result=db.save_next_week(n,team,cap,vc,competition_id=comp,expect_week=week)
+    if result.get("conflict"): return _week_moved(result)      # the week moved on while the page was open: nothing was written
+    _push_if_hosted(f"save-next-week:{comp}:{n}:w{result['week_no']}")
+    return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"],"total_cost":total_cost,"resolution_log":rlog})
 
 @bp.route("/api/keep-xi/<n>", methods=["POST"])
 def api_keep_xi(n):
@@ -906,43 +863,35 @@ def api_keep_xi(n):
     save; optional body {"week": <the week the page believes is current>} (409 week_changed when it has moved on)."""
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try:
-        if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
-        _self,err=_require_self(n)
-        if err: return err
-        comp=_comp()
-        locked,lreason=_picks_lock(comp)
-        if locked:
-            return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
-        week,werr=_stated_week(request.get_json(force=True,silent=True))
-        if werr: return jsonify({"error":werr,"code":400}),400
-        result=db.keep_next_week(n,competition_id=comp,expect_week=week)
-        if result.get("conflict"): return _week_moved(result)
-        if result.get("nothing"):
-            return jsonify({"error":"You have no team to keep yet. Pick your players first.","code":409,"reason":"nothing_to_keep"}),409
-        _push_if_hosted(f"keep-xi:{comp}:{n}:w{result['week_no']}")
-        return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"]})
-    except Exception as e:
-        _log(f"POST /api/keep-xi/{n}: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+    if not n or len(n)>30: return jsonify({"error":"invalid name","code":400}),400
+    _self,err=_require_self(n)
+    if err: return err
+    comp=_comp()
+    locked,lreason=_picks_lock(comp)
+    if locked:
+        return jsonify({"error":lreason,"locked":True,"code":423,"reason":"locked"}),423
+    week,werr=_stated_week(request.get_json(force=True,silent=True))
+    if werr: return jsonify({"error":werr,"code":400}),400
+    result=db.keep_next_week(n,competition_id=comp,expect_week=week)
+    if result.get("conflict"): return _week_moved(result)
+    if result.get("nothing"):
+        return jsonify({"error":"You have no team to keep yet. Pick your players first.","code":409,"reason":"nothing_to_keep"}),409
+    _push_if_hosted(f"keep-xi:{comp}:{n}:w{result['week_no']}")
+    return jsonify({"ok":True,"week_no":result["week_no"],"touched_at":result["touched_at"]})
 
 @bp.route("/api/member/<n>", methods=["PUT"])
 def api_member(n):
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try:
-        if not n or len(n)>30: return jsonify({"error":"name 1-30 chars","code":400}),400
-        _self,err=_require_self(n)
-        if err: return err
-        d=request.get_json(force=True,silent=True)
-        if not isinstance(d,dict): return jsonify({"error":"Invalid JSON","code":400}),400
-        comp=_comp()
-        db.upsert_member(n,d,competition_id=comp)
-        _push_if_hosted(f"member:{comp}:{n}")
-        return jsonify({"ok":True})
-    except Exception as e:
-        _log(f"PUT /api/member/{n}: {e}","error")
-        return jsonify({"error":str(e),"code":500}),500
+    if not n or len(n)>30: return jsonify({"error":"name 1-30 chars","code":400}),400
+    _self,err=_require_self(n)
+    if err: return err
+    d=request.get_json(force=True,silent=True)
+    if not isinstance(d,dict): return jsonify({"error":"Invalid JSON","code":400}),400
+    comp=_comp()
+    db.upsert_member(n,d,competition_id=comp)
+    _push_if_hosted(f"member:{comp}:{n}")
+    return jsonify({"ok":True})
 
 
 
@@ -954,17 +903,13 @@ def api_member(n):
 def api_recalculate_points():
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try:
-        _u,err=_require_admin()
-        if err: return err
-        comp=_comp()
-        n=db.recalculate_points(competition_id=comp); wp=db.update_week_points(competition_id=comp); pp=db.update_player_season_pts(competition_id=comp)
-        _push_if_hosted(f"recalc:{comp}:rows={n}")
-        return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,"player_pts_updated":pp,
-                        "message":f"Recalculated {n} player-match rows, {wp} week_pts rows, {pp} player season_pts."})
-    except Exception as e:
-        _log(f"POST /api/recalculate-points: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+    _u,err=_require_admin()
+    if err: return err
+    comp=_comp()
+    n=db.recalculate_points(competition_id=comp); wp=db.update_week_points(competition_id=comp); pp=db.update_player_season_pts(competition_id=comp)
+    _push_if_hosted(f"recalc:{comp}:rows={n}")
+    return jsonify({"ok":True,"rows_updated":n,"week_pts_rows":wp,"player_pts_updated":pp,
+                    "message":f"Recalculated {n} player-match rows, {wp} week_pts rows, {pp} player season_pts."})
 
 
 
@@ -1044,103 +989,99 @@ def api_match_centre():
     if not n or len(n) > 30:
         return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
     comp = _comp()
-    try:
-        with db._read() as con:
-            match_rows = con.execute(
-                "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches WHERE competition_id=%s ORDER BY week_no, id", (comp,)
-            ).fetchall()
-            ump_rows = con.execute(
-                "SELECT match_id, pts FROM user_match_points "
-                "WHERE competition_id=%s AND display_name=%s", (comp, n)
-            ).fetchall()
-            wk_rows = con.execute(
-                "SELECT week_no, week_pts, points_per_match FROM user_selections "
-                "WHERE competition_id=%s AND display_name=%s ORDER BY week_no", (comp, n)
-            ).fetchall()
+    with db._read() as con:
+        match_rows = con.execute(
+            "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
+            "FROM matches WHERE competition_id=%s ORDER BY week_no, id", (comp,)
+        ).fetchall()
+        ump_rows = con.execute(
+            "SELECT match_id, pts FROM user_match_points "
+            "WHERE competition_id=%s AND display_name=%s", (comp, n)
+        ).fetchall()
+        wk_rows = con.execute(
+            "SELECT week_no, week_pts, points_per_match FROM user_selections "
+            "WHERE competition_id=%s AND display_name=%s ORDER BY week_no", (comp, n)
+        ).fetchall()
 
-        ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
-        wk_totals = {r["week_no"]: r["week_pts"] for r in wk_rows}
+    ump_map = {r["match_id"]: r["pts"] for r in ump_rows}
+    wk_totals = {r["week_no"]: r["week_pts"] for r in wk_rows}
 
-        # Fill gaps: for any match missing from user_match_points, use points_per_match blob.
-        # This handles mixed state where some weeks are scraped and others are history-seeded.
-        for r in wk_rows:
-            try:
-                blob = _jloads(r["points_per_match"], {})
-                for mid, pts in blob.items():
-                    if mid not in ump_map:
-                        ump_map[mid] = pts
-            except Exception:
-                pass
+    # Fill gaps: for any match missing from user_match_points, use points_per_match blob.
+    # This handles mixed state where some weeks are scraped and others are history-seeded.
+    for r in wk_rows:
+        try:
+            blob = _jloads(r["points_per_match"], {})
+            for mid, pts in blob.items():
+                if mid not in ump_map:
+                    ump_map[mid] = pts
+        except Exception:
+            pass
 
-        weeks_map: dict = {}
-        best_pts = 0
-        best_match = ""
+    weeks_map: dict = {}
+    best_pts = 0
+    best_match = ""
 
-        for mr in match_rows:
-            wk      = mr["week_no"]
-            raw     = _jloads(mr["raw_json"], {})
-            teams   = _jloads(mr["teams_json"], [])
-            user_pts = ump_map.get(mr["id"], 0)
+    for mr in match_rows:
+        wk      = mr["week_no"]
+        raw     = _jloads(mr["raw_json"], {})
+        teams   = _jloads(mr["teams_json"], [])
+        user_pts = ump_map.get(mr["id"], 0)
 
-            if user_pts > best_pts:
-                best_pts  = user_pts
-                best_match = mr["title"] or mr["id"]
+        if user_pts > best_pts:
+            best_pts  = user_pts
+            best_match = mr["title"] or mr["id"]
 
-            # Pull venue / result from raw_json; keys vary by scraper version
-            venue  = (raw.get("venue") or raw.get("location") or
-                      raw.get("ground") or raw.get("stadium") or "")
-            result = (raw.get("result") or raw.get("match_result") or
-                      raw.get("matchResult") or "")
+        # Pull venue / result from raw_json; keys vary by scraper version
+        venue  = (raw.get("venue") or raw.get("location") or
+                  raw.get("ground") or raw.get("stadium") or "")
+        result = (raw.get("result") or raw.get("match_result") or
+                  raw.get("matchResult") or "")
 
-            entry = {
-                "match_id":   mr["id"],
-                "match_no":   _match_ordinal(mr["id"]),
-                "title":      mr["title"] or mr["id"],
-                "teams":      teams,
-                "venue":      venue,
-                "date_label": _fmt_date_label(mr["date_label"]),
-                "result":     result,
-                "status":     (mr["status"] or "upcoming").lower(),
-                "user_match_pts": user_pts,
+        entry = {
+            "match_id":   mr["id"],
+            "match_no":   _match_ordinal(mr["id"]),
+            "title":      mr["title"] or mr["id"],
+            "teams":      teams,
+            "venue":      venue,
+            "date_label": _fmt_date_label(mr["date_label"]),
+            "result":     result,
+            "status":     (mr["status"] or "upcoming").lower(),
+            "user_match_pts": user_pts,
+        }
+        if wk not in weeks_map:
+            weeks_map[wk] = {
+                "week_no":  wk,
+                "week_pts": wk_totals.get(wk, 0),
+                "matches":  [],
             }
-            if wk not in weeks_map:
-                weeks_map[wk] = {
-                    "week_no":  wk,
-                    "week_pts": wk_totals.get(wk, 0),
-                    "matches":  [],
-                }
-            weeks_map[wk]["matches"].append(entry)
+        weeks_map[wk]["matches"].append(entry)
 
-        weeks = sorted(weeks_map.values(), key=lambda w: w["week_no"])
-        for w in weeks:
-            completed = sum(1 for m in w["matches"]
-                            if m["status"] == "completed")
-            w["matches_played"] = completed
-            w["total_matches"]  = len(w["matches"])
+    weeks = sorted(weeks_map.values(), key=lambda w: w["week_no"])
+    for w in weeks:
+        completed = sum(1 for m in w["matches"]
+                        if m["status"] == "completed")
+        w["matches_played"] = completed
+        w["total_matches"]  = len(w["matches"])
 
-        total_pts      = sum(ump_map.values())
-        matches_played = sum(
-            1 for mr in match_rows
-            if (mr["status"] or "").lower() == "completed" and mr["id"] in ump_map
-        )
-        avg_per_match = round(total_pts / matches_played) if matches_played else 0
+    total_pts      = sum(ump_map.values())
+    matches_played = sum(
+        1 for mr in match_rows
+        if (mr["status"] or "").lower() == "completed" and mr["id"] in ump_map
+    )
+    avg_per_match = round(total_pts / matches_played) if matches_played else 0
 
-        return jsonify({
-            "ok": True,
-            "name": n,
-            "season": {
-                "total_pts":      total_pts,
-                "matches_played": matches_played,
-                "avg_per_match":  avg_per_match,
-                "best_pts":       best_pts,
-                "best_match":     best_match,
-            },
-            "weeks": weeks,
-        })
-    except Exception as e:
-        _log(f"GET /api/match-centre?user={n}: {e}", "error")
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    return jsonify({
+        "ok": True,
+        "name": n,
+        "season": {
+            "total_pts":      total_pts,
+            "matches_played": matches_played,
+            "avg_per_match":  avg_per_match,
+            "best_pts":       best_pts,
+            "best_match":     best_match,
+        },
+        "weeks": weeks,
+    })
 
 
 @bp.route("/api/match-details/<match_id>", methods=["GET"])
@@ -1179,137 +1120,133 @@ def api_match_details(match_id):
     if not n or len(n) > 30:
         return jsonify({"error": "?user=<name> required (1-30 chars)", "code": 400}), 400
     comp = _comp()
-    try:
-        with db._read() as con:
-            mr = con.execute(
-                "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
-                "FROM matches WHERE id=%s AND competition_id=%s", (match_id, comp)
-            ).fetchone()
-            if not mr:
-                return jsonify({"error": f"match '{match_id}' not found", "code": 404}), 404
+    with db._read() as con:
+        mr = con.execute(
+            "SELECT id, week_no, title, teams_json, date_label, status, raw_json "
+            "FROM matches WHERE id=%s AND competition_id=%s", (match_id, comp)
+        ).fetchone()
+        if not mr:
+            return jsonify({"error": f"match '{match_id}' not found", "code": 404}), 404
 
-            wk  = mr["week_no"]
-            raw = _jloads(mr["raw_json"], {})
+        wk  = mr["week_no"]
+        raw = _jloads(mr["raw_json"], {})
 
-            # Historical XI: read from the week this match belongs to
-            sel = con.execute(
-                "SELECT tw_team_json, tw_cap_id, tw_vc_id "
-                "FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s",
-                (comp, n, wk)
-            ).fetchone()
+        # Historical XI: read from the week this match belongs to
+        sel = con.execute(
+            "SELECT tw_team_json, tw_cap_id, tw_vc_id "
+            "FROM user_selections WHERE competition_id=%s AND display_name=%s AND week_no=%s",
+            (comp, n, wk)
+        ).fetchone()
 
-            if not sel:
-                return jsonify({
-                    "ok": True, "name": n,
-                    "match_id": match_id, "match_no": _match_ordinal(match_id),
-                    "title": mr["title"] or match_id, "week_no": wk,
-                    "venue": "", "date_label": _fmt_date_label(mr["date_label"]),
-                    "result": "", "status": (mr["status"] or "upcoming").lower(),
-                    "user_pts": 0, "cap_id": None, "vc_id": None,
-                    "top_scorer": None, "players": [],
-                    "note": f"No selection found for '{n}' in week {wk}",
-                })
-
-            team_ids = _jloads(sel["tw_team_json"], [])
-            cap_id   = sel["tw_cap_id"]
-            vc_id    = sel["tw_vc_id"]
-
-            # Per-player base pts for this match
-            pmp_map: dict = {}
-            player_info: dict = {}
-            if team_ids:
-                ph = ",".join(["%s"] * len(team_ids))
-                for r in con.execute(
-                    f"SELECT player_id, base_pts FROM player_match_points "
-                    f"WHERE match_id=%s AND competition_id=%s AND player_id IN ({ph})",
-                    [match_id, comp] + team_ids
-                ).fetchall():
-                    pmp_map[r["player_id"]] = r["base_pts"]
-                for r in con.execute(
-                    f"SELECT id, name, role, team FROM players WHERE competition_id=%s AND id IN ({ph})",
-                    [comp] + team_ids
-                ).fetchall():
-                    player_info[r["id"]] = dict(r)
-
-            # Authoritative per-match total from user_match_points
-            ump_row = con.execute(
-                "SELECT pts FROM user_match_points "
-                "WHERE competition_id=%s AND display_name=%s AND match_id=%s", (comp, n, match_id)
-            ).fetchone()
-            user_total = ump_row["pts"] if ump_row else 0
-
-            # Fallback: read from points_per_match blob in user_selections
-            if not user_total:
-                ppm_sel = con.execute(
-                    "SELECT points_per_match FROM user_selections "
-                    "WHERE competition_id=%s AND display_name=%s AND week_no=%s", (comp, n, wk)
-                ).fetchone()
-                if ppm_sel:
-                    blob = _jloads(ppm_sel["points_per_match"], {})
-                    user_total = blob.get(match_id, 0)
-
-        venue  = (raw.get("venue") or raw.get("location") or
-                  raw.get("ground") or raw.get("stadium") or "")
-        result = (raw.get("result") or raw.get("match_result") or
-                  raw.get("matchResult") or "")
-
-        players_out = []
-        for pid in team_ids:
-            base_pts  = pmp_map.get(pid, 0)
-            is_cap    = pid == cap_id
-            is_vc     = pid == vc_id
-            mult      = 2.0 if is_cap else (1.5 if is_vc else 1.0)
-            final_pts = round(base_pts * mult)
-            info      = player_info.get(pid, {"id": pid, "name": pid,
-                                               "role": "", "team": ""})
-            mult_str  = ""
-            if is_cap and base_pts > 0:
-                mult_str = f"{base_pts}\u00d72"
-            elif is_vc and base_pts > 0:
-                mult_str = f"{base_pts}\u00d71.5"
-
-            players_out.append({
-                "player_id":      pid,
-                "name":           info.get("name", pid),
-                "role":           info.get("role", ""),
-                "team":           info.get("team", ""),
-                "is_cap":         is_cap,
-                "is_vc":          is_vc,
-                "base_pts":       base_pts,
-                "multiplier":     mult,
-                "final_pts":      final_pts,
-                "multiplier_str": mult_str,
+        if not sel:
+            return jsonify({
+                "ok": True, "name": n,
+                "match_id": match_id, "match_no": _match_ordinal(match_id),
+                "title": mr["title"] or match_id, "week_no": wk,
+                "venue": "", "date_label": _fmt_date_label(mr["date_label"]),
+                "result": "", "status": (mr["status"] or "upcoming").lower(),
+                "user_pts": 0, "cap_id": None, "vc_id": None,
+                "top_scorer": None, "players": [],
+                "note": f"No selection found for '{n}' in week {wk}",
             })
 
-        players_out.sort(key=lambda x: -x["final_pts"])
-        top = (players_out[0] if players_out and players_out[0]["final_pts"] > 0
-               else None)
+        team_ids = _jloads(sel["tw_team_json"], [])
+        cap_id   = sel["tw_cap_id"]
+        vc_id    = sel["tw_vc_id"]
 
-        return jsonify({
-            "ok":         True,
-            "name":       n,
-            "match_id":   match_id,
-            "match_no":   _match_ordinal(match_id),
-            "title":      mr["title"] or match_id,
-            "week_no":    wk,
-            "teams":      _jloads(mr["teams_json"], []),
-            "venue":      venue,
-            "date_label": _fmt_date_label(mr["date_label"]),
-            "result":     result,
-            "status":     (mr["status"] or "upcoming").lower(),
-            "user_pts":   user_total,
-            "cap_id":     cap_id,
-            "vc_id":      vc_id,
-            "top_scorer": {
-                "player_id": top["player_id"],
-                "name":      top["name"],
-                "pts":       top["final_pts"],
-            } if top else None,
-            "players": players_out,
+        # Per-player base pts for this match
+        pmp_map: dict = {}
+        player_info: dict = {}
+        if team_ids:
+            ph = ",".join(["%s"] * len(team_ids))
+            for r in con.execute(
+                f"SELECT player_id, base_pts FROM player_match_points "
+                f"WHERE match_id=%s AND competition_id=%s AND player_id IN ({ph})",
+                [match_id, comp] + team_ids
+            ).fetchall():
+                pmp_map[r["player_id"]] = r["base_pts"]
+            for r in con.execute(
+                f"SELECT id, name, role, team FROM players WHERE competition_id=%s AND id IN ({ph})",
+                [comp] + team_ids
+            ).fetchall():
+                player_info[r["id"]] = dict(r)
+
+        # Authoritative per-match total from user_match_points
+        ump_row = con.execute(
+            "SELECT pts FROM user_match_points "
+            "WHERE competition_id=%s AND display_name=%s AND match_id=%s", (comp, n, match_id)
+        ).fetchone()
+        user_total = ump_row["pts"] if ump_row else 0
+
+        # Fallback: read from points_per_match blob in user_selections
+        if not user_total:
+            ppm_sel = con.execute(
+                "SELECT points_per_match FROM user_selections "
+                "WHERE competition_id=%s AND display_name=%s AND week_no=%s", (comp, n, wk)
+            ).fetchone()
+            if ppm_sel:
+                blob = _jloads(ppm_sel["points_per_match"], {})
+                user_total = blob.get(match_id, 0)
+
+    venue  = (raw.get("venue") or raw.get("location") or
+              raw.get("ground") or raw.get("stadium") or "")
+    result = (raw.get("result") or raw.get("match_result") or
+              raw.get("matchResult") or "")
+
+    players_out = []
+    for pid in team_ids:
+        base_pts  = pmp_map.get(pid, 0)
+        is_cap    = pid == cap_id
+        is_vc     = pid == vc_id
+        mult      = 2.0 if is_cap else (1.5 if is_vc else 1.0)
+        final_pts = round(base_pts * mult)
+        info      = player_info.get(pid, {"id": pid, "name": pid,
+                                           "role": "", "team": ""})
+        mult_str  = ""
+        if is_cap and base_pts > 0:
+            mult_str = f"{base_pts}\u00d72"
+        elif is_vc and base_pts > 0:
+            mult_str = f"{base_pts}\u00d71.5"
+
+        players_out.append({
+            "player_id":      pid,
+            "name":           info.get("name", pid),
+            "role":           info.get("role", ""),
+            "team":           info.get("team", ""),
+            "is_cap":         is_cap,
+            "is_vc":          is_vc,
+            "base_pts":       base_pts,
+            "multiplier":     mult,
+            "final_pts":      final_pts,
+            "multiplier_str": mult_str,
         })
-    except Exception as e:
-        _log(f"GET /api/match-details/{match_id}?user={n}: {e}", "error")
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+
+    players_out.sort(key=lambda x: -x["final_pts"])
+    top = (players_out[0] if players_out and players_out[0]["final_pts"] > 0
+           else None)
+
+    return jsonify({
+        "ok":         True,
+        "name":       n,
+        "match_id":   match_id,
+        "match_no":   _match_ordinal(match_id),
+        "title":      mr["title"] or match_id,
+        "week_no":    wk,
+        "teams":      _jloads(mr["teams_json"], []),
+        "venue":      venue,
+        "date_label": _fmt_date_label(mr["date_label"]),
+        "result":     result,
+        "status":     (mr["status"] or "upcoming").lower(),
+        "user_pts":   user_total,
+        "cap_id":     cap_id,
+        "vc_id":      vc_id,
+        "top_scorer": {
+            "player_id": top["player_id"],
+            "name":      top["name"],
+            "pts":       top["final_pts"],
+        } if top else None,
+        "players": players_out,
+    })
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1391,109 +1328,99 @@ def api_rollover():
         return jsonify(body_for(rep)), (500 if rep.get("error") else 200)
     except LookupError as e:
         return jsonify({"ok": False, "error": str(e), "code": 404}), 404
-    except Exception as e:
-        _log(f"POST /api/rollover: {e}", "error")
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
 
 @bp.route("/api/matches-status", methods=["GET"])
 def api_matches_status():
-    try:
-        with db._read() as con:
-            rows=con.execute(
-                "SELECT id,week_no,title,status,scorecard_url,teams_json,date_label "
-                "FROM matches WHERE competition_id=%s ORDER BY id", (_comp(),)
-            ).fetchall()
-        matches=[dict(r) for r in rows]
-        # Flag duplicate Cricbuzz IDs so Admin Tab can warn the user
-        url_to_ids: dict = {}
-        for m in matches:
-            url=m.get("scorecard_url") or ""
-            cb=url.rstrip("/").split("/")[-1]
-            if cb and cb!="00000" and cb.isdigit() and int(cb)>0:
-                url_to_ids.setdefault(cb,[]).append(m["id"])
-        for m in matches:
-            url=m.get("scorecard_url") or ""
-            cb=url.rstrip("/").split("/")[-1]
-            dup_ids=url_to_ids.get(cb,[]) if (cb and cb!="00000") else []
-            m["duplicate_url"]=len(dup_ids)>1
-            m["duplicate_with"]=[x for x in dup_ids if x!=m["id"]]
-        return jsonify({"ok":True,"matches":matches})
-    except Exception as e:
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+    with db._read() as con:
+        rows=con.execute(
+            "SELECT id,week_no,title,status,scorecard_url,teams_json,date_label "
+            "FROM matches WHERE competition_id=%s ORDER BY id", (_comp(),)
+        ).fetchall()
+    matches=[dict(r) for r in rows]
+    # Flag duplicate Cricbuzz IDs so Admin Tab can warn the user
+    url_to_ids: dict = {}
+    for m in matches:
+        url=m.get("scorecard_url") or ""
+        cb=url.rstrip("/").split("/")[-1]
+        if cb and cb!="00000" and cb.isdigit() and int(cb)>0:
+            url_to_ids.setdefault(cb,[]).append(m["id"])
+    for m in matches:
+        url=m.get("scorecard_url") or ""
+        cb=url.rstrip("/").split("/")[-1]
+        dup_ids=url_to_ids.get(cb,[]) if (cb and cb!="00000") else []
+        m["duplicate_url"]=len(dup_ids)>1
+        m["duplicate_with"]=[x for x in dup_ids if x!=m["id"]]
+    return jsonify({"ok":True,"matches":matches})
 
 @bp.route("/api/update-match-url", methods=["POST"])
 def api_update_match_url():
     re_=_check_rate(_write_limiter)
     if re_: return re_
-    try:
-        _u,err=_require_admin()
-        if err: return err
-        d=request.get_json(force=True,silent=True) or {}
-        match_id=(d.get("match_id") or "").strip(); url=(d.get("url") or "").strip()
-        if not match_id or not url: return jsonify({"error":"match_id and url required","code":400}),400
-        m=re.search(r'(\d{5,})',url)
-        if not m: return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
-        cb_id=m.group(1); clean_url=f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
-        comp=_comp()
-        with db._read() as con:
-            row=con.execute("SELECT id FROM matches WHERE id=%s AND competition_id=%s",(match_id,comp)).fetchone()
-        if not row: return jsonify({"error":f"match '{match_id}' not found","code":404}),404
-        with db._write() as con:
-            con.execute("UPDATE matches SET scorecard_url=%s WHERE id=%s AND competition_id=%s",(clean_url,match_id,comp))
-        if _IS_HOSTED:
-            # No Cricbuzz egress in cloud \u2014 push the URL change so the GitHub
-            # Actions runner sees the new URL on checkout, then dispatch the
-            # daily_sync workflow so it scrapes immediately rather than
-            # waiting for the next scheduled run at 18:30 / 21:30 UTC.
-            #
-            # Critically, we also DELETE this match's cached JSON before the
-            # push. scraper.py at scraper.py:615 short-circuits on the
-            # presence of data/matches/match_NN.json \u2014 without deleting it,
-            # the workflow checks out a cached file, the scraper sees it,
-            # skips this match, and we get a "data: scrape ..." commit with
-            # no real change. Targeted deletion = targeted re-scrape.
-            json_rel_path = None
-            try:
-                mno_match = re.search(r'(\d+)\s*$', match_id)
-                if mno_match:
-                    mns = mno_match.group(1).zfill(2)
-                    jp = DATA_DIR / comp / "matches" / f"match_{mns}.json"
-                    # Path RELATIVE to the repo root — git add needs it this
-                    # way. Always pass it through to _push_if_hosted so the
-                    # deletion is STAGED, even if the file didn't exist
-                    # locally (the workflow's checkout might have it).
-                    json_rel_path = f"data/{comp}/matches/match_{mns}.json"
-                    if jp.exists():
-                        jp.unlink()
-                        _log(f"Deleted cached {jp.name} so workflow re-scrapes M{mns}")
-            except Exception as e:
-                _log(f"Could not delete cached match JSON for {match_id}: {e}",
-                     "warn")
-            # Pass the JSON path as extra so the deletion is committed —
-            # without this the workflow checks out the stale JSON on
-            # origin/main and scraper.py:615 short-circuits, defeating the
-            # whole point of Save & Scrape.
-            _push_if_hosted(f"admin-url:{match_id}={cb_id}",
-                            extra_paths=[json_rel_path] if json_rel_path else None)
-            dispatched, dmsg = cloud_sync.dispatch_workflow(
-                "daily_sync.yml", ref="main", log=_log,
-            )
-            if dispatched:
-                msg = ("URL saved, cached scorecard wiped, push & cloud "
-                       "scrape triggered. Click Refresh in 60-90s to see "
-                       "new scores.")
-            else:
-                msg = (f"URL saved & pushed. Scrape NOT triggered: {dmsg}. "
-                       f"Check PAT has actions:write scope. Falls back to "
-                       f"the next scheduled run at 18:30 / 21:30 UTC.")
+    _u,err=_require_admin()
+    if err: return err
+    d=request.get_json(force=True,silent=True) or {}
+    match_id=(d.get("match_id") or "").strip(); url=(d.get("url") or "").strip()
+    if not match_id or not url: return jsonify({"error":"match_id and url required","code":400}),400
+    m=re.search(r'(\d{5,})',url)
+    if not m: return jsonify({"error":"URL must contain a 5+ digit Cricbuzz match ID","code":400}),400
+    cb_id=m.group(1); clean_url=f"https://www.cricbuzz.com/live-cricket-scorecard/{cb_id}"
+    comp=_comp()
+    with db._read() as con:
+        row=con.execute("SELECT id FROM matches WHERE id=%s AND competition_id=%s",(match_id,comp)).fetchone()
+    if not row: return jsonify({"error":f"match '{match_id}' not found","code":404}),404
+    with db._write() as con:
+        con.execute("UPDATE matches SET scorecard_url=%s WHERE id=%s AND competition_id=%s",(clean_url,match_id,comp))
+    if _IS_HOSTED:
+        # No Cricbuzz egress in cloud \u2014 push the URL change so the GitHub
+        # Actions runner sees the new URL on checkout, then dispatch the
+        # daily_sync workflow so it scrapes immediately rather than
+        # waiting for the next scheduled run at 18:30 / 21:30 UTC.
+        #
+        # Critically, we also DELETE this match's cached JSON before the
+        # push. scraper.py at scraper.py:615 short-circuits on the
+        # presence of data/matches/match_NN.json \u2014 without deleting it,
+        # the workflow checks out a cached file, the scraper sees it,
+        # skips this match, and we get a "data: scrape ..." commit with
+        # no real change. Targeted deletion = targeted re-scrape.
+        json_rel_path = None
+        try:
+            mno_match = re.search(r'(\d+)\s*$', match_id)
+            if mno_match:
+                mns = mno_match.group(1).zfill(2)
+                jp = DATA_DIR / comp / "matches" / f"match_{mns}.json"
+                # Path RELATIVE to the repo root — git add needs it this
+                # way. Always pass it through to _push_if_hosted so the
+                # deletion is STAGED, even if the file didn't exist
+                # locally (the workflow's checkout might have it).
+                json_rel_path = f"data/{comp}/matches/match_{mns}.json"
+                if jp.exists():
+                    jp.unlink()
+                    _log(f"Deleted cached {jp.name} so workflow re-scrapes M{mns}")
+        except Exception as e:
+            _log(f"Could not delete cached match JSON for {match_id}: {e}",
+                 "warn")
+        # Pass the JSON path as extra so the deletion is committed —
+        # without this the workflow checks out the stale JSON on
+        # origin/main and scraper.py:615 short-circuits, defeating the
+        # whole point of Save & Scrape.
+        _push_if_hosted(f"admin-url:{match_id}={cb_id}",
+                        extra_paths=[json_rel_path] if json_rel_path else None)
+        dispatched, dmsg = cloud_sync.dispatch_workflow(
+            "daily_sync.yml", ref="main", log=_log,
+        )
+        if dispatched:
+            msg = ("URL saved, cached scorecard wiped, push & cloud "
+                   "scrape triggered. Click Refresh in 60-90s to see "
+                   "new scores.")
         else:
-            tasks.start_bg_scrape(match_id,BASE_DIR)
-            msg = "URL saved. Scraping started in background \u2014 refresh in ~30 seconds."
-        return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
-                        "message":msg})
-    except Exception as e:
-        _log(f"POST /api/update-match-url: {e}","error")
-        return jsonify({"error":str(e),"ok":False,"code":500}),500
+            msg = (f"URL saved & pushed. Scrape NOT triggered: {dmsg}. "
+                   f"Check PAT has actions:write scope. Falls back to "
+                   f"the next scheduled run at 18:30 / 21:30 UTC.")
+    else:
+        tasks.start_bg_scrape(match_id,BASE_DIR)
+        msg = "URL saved. Scraping started in background \u2014 refresh in ~30 seconds."
+    return jsonify({"ok":True,"match_id":match_id,"cb_id":cb_id,"url":clean_url,
+                    "message":msg})
 
 
 @bp.route("/api/sync-now", methods=["POST"])
@@ -1541,53 +1468,45 @@ def api_sync_now():
     # The user clicks Refresh, sees "Triggered scrape — check back in
     # 60-90s", clicks Refresh again later to pull the new commit.
     if _IS_HOSTED:
-        try:
-            # INF-1: no git pull — data lives in Postgres and is always current.
+        # INF-1: no git pull — data lives in Postgres and is always current.
 
-            # Best-effort dispatch. If the PAT lacks actions:write the
-            # request fails 403; we surface that in the response so the
-            # operator can fix the PAT, but the pull half still counts.
-            # `force_full_rescrape=true` makes the workflow wipe the
-            # data/matches/*.json cache before running scraper.py — without
-            # this, scraper.py at scraper.py:615 silently skips every
-            # match it has previously cached and the workflow produces no
-            # new commits, no new data, no visible UI change.
-            dispatched, dmsg = cloud_sync.dispatch_workflow(
-                "daily_sync.yml", ref="main",
-                inputs={"force_full_rescrape": "true"},
-                log=_log,
-            )
-            return jsonify({
-                "ok":         True,
-                "mode":       "dispatch",
-                "dispatched": dispatched,
-                "dispatch_msg": dmsg,
-                "message":    ("Triggered a cloud scrape. Click Refresh in 60-90s "
-                               "to see new scores.")
-                              if dispatched
-                              else (f"Scrape NOT triggered: {dmsg}. "
-                                    f"Check the PAT has actions:write scope."),
-            })
-        except Exception as e:
-            _log(f"POST /api/sync-now (HOSTED): {e}", "error")
-            return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+        # Best-effort dispatch. If the PAT lacks actions:write the
+        # request fails 403; we surface that in the response so the
+        # operator can fix the PAT, but the pull half still counts.
+        # `force_full_rescrape=true` makes the workflow wipe the
+        # data/matches/*.json cache before running scraper.py — without
+        # this, scraper.py at scraper.py:615 silently skips every
+        # match it has previously cached and the workflow produces no
+        # new commits, no new data, no visible UI change.
+        dispatched, dmsg = cloud_sync.dispatch_workflow(
+            "daily_sync.yml", ref="main",
+            inputs={"force_full_rescrape": "true"},
+            log=_log,
+        )
+        return jsonify({
+            "ok":         True,
+            "mode":       "dispatch",
+            "dispatched": dispatched,
+            "dispatch_msg": dmsg,
+            "message":    ("Triggered a cloud scrape. Click Refresh in 60-90s "
+                           "to see new scores.")
+                          if dispatched
+                          else (f"Scrape NOT triggered: {dmsg}. "
+                                f"Check the PAT has actions:write scope."),
+        })
 
     # ── LOCAL mode: existing Cricbuzz discovery + scrape behaviour ──────────
-    try:
-        d     = request.get_json(force=True, silent=True) or {}
-        debug = bool(d.get("debug")) or \
-                (request.args.get("debug", "").lower() in ("1", "true", "yes"))
-        t = tasks.start_bg_sync(debug=debug)
-        return jsonify({
-            "ok":          True,
-            "thread_name": t.name if t else None,
-            "debug":       debug,
-            "message":     "Discovery+scrape started in background. "
-                           "Refresh /api/matches-status in 30-90 seconds.",
-        })
-    except Exception as e:
-        _log(f"POST /api/sync-now: {e}", "error")
-        return jsonify({"error": str(e), "ok": False, "code": 500}), 500
+    d     = request.get_json(force=True, silent=True) or {}
+    debug = bool(d.get("debug")) or \
+            (request.args.get("debug", "").lower() in ("1", "true", "yes"))
+    t = tasks.start_bg_sync(debug=debug)
+    return jsonify({
+        "ok":          True,
+        "thread_name": t.name if t else None,
+        "debug":       debug,
+        "message":     "Discovery+scrape started in background. "
+                       "Refresh /api/matches-status in 30-90 seconds.",
+    })
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1596,8 +1515,7 @@ def api_sync_now():
 
 @bp.route("/")
 def index():
-    try: return render_template("index.html")
-    except Exception as e: return f"<h1>Error</h1><p>{e}</p>",500
+    return render_template("index.html")
 
 @bp.route("/static/<path:filename>")
 def serve_static(filename):

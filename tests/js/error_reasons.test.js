@@ -51,6 +51,24 @@ t('without a reason everything works as before (server text, then the status)', 
   assert.strictEqual(Ui.errorMessage(null, 'fallback'), 'fallback');
 });
 
+t('the HTTP errors the API now answers as JSON (hardening release) have their own sentences', () => {
+  assert.strictEqual(Ui.errorMessage(fail(404, { error: 'Not found', code: 404, reason: 'not_found' })), 'That could not be found.');
+  assert.strictEqual(Ui.errorMessage(fail(413, { error: 'That is too large to send', code: 413, reason: 'too_large' })), 'That is too large to send.');
+  assert.ok(/not understood/i.test(Ui.errorMessage(fail(400, { error: 'That request was not understood', code: 400, reason: 'bad_request' }))));
+  assert.strictEqual(Ui.errorMessage(fail(405, { error: 'Method not allowed', code: 405, reason: 'method_not_allowed' })), 'Method not allowed');   // only code can cause it: shown as sent
+});
+
+t('an unexpected server failure shows its short request id, and only a plain id', () => {
+  const base = 'The server had a problem. Please try again in a moment.';
+  assert.strictEqual(Ui.errorMessage(fail(500, { error: base, ok: false, code: 500, reason: 'server_error', request_id: '3fa9c2d1' })), base + ' (ref 3fa9c2d1)');
+  for (const bad of ['', 'abc', 'x'.repeat(17), '<b>hi</b>', '3fa9 c2d1', 7, null, undefined, {}, ['3fa9c2d1']]) {
+    assert.strictEqual(Ui.errorMessage(fail(500, { error: base, reason: 'server_error', request_id: bad })), base, 'a request id like ' + JSON.stringify(bad) + ' is never shown');
+  }
+  assert.strictEqual(Ui.errorMessage(fail(500, { error: 'Something odd', reason: 'brand_new', request_id: 'aabbccdd' })), 'Something odd (ref aabbccdd)');   // it also rides on the server's own text
+  assert.strictEqual(Ui.errorRef(null), ''); assert.strictEqual(Ui.errorRef({}), ''); assert.strictEqual(Ui.errorRef({ serverData: { request_id: 'ABCD1234' } }), ' (ref ABCD1234)');
+  assert.strictEqual(Ui.errorMessage(fail(500, { error: base, reason: 'server_error' })), base, 'no id sent: nothing added');
+});
+
 t('Ui.errorFor and Ui.errorReason', () => {
   assert.strictEqual(Ui.errorFor('locked'), Ui.errorFor('locked', 'x'));
   assert.strictEqual(Ui.errorFor('nope', 'fallback'), 'fallback');

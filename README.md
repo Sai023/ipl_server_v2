@@ -170,6 +170,7 @@ curl -X POST http://localhost:5000/api/rollover?force=1
 |--------|----------|-------------|
 | GET | `/api/version` | Module version pins |
 | GET | `/api/ping` | Health check + config |
+| GET | `/api/health` | One `SELECT 1`: is the server up and its database reachable (the banner's probe) |
 | GET | `/api/state` | Full app state (includes `player_pts`) |
 | GET | `/api/players` | Player roster sorted by `season_pts DESC` |
 | GET | `/api/leaderboard` | Cumulative rankings — pure `SUM(week_pts)` |
@@ -177,7 +178,6 @@ curl -X POST http://localhost:5000/api/rollover?force=1
 | GET | `/api/current-week` | Current week number |
 | GET | `/api/history/<n>` | User's week-by-week team history |
 | GET | `/api/player-points/<n>` | Per-player points breakdown |
-| GET | `/api/audit-scores/<n>` | Step-by-step scoring audit |
 | GET | `/api/debug-points/<n>` | Ghost/unscored player check |
 | GET | `/api/matches-status` | All match IDs, weeks, statuses |
 | POST | `/api/save-next-week/<n>` | Save next week draft |
@@ -283,7 +283,7 @@ named tunnel via `cloudflared tunnel login` (not shipped by default).
 | "0 completed matches" or rows missing teams/dates | Run `python Seed_Matches.py --no-live` (re-sync from `schedule.json` without hitting Cricbuzz) |
 | Admin tab shows a match with the wrong teams/date | Same as above — `Seed_Matches.py --no-live` rewrites title, teams, date_label from `schedule.json`. The scraper also auto-re-syncs on every run via `_presync_schedule` (which now delegates to `seed_to_db`). |
 | Match has `⚠ No ID` even after Save & Scrape | The Cricbuzz scorecard for that URL was in `Preview` state or returned non-IPL teams. The scraper auto-resets the URL with a clear log line — paste a fresh Cricbuzz scorecard URL and try again. |
-| Leaderboard shows 0 for everyone | Check `/api/audit-player-ids` for ghost player IDs in selections; run `Audit_Scores.ps1` |
+| Leaderboard shows 0 for everyone | Ask for the team's player ids in `/api/history/<name>` and compare them with `/api/players` (the old `/api/audit-player-ids` route and `Audit_Scores.ps1` were removed 2026-11-21) |
 | Points not updating after scraper | `player_match_points` is wiped on each restart and rebuilt by `scraper.py` — run `python scraper.py` |
 | Tunnel not starting | Install cloudflared: see "Cloudflare Tunnel" section above |
 | Scraper says "Cricbuzz returned no data" | Verify the ID: `python Seed_Matches.py --verify <id>` |

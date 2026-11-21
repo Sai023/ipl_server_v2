@@ -79,7 +79,7 @@ function load(o = {}) {
     c.lastRaw = (r instanceof Error) ? Promise.reject(r) : Promise.resolve({ status: r.status, ok: r.status >= 200 && r.status < 300 });
     return c.lastRaw;
   };
-  c.pings = () => c.sent.filter((x) => x.url === '/api/ping');
+  c.pings = () => c.sent.filter((x) => x.url === '/api/health');
   vm.createContext(c);
   vm.runInContext(UI_SRC, c, { filename: 'ui.js' });
   c.Ui.success = (m) => { c.toasts.push(m); };
