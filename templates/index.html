@@ -14,16 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper13">
-  <link rel="stylesheet" href="/static/style.css?v=paper13">
-  <link rel="stylesheet" href="/static/ui.css?v=paper13">
-  <link rel="stylesheet" href="/static/screens.css?v=paper13">
-  <link rel="stylesheet" href="/static/paper.css?v=paper13">
+  <link rel="stylesheet" href="/static/theme.css?v=paper14">
+  <link rel="stylesheet" href="/static/style.css?v=paper14">
+  <link rel="stylesheet" href="/static/ui.css?v=paper14">
+  <link rel="stylesheet" href="/static/screens.css?v=paper14">
+  <link rel="stylesheet" href="/static/paper.css?v=paper14">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper13"></script>
+<script src="/static/ui.js?v=paper14"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -125,6 +125,7 @@ function _googleAccount(acct){
   if(!window.IplGoogle)return;
   IplGoogle.setAccount(acct?{linked:!!acct.linked,emailMasked:acct.email_masked||null,pinEnabled:acct.linked?false:acct.pin_enabled!==false}:{linked:false,emailMasked:null,pinEnabled:true});
   if(!(acct&&acct.linked)&&!_mustChange)IplGoogle.offerSwitchWhenReady({nearLock:_lockWithin(24*3600*1000)});
+  if(!_mustChange)IplGoogle.offerHandoff(_username);   // the app sent this member to the browser for the sign-in (?handoff=): offer "Return to the app" (nothing happens otherwise)
 }
 function _lockWithin(ms){
   var dl=_state&&_state.deadline,t=dl&&dl.next_lock_utc?new Date(dl.next_lock_utc).getTime():NaN,now=_nowMs();
@@ -851,9 +852,10 @@ function _buildPitchView(teamArr,capId,vcId){
 
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
+  if(window.IplGoogle&&IplGoogle.redeeming())return '<div class="card login-hero"><h2>Signing you in\u2026</h2><p>Finishing the sign-in you started in your browser.</p></div>';   // the app is redeeming the browser's code
   var g=window.IplGoogle?IplGoogle.loginBlockHtml():"";   // the Google button block (empty until the server says Google sign-in is set up)
   var pin=!g||IplGoogle.pinEnabled();                       // the passcode screens go only when Google is on AND nobody has a passcode any more
-  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>'+(g?(pin?'Continue with Google, or pick your name to use your passcode.':'Sign in with Google to continue.'):'Pick your name to sign in.')+'</p>'+g;
+  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>'+(g?(pin?'Continue with Google, or pick your name to use your passcode.':'Sign in with Google to continue.'):'Pick your name to sign in.')+'</p>'+(window.IplGoogle?IplGoogle.handoffNoteHtml():'')+g;
   if(!pin){
     return h+'</div>';
   }
@@ -2062,6 +2064,13 @@ window.addEventListener("ipl:google-signed-in",function(e){
   if(_sessionLost)_reauthDone(d);else _establishSession(d.name,d.is_admin,d.must_change,d);
 });
 window.addEventListener("ipl:google-linked",function(){if(_state)render(_state);});                    // the menu now says "Signed in with Google"
+// The installed app finished (or failed) the sign-in it started in the browser: on success ipl:google-signed-in has just signed the member in; say so. On a failure say why and show the card again.
+window.addEventListener("ipl:app-handoff",function(e){
+  var d=e.detail||{};
+  if(d.ok){Ui.success("Signed in"+(d.name?" as "+d.name:"")+". Welcome back to the app.",{duration:5000});return;}
+  Ui.error(d.message||"Could not sign in. Please try again.");
+  if(!_username&&_state)render(_state);
+});
 // A NEW member joined with a Google account (a display name, no passcode): ipl:google-signed-in has just signed them in; welcome them.
 window.addEventListener("ipl:google-joined",function(e){
   var d=e.detail||{};
@@ -2148,8 +2157,8 @@ window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper13"></script>
-<script src="/static/mc_hub.js?v=paper13"></script>
-<script src="/static/auth_google.js?v=paper13"></script>
+<script src="/static/ipl_glue.js?v=paper14"></script>
+<script src="/static/mc_hub.js?v=paper14"></script>
+<script src="/static/auth_google.js?v=paper14"></script>
 </body>
 </html>

@@ -30,6 +30,17 @@
   var offered = false;                            // the switch sheet is offered once per launch
   var ticker = null;
 
+  // Sign-in from the installed app (see "sign-in from the app" below)
+  var LS_VERIFIER = "ipl_handoff_v";              // the app's secret half, kept in the app's own storage: JSON {v, t}
+  var SS_CHALLENGE = "ipl_handoff_c";             // the browser's copy of the challenge it was opened with: JSON {c, t} (survives a reload of the tab)
+  var HANDOFF_MAX_AGE_MS = 15 * 60 * 1000;
+  var APP_SCHEME = "bclfantasy", APP_PACKAGE = "com.iplfantasy.app";
+  var CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/, CODE_RE = /^[A-Za-z0-9_-]{16,128}$/;
+  var pendingChallenge = null;                    // browser: the app's challenge, until the member has been offered the way back or said not now
+  var pendingCode = null;                         // app: a code that came back from the browser, until it has been redeemed
+  var redeeming = false;                          // app: the code is being redeemed (the sign-in card says "signing you in" instead of offering the button)
+  var handoffSheet = null;                        // browser: the open "Return to the app" sheet
+
   function api() { return window.IplApi; }
   function fire(name, detail) { try { window.dispatchEvent(new CustomEvent(name, { detail: detail })); } catch (e) {} }
   function hasGis() { return !!(window.google && window.google.accounts && window.google.accounts.id); }
@@ -102,7 +113,12 @@
     return config().then(function (c) {
       if (!c.enabled || !inDom(host)) return;
       var eb = embeddedBrowser();
-      if (eb.blocked) { view.blocked(host, eb.app); return; }
+      if (eb.blocked) {
+        // The BCL Fantasy app (1.5 and later) hands the Google step to the phone's browser and takes the member back; every other built-in browser is told to open the link elsewhere.
+        if (mode === "signin" && appShell().inApp && handoffSupported()) { view.appSignIn(host, function () { startAppSignIn(ctx); }); return; }
+        view.blocked(host, eb.app);
+        return;
+      }
       view.status(host, "", "");
       return loadGis().then(function () { return ensureNonce(false); }).then(function (n) {
         if (!inDom(host)) return;
@@ -239,6 +255,131 @@
     if (account) remember(account.linked);
   }
 
+  // ── sign-in from the app ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  // Google refuses to sign anybody in inside an app's WebView, and the BCL Fantasy Android app (1.5 and later) is one. So the app hands the Google step to the phone's
+  // own browser and the browser hands the member back: the pattern native apps use (RFC 8252, with the PKCE proof of RFC 7636).
+  //   in the APP      the member taps "Sign in with Google in your browser". The page makes a random VERIFIER, keeps it in the app's own storage and sends the browser only its
+  //                   hash, the CHALLENGE, by "loading" /app-signin?c=<challenge>: the app intercepts that address and opens the browser instead of loading it.
+  //   in the BROWSER  the page opens with ?handoff=<challenge>. Once the member is signed in there (Google, a passcode: anything) it asks the server for a one-time CODE for
+  //                   that challenge and offers a "Return to the app" link (an Android intent for bclfantasy://auth?code=...), which the app handles.
+  //   in the APP      loaded with ?handoff_code=<code>: the page gives the server the code AND the verifier and gets the app's OWN session (the browser's is untouched).
+  // A code that falls into the wrong hands (another app can register the same link) is useless without the verifier, which never left the app.
+  // The app tells the page it is the app with a user-agent token, BCLFantasyApp/<version> (APK 1.5 and later); the old app has none and keeps the "open in Chrome" notice.
+  function appShell(ua) {
+    ua = String(ua != null ? ua : ((window.navigator && navigator.userAgent) || ""));
+    var m = /BCLFantasyApp\/([\d.]+)/.exec(ua);
+    return { inApp: !!m, version: m ? m[1] : "" };
+  }
+  function handoffSupported() {
+    try { return !!(window.crypto && window.crypto.subtle && window.crypto.getRandomValues && typeof window.TextEncoder !== "undefined" && typeof window.btoa === "function" && window.localStorage); } catch (e) { return false; }
+  }
+  function b64url(bytes) {                       // bytes: a Uint8Array or an ArrayBuffer; base64url without padding
+    var b = new Uint8Array(bytes), s = "", i;
+    for (i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return window.btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function randomVerifier() { var a = new Uint8Array(32); window.crypto.getRandomValues(a); return b64url(a); }              // 32 random bytes: 43 characters
+  function challengeOf(verifier) { return window.crypto.subtle.digest("SHA-256", new window.TextEncoder().encode(verifier)).then(b64url); }
+  function storeVerifier(v) { try { localStorage.setItem(LS_VERIFIER, JSON.stringify({ v: v, t: Date.now() })); } catch (e) {} }
+  function readVerifier() {
+    try { var o = JSON.parse(localStorage.getItem(LS_VERIFIER) || "null"); if (o && typeof o.v === "string" && Date.now() - o.t < HANDOFF_MAX_AGE_MS) return o.v; } catch (e) {}
+    return null;
+  }
+  function clearVerifier() { try { localStorage.removeItem(LS_VERIFIER); } catch (e) {} }
+
+  // The member tapped the button in the app: keep a new secret, send the browser its hash.
+  function startAppSignIn(ctx) {
+    var v = randomVerifier();
+    return challengeOf(v).then(function (ch) {
+      storeVerifier(v);
+      view.status(ctx.host, "Finish signing in in your browser, then tap “Return to the app”.", "info");
+      window.location.href = ((window.location && location.origin) || "") + "/app-signin?c=" + ch;
+    }, function () { view.status(ctx.host, "This phone could not start the browser sign-in. Open the link in Chrome instead.", "error"); });
+  }
+
+  function queryParams() {
+    var out = {}, s = String((window.location && location.search) || "").replace(/^\?/, "");
+    if (!s) return out;
+    s.split("&").forEach(function (kv) {
+      var i = kv.indexOf("="), k = i < 0 ? kv : kv.slice(0, i);
+      try { out[decodeURIComponent(k)] = i < 0 ? "" : decodeURIComponent(kv.slice(i + 1).replace(/\+/g, " ")); } catch (e) {}
+    });
+    return out;
+  }
+  function stripParams(names) {                  // the address bar never keeps a challenge or a code (a reload must not use one twice)
+    try {
+      var rest = String(location.search || "").replace(/^\?/, "").split("&").filter(function (kv) { return kv && names.indexOf(kv.split("=")[0]) < 0; }).join("&");
+      window.history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "") + (location.hash || ""));
+    } catch (e) {}
+  }
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  // At load: pick up ?handoff=<challenge> (browser) and ?handoff_code=<code> (app) from the address, and take them out of it.
+  function takeParams() {
+    var p = queryParams(), names = [];
+    var android = /Android/i.test(String((window.navigator && navigator.userAgent) || ""));
+    if (has(p, "handoff")) {
+      names.push("handoff");
+      if (CHALLENGE_RE.test(p.handoff) && android && !appShell().inApp) {
+        pendingChallenge = p.handoff;
+        try { sessionStorage.setItem(SS_CHALLENGE, JSON.stringify({ c: p.handoff, t: Date.now() })); } catch (e) {}
+      }
+    }
+    if (has(p, "handoff_code")) { names.push("handoff_code"); if (CODE_RE.test(p.handoff_code)) pendingCode = p.handoff_code; }
+    if (names.length) stripParams(names);
+    if (!pendingChallenge && android && !appShell().inApp) {                  // the tab was reloaded after the address was cleaned: the challenge it was opened with
+      try { var o = JSON.parse(sessionStorage.getItem(SS_CHALLENGE) || "null"); if (o && CHALLENGE_RE.test(o.c) && Date.now() - o.t < HANDOFF_MAX_AGE_MS) pendingChallenge = o.c; } catch (e) {}
+    }
+  }
+  function forgetChallenge() { pendingChallenge = null; try { sessionStorage.removeItem(SS_CHALLENGE); } catch (e) {} }
+
+  // APP: the browser sent the member back with a code. Give the server the code and the secret; the reply is the app's own session, a sign-in like any other.
+  function redeemPending() {
+    var code = pendingCode; pendingCode = null;
+    var v = readVerifier();
+    if (!code) return Promise.resolve();
+    if (!v) { fire("ipl:app-handoff", { ok: false, message: "That browser sign-in did not start in this app. Tap Sign in with Google in your browser to start again." }); return Promise.resolve(); }
+    redeeming = true;
+    return api().authHandoffRedeem(code, v).then(function (d) {
+      redeeming = false; clearVerifier();
+      remember(!!(d && d.linked));
+      account = { linked: !!(d && d.linked), emailMasked: (d && d.email_masked) || null, pinEnabled: !(d && d.linked) };
+      fire("ipl:google-signed-in", d);           // the page signs the member in exactly as for a Google sign-in
+      fire("ipl:app-handoff", { ok: true, name: d && d.name });
+    }, function (err) {
+      redeeming = false; clearVerifier();
+      fire("ipl:app-handoff", { ok: false, message: errText(err) });
+    });
+  }
+
+  // BROWSER: the member is signed in here and the app is waiting. Ask for a one-time code and offer the way back (the code lives two minutes: after that the button asks again).
+  function appLink(code) {
+    var back = ((window.location && location.origin) || "") + "/";
+    return "intent://auth?code=" + encodeURIComponent(code) + "#Intent;scheme=" + APP_SCHEME + ";package=" + APP_PACKAGE + ";S.browser_fallback_url=" + encodeURIComponent(back) + ";end";
+  }
+  function offerHandoff(name) {
+    if (!pendingChallenge || handoffSheet || appShell().inApp) return false;
+    var challenge = pendingChallenge;
+    var sheet = handoffSheet = view.handoffSheet({
+      name: name || "",
+      again: function () { ask(); },
+      sent: function () { if (handoffSheet === sheet) forgetChallenge(); },      // the way back was taken: the page stops remembering the app's challenge (a new code can still be asked for with this sheet)
+      cancel: function () { if (handoffSheet === sheet) handoffSheet = null; forgetChallenge(); }
+    });
+    function ask() {
+      sheet.waiting();
+      return api().authHandoff(challenge).then(function (d) {
+        if (handoffSheet !== sheet) return;
+        sheet.ready(appLink(d.code), Math.max(10, ((d && d.expires_in) || 120) - 10) * 1000);
+      }, function (err) { if (handoffSheet === sheet) sheet.fail(errText(err)); });
+    }
+    ask();
+    return true;
+  }
+  // The sign-in card in the browser says why the member is here.
+  function handoffNoteHtml() {
+    return pendingChallenge ? '<p class="handoff-note">You are signing in to the BCL Fantasy app. Sign in here, then tap <b>Return to the app</b>.</p>' : "";
+  }
+
   // ── the screens ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   function loginBlockHtml() { return (cfg && cfg.enabled) ? view.loginBlockHtml() : ""; }
   // After every draw of the page: put the button into the sign-in card (the card is rebuilt on each draw, so the button is drawn again; its nonce is reused).
@@ -258,7 +399,7 @@
   }
   // The offer made once per launch to a member who has not switched. opts.nearLock: a lock is close, so the member is not interrupted.
   function offerSwitch(opts) {
-    if (offered || !cfg || !cfg.enabled || !account || account.linked || (opts && opts.nearLock) || embeddedBrowser().blocked) return false;
+    if (offered || !cfg || !cfg.enabled || !account || account.linked || (opts && opts.nearLock) || embeddedBrowser().blocked || pendingChallenge) return false;   // (a member in the browser for the app's sake is not interrupted)
     offered = true;
     openSwitch();
     return true;
@@ -271,7 +412,7 @@
     mount(sheet.slot, "signin", function () { sheet.close(); });
     return sheet;
   }
-  function closeSheets() { view.closeSheets(); }
+  function closeSheets() { handoffSheet = null; view.closeSheets(); }      // (a member who is still on their way back to the app is offered the way back again)
 
   // ── the DOM part ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   var openSheets = [];
@@ -311,6 +452,51 @@
         try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(link).then(ok, function () { if (window.Ui) Ui.info(link); }); return; } } catch (e) {}
         if (window.Ui) Ui.info(link);
       };
+    },
+    // Inside the BCL Fantasy app: Google refuses the app's own browser view, so the member signs in with Google in the phone's browser and is brought back (see "sign-in from the app").
+    appSignIn: function (host, onTap) {
+      host.innerHTML = '<button type="button" class="btn btn-teal google-app-btn">Sign in with Google in your browser</button>';
+      var b = host.querySelector("button"); if (b) b.onclick = onTap;
+      view.status(host, "Opens your browser, then brings you back here.", "info");
+    },
+    // In the browser, for the app: a bottom sheet with ONE link, an Android intent that opens the app with the one-time code. {waiting(), ready(href, ms), fail(text), close(), dismiss()}.
+    handoffSheet: function (o) {
+      var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd ui-sheet-blocking";
+      var who = o.name ? esc(o.name) : "you";
+      bd.innerHTML = '<div class="ui-sheet google-sheet handoff-sheet" role="dialog" aria-modal="true" aria-label="Sign in to the app"><div class="ui-sheet-grip" aria-hidden="true"></div>' +
+        '<h2 class="ui-sheet-title has-sub">Sign in to the app</h2>' +
+        '<p class="ui-sheet-sub">' + (o.name ? "You are signed in as <b>" + who + "</b> in this browser. " : "") + "Tap the button to go back to the BCL Fantasy app: it signs in as " + who + " too.</p>" +
+        '<div class="handoff-body"><a class="btn btn-teal handoff-go" role="button" aria-disabled="true">Getting your sign-in ready…</a><div class="google-status handoff-hint" role="status" aria-live="polite"></div></div>' +
+        '<div class="ui-sheet-actions"><button type="button" class="btn btn-ghost" data-r="secondary">Not now</button></div></div>';
+      document.body.appendChild(bd);
+      var go = bd.querySelector(".handoff-go"), hint = bd.querySelector(".handoff-hint"), timer = null, self = {};
+      function say(text, kind) { hint.textContent = text || ""; hint.className = "google-status handoff-hint" + (kind ? " " + kind : ""); }
+      function stop() { if (timer) { clearTimeout(timer); timer = null; } }
+      function again(label, text) {                    // the link is not usable any more (it timed out, or asking failed): the button asks for a new one
+        stop(); go.removeAttribute("href"); go.setAttribute("aria-disabled", "false"); go.textContent = label; say(text, "error");
+        go.onclick = function (e) { e.preventDefault(); o.again(); };
+      }
+      function onKey(e) { if (e.key === "Escape") { e.preventDefault(); self.dismiss(); } }
+      self.waiting = function () { stop(); go.removeAttribute("href"); go.setAttribute("aria-disabled", "true"); go.textContent = "Getting your sign-in ready…"; go.onclick = function (e) { e.preventDefault(); }; say("", ""); };
+      self.ready = function (href, ms) {
+        stop(); go.setAttribute("href", href); go.setAttribute("aria-disabled", "false"); go.textContent = "Return to the app";
+        say("If nothing happens, check that the BCL Fantasy app (version 1.5 or later) is installed.", "info");
+        timer = setTimeout(function () { again("Get a new sign-in", "That sign-in timed out."); }, ms);
+        go.onclick = function () {                     // the browser follows the link: the code is used up by the app, so it is not offered twice
+          stop(); go.setAttribute("aria-disabled", "true"); go.textContent = "Opening the app…"; say("", "");
+          if (o.sent) o.sent();
+          timer = setTimeout(function () { again("Open the app again", "Still here? The app may not have opened."); }, 5000);
+        };
+      };
+      self.fail = function (text) { again("Try again", text); };
+      self.close = function () { stop(); document.removeEventListener("keydown", onKey, true); if (bd.parentNode) bd.parentNode.removeChild(bd); var i = openSheets.indexOf(self); if (i >= 0) openSheets.splice(i, 1); };
+      self.dismiss = function () { self.close(); if (o.cancel) o.cancel(); };
+      bd.querySelector('[data-r="secondary"]').onclick = self.dismiss;
+      bd.addEventListener("mousedown", function (e) { if (e.target === bd) self.dismiss(); });
+      document.addEventListener("keydown", onKey, true);
+      openSheets.push(self);
+      if (go.focus) go.focus();
+      return self;
     },
     trouble: function (host, msg, retry) {
       if (!inDom(host)) return;
@@ -479,6 +665,10 @@
     loginBlockHtml: loginBlockHtml, afterRender: afterRender,
     mount: mount, openSwitch: openSwitch, offerSwitch: offerSwitch, offerSwitchWhenReady: offerSwitchWhenReady,
     signInAgain: signInAgain, closeSheets: closeSheets,
-    _test: { setView: function (v) { view = v; }, getView: function () { return view; }, reset: function () { cfg = cfgP = account = nonce = nonceP = gisP = current = null; nonceAt = 0; offered = false; if (ticker) { clearInterval(ticker); ticker = null; } } }
+    appShell: appShell, offerHandoff: offerHandoff, handoffNoteHtml: handoffNoteHtml, redeeming: function () { return redeeming; },
+    _test: { setView: function (v) { view = v; }, getView: function () { return view; }, reset: function () { cfg = cfgP = account = nonce = nonceP = gisP = current = null; nonceAt = 0; offered = false; pendingChallenge = pendingCode = handoffSheet = null; redeeming = false; if (ticker) { clearInterval(ticker); ticker = null; } } }
   };
+
+  // At load: the address may carry the way into (or back from) the browser sign-in for the app. Never allowed to break the page.
+  try { takeParams(); if (pendingCode) redeemPending(); } catch (e) { redeeming = false; }
 }(window));

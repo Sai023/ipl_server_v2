@@ -115,3 +115,10 @@
 .claim-join { margin: var(--sp-2) 0; text-align: center; }
 .claim-name-input { width: 100%; max-width: 320px; box-sizing: border-box; min-height: 48px; padding: 10px 14px; font: inherit; font-size: 16px; text-align: center; color: var(--text); background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand-sm); }
 .claim-hint { margin: var(--sp-2) auto 0; max-width: 320px; font-size: 12px; line-height: 1.45; color: var(--muted); }
+/* signing in from the app: the button inside the app, and the sheet in the browser that takes the member back */
+.google-app-btn { width: 100%; max-width: 340px; min-height: 48px; font-size: 15px; }
+.handoff-note { margin: 8px auto 4px; max-width: 340px; padding: 8px 12px; font-size: 13px; line-height: 1.45; text-align: center; color: var(--text); background: color-mix(in srgb, var(--gold-wash) 30%, var(--sheet-2)); border: 1px dashed var(--border-strong); border-radius: var(--r-hand-sm); }
+.handoff-body { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-2); }
+.handoff-go { display: inline-flex; align-items: center; justify-content: center; width: 100%; max-width: 340px; min-height: 52px; font-size: 16px; text-decoration: none; text-align: center; }
+.handoff-go[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.handoff-hint { min-height: 32px; }

@@ -119,13 +119,14 @@ from config import (
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, GOOGLE_IDENTITY_VER, FUZZY_MATCH_VER,
-    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS,
+    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS, HANDOFF_VER,
 )
 import tasks
 from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
 from logic import rollover_plan as _rp                                       # the stored lock schedule: what is due, and whether picking is locked (Phase 1.5)
 from logic import competition_import as _ci
 from logic import google_identity as _gid                                    # checks the ID token Google hands the page (Phase 3 sign-in, 2026-11-21)
+from logic import app_handoff as _handoff                                    # one-time codes that carry a signed-in member from the browser into the installed app (2026-11-21)
 
 bp = Blueprint("api", __name__)
 
@@ -180,6 +181,7 @@ def api_version():
             "rollover_plan":      ROLLOVER_PLAN_VER,
             "session_policy":     SESSION_POLICY_VER,
             "google_identity":    GOOGLE_IDENTITY_VER,
+            "app_handoff":        HANDOFF_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },
@@ -463,10 +465,13 @@ def api_admin_members():
 #   /api/auth/claim   {ticket, name, passcode}: that member proves who they are once; the account is linked, the passcode retired in the same transaction, they are signed in
 #   /api/auth/join    {ticket, name}: a NEW member joins with that Google account and a display name; no passcode exists (an admin can close joining; there is a member cap)
 #   /api/auth/link    a signed-in member links their Google account; their passcode is retired in the same transaction
-# Nothing here works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). The devices list comes in a later release.
+#   /api/auth/handoff, /api/auth/handoff/redeem   the installed app cannot sign in with Google itself (a WebView): the browser signs the member in and hands the app a one-time code
+# Nothing above the hand-off works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). The hand-off does not need Google at all (it carries ANY signed-in
+# member into the app). The devices list comes in a later release.
 
 _NONCES = _gid.NonceStore()
 _CLAIMS = _gid.ClaimStore()
+_HANDOFFS = _handoff.HandoffStore()
 
 
 def _claim_members():
@@ -692,6 +697,53 @@ def api_auth_join():
     _log(f"google account joined the league as {name}")
     return jsonify({"ok": True, "linked": True, "joined": True, "name": name, "token": token, "must_change": False,
                     "is_admin": False, "email_masked": _gid.mask_email(pending["email"])})
+
+
+@bp.route("/api/auth/handoff", methods=["POST"])
+def api_auth_handoff():
+    """A browser the member is signed in on asks for a ONE-TIME CODE that carries them into the installed app. Body {challenge}: base64url(SHA-256(verifier)) of a secret the APP
+    made and kept (the browser never sees the secret, only this hash). Authorization: Bearer <the browser's session>. Answers {code, expires_in}: the page puts the code in the link
+    that opens the app (bclfantasy://auth?code=...). The code is single-use, lives two minutes, and is bound to THIS member and this challenge: another app that catches the link
+    cannot use it without the verifier (POST /api/auth/handoff/redeem). Works for any signed-in member (Google or passcode). 401 auth_required / session_ended, 400 bad_request
+    (not a 43-character base64url challenge), 429 rate_limited (the store is full). Shares the 60/min sign-in limiter."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    username, err = _require_token()
+    if err: return err
+    d = request.get_json(force=True, silent=True)
+    d = d if isinstance(d, dict) else {}
+    challenge = d.get("challenge")
+    if not isinstance(challenge, str) or not _handoff.CHALLENGE_RE.match(challenge):
+        return jsonify({"ok": False, "error": "challenge must be the 43-character hash the app made", "code": 400, "reason": "bad_request"}), 400
+    code = _HANDOFFS.issue(username, challenge)
+    if not code:
+        return jsonify({"ok": False, "error": "Too many sign-ins at once. Wait a minute and try again.", "code": 429, "reason": "rate_limited"}), 429
+    _log(f"hand-off code issued for {username}")        # the code itself is never logged
+    return jsonify({"ok": True, "code": code, "expires_in": _HANDOFFS.ttl})
+
+
+@bp.route("/api/auth/handoff/redeem", methods=["POST"])
+def api_auth_handoff_redeem():
+    """The APP gives back the code the browser handed it, with the verifier whose hash it sent: body {code, verifier}. No session is needed (the app has none yet): the proof is the
+    verifier. On success the app gets its OWN new session for the member the code was issued to (the browser's session is untouched), exactly as a sign-in answers. The code is used up
+    by ANY attempt, so a wrong verifier burns it. Refused: a code or verifier of the wrong shape (400 credentials_required: nothing is used up), an unknown, used, expired or
+    wrongly proven code, or a member that no longer exists (all 401 handoff_expired: the reply never says which). Shares the 60/min sign-in limiter."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    d = request.get_json(force=True, silent=True)
+    d = d if isinstance(d, dict) else {}
+    code, verifier = d.get("code"), d.get("verifier")
+    if not (isinstance(code, str) and _handoff.CODE_RE.match(code) and isinstance(verifier, str) and _handoff.VERIFIER_RE.match(verifier)):
+        return jsonify({"ok": False, "error": "code and verifier required", "code": 400, "reason": "credentials_required"}), 400
+    username = _HANDOFFS.redeem(code, verifier)
+    m = db.get_member_auth(username) if username else None
+    if not m:
+        return jsonify({"ok": False, "error": "That browser sign-in has expired. Start again from the app.", "code": 401, "reason": "handoff_expired"}), 401
+    token = new_session_token()
+    db.create_session(token, username)
+    _log(f"app signed in as {username} through the browser hand-off")
+    return jsonify({"ok": True, "linked": bool(m.get("google_email")), "name": username, "token": token, "must_change": bool(m.get("must_change")),
+                    "is_admin": bool(m.get("is_admin")), "email_masked": _gid.mask_email(m.get("google_email")) or None})
 
 
 @bp.route("/api/auth/link", methods=["POST"])

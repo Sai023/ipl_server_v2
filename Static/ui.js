@@ -49,6 +49,7 @@
     register_closed:       "New members join with Google. Tap Continue with Google.",
     joining_closed:        "New members can't join right now. Ask the admin.",
     members_full:          "The league is full.",
+    handoff_expired:       "That browser sign-in has expired. Tap Sign in with Google in your browser to start again.",
     server_error:    "The server had a problem. Please try again in a moment."
   };
   Ui.errorFor = function (reason, fallback) { return Object.prototype.hasOwnProperty.call(REASON_COPY, reason) ? REASON_COPY[reason] : (fallback || ""); };

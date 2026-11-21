@@ -630,7 +630,7 @@ t('MODULE: the real view (as shipped) escapes every text it draws and asks Googl
 
 // ====================================================================== THE PAGE
 function page(o = {}) {
-  const c = { console, Date, Math, JSON, isFinite, Object, Array, String, calls: [], _state: o.state || null, _mustChange: !!o.mustChange };
+  const c = { console, Date, Math, JSON, isFinite, Object, Array, String, calls: [], _state: o.state || null, _mustChange: !!o.mustChange, _username: 'Moe' };
   c.window = c;
   c._nowMs = () => (o.now != null ? o.now : Date.parse('2026-12-01T10:00:00Z'));
   c.esc = (s) => String(s); c.escAttr = (s) => String(s);
@@ -641,6 +641,7 @@ function page(o = {}) {
     c.IplGoogle = {
       loginBlockHtml: () => (g.block === false ? '' : '<div id="google-signin"></div>'), pinEnabled: () => g.pin !== false, enabled: () => g.enabled !== false,
       account: () => g.account || null, setAccount: (a) => c.calls.push(['setAccount', plain(a)]), offerSwitchWhenReady: (x) => c.calls.push(['offer', plain(x)]), openSwitch: () => {},
+      redeeming: () => false, handoffNoteHtml: () => '', offerHandoff: () => {},      // (the browser hand-off for the app: tests/js/app_handoff.test.js)
     };
   }
   vm.createContext(c);
