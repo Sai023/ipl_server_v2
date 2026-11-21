@@ -14,16 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper12">
-  <link rel="stylesheet" href="/static/style.css?v=paper12">
-  <link rel="stylesheet" href="/static/ui.css?v=paper12">
-  <link rel="stylesheet" href="/static/screens.css?v=paper12">
-  <link rel="stylesheet" href="/static/paper.css?v=paper12">
+  <link rel="stylesheet" href="/static/theme.css?v=paper13">
+  <link rel="stylesheet" href="/static/style.css?v=paper13">
+  <link rel="stylesheet" href="/static/ui.css?v=paper13">
+  <link rel="stylesheet" href="/static/screens.css?v=paper13">
+  <link rel="stylesheet" href="/static/paper.css?v=paper13">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper12"></script>
+<script src="/static/ui.js?v=paper13"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -44,7 +44,7 @@ var _nwSaved=null,_nwCarry=false;   // the draft as the server will use it (sign
 var _nwRestored=false,_lockedWeek=null;   // _nwRestored: the draft on screen came back from this phone; _lockedWeek: the week for which the server refused a save as too late
 var _nwTouched=false,_nwKeeping=false,_nwTarget=null,_nwOffer=false;   // _nwTouched: the server holds a save or a "Keep this XI" for this draft; _nwKeeping: a keep is in flight; _nwTarget: the week the loaded draft is FOR (a change means a handover ran); _nwOffer: a question about an unsaved draft is open
 var _adminMatches=null,_adminFilter="all";
-var _adminMembersList=null;
+var _adminMembersList=null,_adminJoining=null;
 var _switching=false,_switchFailed=false,_swGuard=null,_weekKnown=false,_bootSeq=0;   // competition switch state (see _switchComp); _weekKnown: _currentWeek belongs to the competition on screen; _bootSeq: bumped on every switch so late replies for the old competition are dropped
 var members={},matches=[];
 var $app=document.getElementById("app"),$loading=document.getElementById("app-loading");
@@ -857,6 +857,14 @@ function _buildLoginCard(memberNames){
   if(!pin){
     return h+'</div>';
   }
+  if(g){   // Google sign-in is on: a NEW member joins WITH Google (a display name, no passcode to choose), so there is no register form here
+    if(memberNames.length>0){
+      h+='<div class="login-member-chips">';
+      memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
+      h+='</div>';
+    }
+    return h+'<p class="register-hint">New here? Continue with Google, then choose <b>“I’m new here”</b>.</p></div>';
+  }
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
@@ -979,9 +987,18 @@ function _buildDevTools(){
 function _loadAdminMembers(){
   if(!window.IplApi)return;
   window.IplApi.adminListMembers().then(function(d){
-    if(d&&d.ok){_adminMembersList=d.members;}
+    if(d&&d.ok){_adminMembersList=d.members;if(typeof d.joining_open==="boolean")_adminJoining={open:d.joining_open,count:d.member_count,cap:d.member_cap};}
     if(_state&&_activeTab==="admin")render(_state);
   }).catch(function(e){console.warn("[admin] members:",e);});
+}
+// Open or close joining: a closed league takes nobody new (members who are already in are untouched).
+function _adminSetJoining(open){
+  window.IplApi.adminSetJoining(open).then(function(d){
+    if(!d||!d.ok)throw new Error("joining failed");
+    _adminJoining={open:d.joining_open,count:d.member_count,cap:d.member_cap};
+    Ui.success(d.joining_open?"Joining is open: new members can join with Google.":"Joining is closed: nobody new can join.");
+    if(_state)render(_state);
+  }).catch(function(e){Ui.fail(e,"Could not change joining");});
 }
 function _adminResetPasscode(targetUsername){
   Ui.confirm({title:"Reset passcode?",message:targetUsername+"'s passcode goes back to 1234. They will be asked to set a new one the next time they sign in.",confirmText:"Reset passcode",danger:true}).then(function(ok){
@@ -1018,6 +1035,12 @@ function _buildAdminPasscodesCard(){
   h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">\uD83D\uDD10 Member Passcodes</h3>';
   h+='<button class="btn btn-ghost btn-sm" onclick="_adminMembersList=null;_loadAdminMembers();if(_state)render(_state)">\u27F3 Refresh</button></div>';
   h+='<p style="color:var(--muted);font-size:12px;margin-bottom:10px">Reset any member\'s passcode back to <strong style="color:var(--gold-ink)">1234</strong>. They\'ll be forced to choose a new one on their next login.</p>';
+  if(_adminJoining){
+    h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:var(--tint-1);border:1px solid var(--hair);margin-bottom:10px;">';
+    h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--text)">New members can join: '+(_adminJoining.open?'On':'Off')+'</div>';
+    h+='<div style="font-size:11px;color:var(--muted);margin-top:2px">'+esc(String(_adminJoining.count))+' of '+esc(String(_adminJoining.cap))+' places used. They join with Google and a display name: no passcode.</div></div>';
+    h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px" onclick="_adminSetJoining('+(_adminJoining.open?'false':'true')+')">'+(_adminJoining.open?'Close joining':'Open joining')+'</button></div>';
+  }
   if(!_adminMembersList){
     _loadAdminMembers();
     return h+'<p style="color:var(--muted);font-size:13px">Loading members\u2026</p></div>';
@@ -2039,6 +2062,11 @@ window.addEventListener("ipl:google-signed-in",function(e){
   if(_sessionLost)_reauthDone(d);else _establishSession(d.name,d.is_admin,d.must_change,d);
 });
 window.addEventListener("ipl:google-linked",function(){if(_state)render(_state);});                    // the menu now says "Signed in with Google"
+// A NEW member joined with a Google account (a display name, no passcode): ipl:google-signed-in has just signed them in; welcome them.
+window.addEventListener("ipl:google-joined",function(e){
+  var d=e.detail||{};
+  Ui.success("Welcome"+(d.name?", "+d.name:"")+"! You joined with "+(d.email_masked||"your Google account")+". From now on just tap Continue with Google.",{duration:7000});
+});
 // A member claimed their name with a Google account (picked the name, entered the passcode once): ipl:google-signed-in has just signed them in; say what happened.
 window.addEventListener("ipl:google-claimed",function(e){
   var d=e.detail||{};
@@ -2120,8 +2148,8 @@ window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper12"></script>
-<script src="/static/mc_hub.js?v=paper12"></script>
-<script src="/static/auth_google.js?v=paper12"></script>
+<script src="/static/ipl_glue.js?v=paper13"></script>
+<script src="/static/mc_hub.js?v=paper13"></script>
+<script src="/static/auth_google.js?v=paper13"></script>
 </body>
 </html>

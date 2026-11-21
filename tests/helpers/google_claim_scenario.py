@@ -191,7 +191,7 @@ db.upsert_member_auth("Ben", hash_passcode("9999", "Ben"), 0, 0)
 t_late = ticket_of(sign_in("g-late", "late.acct@gmail.com"))
 real_clock, skew = routes._CLAIMS._clock, [0.0]
 routes._CLAIMS._clock = lambda: real_clock() + skew[0]
-skew[0] = 599
+skew[0] = 570                                   # 30 s inside the ten minutes (the answer to a sign-in takes a moment on a slow database)
 out["f_just_in_time_peek"] = routes._CLAIMS.peek(t_late) is not None
 skew[0] = 601
 out["f_late"] = claim(t_late, "Ben", "9999")

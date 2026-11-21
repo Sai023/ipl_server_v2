@@ -169,7 +169,9 @@
     var sheet = view.claimSheet({
       emailMasked: c.email_masked || (d && d.email_masked) || "",
       members: c.members || [],
+      join: c.join || null,                              // {allowed, why}: may a NEW member join with this Google account? (absent on an older server)
       submit: function (name, passcode) { return submitClaim(ctx, c, sheet, name, passcode); },
+      submitJoin: function (name) { return submitJoin(ctx, c, sheet, name); },
       cancel: function () { rearm(ctx); }                // the member backed out: the button gets a fresh nonce for the next attempt
     });
     return sheet;
@@ -201,6 +203,31 @@
       }
       if (reason === "member_taken" || reason === "temp_passcode") { sheet.fail(errText(err), { clear: true, notFree: name }); return; }   // that name cannot be picked: it is shown as such
       sheet.fail(errText(err), { clear: true });
+    });
+  }
+
+  // A NEW member joins with this Google account: the display name they chose and nothing else (no passcode exists). The reply is a sign-in.
+  function submitJoin(ctx, c, sheet, name) {
+    sheet.busy(true);
+    return api().authJoin(c.ticket, name).then(function (d) {
+      sheet.close();
+      remember(true);
+      account = { linked: true, emailMasked: (d && d.email_masked) || null, pinEnabled: false };
+      forgetConfig();
+      fire("ipl:google-signed-in", d);
+      fire("ipl:google-joined", d);
+      if (ctx.done) ctx.done(d);
+    }, function (err) {
+      sheet.busy(false);
+      var reason = (window.Ui && Ui.errorReason) ? Ui.errorReason(err) : "";
+      if (reason === "claim_expired") {                   // the ticket is gone: start again from Google
+        sheet.close();
+        view.status(ctx.host, errText(err), "error");
+        rearm(ctx);
+        return;
+      }
+      if (reason === "joining_closed" || reason === "members_full") { sheet.fail(errText(err), { noJoin: true }); return; }   // nobody new can join: say so, and stop offering it
+      sheet.fail(errText(err), { keepName: true });      // a name somebody has, or not a usable name: stay on the name box and try another
     });
   }
 
@@ -319,9 +346,10 @@
       openSheets.push(self);
       return self;
     },
-    // The "Which member are you?" sheet for a Google account nobody has linked yet. o = {emailMasked, members: [{name, status}], submit(name, passcode), cancel()}.
-    // Only members whose status is "free" can be picked; the others are shown with their reason (a name that has a Google account can never be picked again).
-    // Returns {close(), dismiss(), busy(on), fail(text, {clear, notFree})}; typing the fourth digit sends it, so there is nothing more to tap.
+    // The "Which member are you?" sheet for a Google account nobody has linked yet. o = {emailMasked, members: [{name, status}], join: {allowed, why} | null,
+    // submit(name, passcode), submitJoin(name), cancel()}. Two ways forward: an existing member picks their name and enters their passcode once (only members whose status
+    // is "free" can be picked; the others are shown with their reason: a name that has a Google account can never be picked again), or a NEW member chooses "I'm new here"
+    // and types a display name (no passcode exists). Returns {close(), dismiss(), busy(on), fail(text, {clear, notFree, noJoin, keepName})}; the fourth passcode digit sends it.
     claimSheet: function (o) {
       var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd ui-sheet-blocking";
       var chips = "", free = 0;
@@ -330,32 +358,62 @@
         var why = m.status === "linked" ? "has Google" : (m.status === "temp" ? "temporary passcode" : "");
         chips += '<button type="button" class="login-chip claim-chip" data-name="' + esc(m.name) + '"' + (can ? ' aria-pressed="false"' : " disabled") + ">" + esc(m.name) + (why ? "<small>" + why + "</small>" : "") + "</button>";
       });
+      var canJoin = !!(o.join && o.join.allowed), joinNote = "";
+      if (o.join && !o.join.allowed) joinNote = o.join.why === "full" ? "The league is full." : "New members can\u2019t join right now. Ask the admin.";
       var who = esc(o.emailMasked || "this Google account");
-      var sub = free ? "Google says you are <b>" + who + "</b>. Pick your name and enter your passcode once to link it: from then on you just tap Continue with Google."
-                     : "Google says you are <b>" + who + "</b>, but no member is free to link. A member who already has a Google account cannot be picked again: ask the admin to remove that link if it is wrong.";
+      var sub = free && canJoin ? "Google says you are <b>" + who + "</b>. Already a member? Pick your name and enter your passcode once to link it. New here? Choose \u201cI\u2019m new here\u201d."
+              : free ? "Google says you are <b>" + who + "</b>. Pick your name and enter your passcode once to link it: from then on you just tap Continue with Google." + (joinNote ? " Not on the list? " + joinNote : "")
+              : canJoin ? "Google says you are <b>" + who + "</b>. No existing member is free to link (a member who already has a Google account cannot be picked again). New here? Choose \u201cI\u2019m new here\u201d."
+              : "Google says you are <b>" + who + "</b>, but no member is free to link. A member who already has a Google account cannot be picked again: ask the admin to remove that link if it is wrong." + (joinNote ? " " + joinNote : "");
       var pinHtml = (window.Ui && Ui.pin) ? Ui.pin({ id: "claim-passcode", label: "4-digit passcode", describedby: "claim-status" })
         : '<input id="claim-passcode" class="pin-input" type="tel" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="4-digit passcode" aria-describedby="claim-status">';
+      var can = free || canJoin;
       bd.innerHTML = '<div class="ui-sheet google-sheet claim-sheet" role="dialog" aria-modal="true" aria-label="Link your Google account">' +
         '<div class="ui-sheet-grip" aria-hidden="true"></div>' +
         '<h2 class="ui-sheet-title has-sub">Which member are you?</h2><p class="ui-sheet-sub">' + sub + "</p>" +
         '<div class="claim-members" role="group" aria-label="Members">' + chips + "</div>" +
+        (canJoin ? '<div class="claim-or"><span>or</span></div><div class="claim-members claim-new-wrap"><button type="button" class="login-chip claim-chip claim-new" aria-pressed="false">I\u2019m new here</button></div>' : "") +
         '<div class="claim-pin" hidden><label class="claim-pin-label" for="claim-passcode">Passcode for <b class="claim-who"></b></label>' + pinHtml + "</div>" +
+        (canJoin ? '<div class="claim-join" hidden><label class="claim-pin-label" for="claim-newname">Your name</label>' +
+                   '<input id="claim-newname" class="claim-name-input" type="text" maxlength="30" autocomplete="nickname" autocapitalize="words" enterkeyhint="done" placeholder="e.g. Sam" aria-describedby="claim-status">' +
+                   '<p class="claim-hint">This is how you appear in the league. You sign in with Google: there is no passcode to choose.</p></div>' : "") +
         '<div id="claim-status" class="google-status" role="status" aria-live="polite"></div>' +
-        '<div class="ui-sheet-actions">' + (free ? '<button type="button" class="btn btn-teal" data-r="primary" disabled>Link and sign in</button>' : "") +
-        '<button type="button" class="btn btn-ghost" data-r="secondary">' + (free ? "Not me" : "OK") + "</button></div></div>";
+        '<div class="ui-sheet-actions">' + (can ? '<button type="button" class="btn btn-teal" data-r="primary" disabled>Link and sign in</button>' : "") +
+        '<button type="button" class="btn btn-ghost" data-r="secondary">' + (can ? "Not me" : "OK") + "</button></div></div>";
       document.body.appendChild(bd);
       var box = bd.querySelector(".claim-sheet"), pinWrap = bd.querySelector(".claim-pin"), whoEl = bd.querySelector(".claim-who"), inp = bd.querySelector(".pin-input"),
-          status = bd.querySelector(".google-status"), go = bd.querySelector('[data-r="primary"]'), selected = null, working = false, self = {};
+          joinWrap = bd.querySelector(".claim-join"), nameInp = bd.querySelector(".claim-name-input"), newChip = bd.querySelector(".claim-new"),
+          status = bd.querySelector(".google-status"), go = bd.querySelector('[data-r="primary"]'), selected = null, joining = false, working = false, self = {};
       function say(text, kind) { status.textContent = text || ""; status.className = "google-status" + (kind ? " " + kind : ""); }
       function digits() { return String(inp ? inp.value : "").replace(/\D/g, ""); }
-      function sync() { if (go) go.disabled = working || !selected || digits().length !== 4; }
+      function newName() { return String(nameInp ? nameInp.value : "").replace(/\s+/g, " ").trim(); }
+      function sync() {
+        if (!go) return;
+        go.disabled = working || (joining ? newName().length < 1 : (!selected || digits().length !== 4));
+        go.textContent = joining ? "Join the league" : "Link and sign in";
+      }
+      function marks() {
+        [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) {
+          var isNew = b.classList.contains("claim-new"), on = isNew ? joining : (!joining && b.getAttribute("data-name") === selected);
+          b.classList.toggle("on", on); if (!b.disabled) b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      }
       function pick(name) {
-        selected = name; whoEl.textContent = name; pinWrap.hidden = false; say("", "");
-        [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) { var on = b.getAttribute("data-name") === name; b.classList.toggle("on", on); if (!b.disabled) b.setAttribute("aria-pressed", on ? "true" : "false"); });
+        joining = false; selected = name; whoEl.textContent = name; pinWrap.hidden = false; if (joinWrap) joinWrap.hidden = true; say("", ""); marks();
         if (window.Ui && Ui.pinReset) Ui.pinReset(inp, false); else if (inp) { inp.value = ""; inp.focus(); }
         sync();
       }
-      function submit() { if (working || !selected || digits().length !== 4) return; o.submit(selected, digits()); }
+      function pickNew() {
+        joining = true; selected = null; pinWrap.hidden = true; if (joinWrap) joinWrap.hidden = false; say("", ""); marks();
+        if (nameInp) nameInp.focus();
+        sync();
+      }
+      function submit() {
+        if (working) return;
+        if (joining) { var n = newName(); if (n.length >= 1) o.submitJoin(n); return; }
+        if (!selected || digits().length !== 4) return;
+        o.submit(selected, digits());
+      }
       function onKey(e) { if (e.key === "Escape") { e.preventDefault(); self.dismiss(); } }
       self.close = function () {
         document.removeEventListener("keydown", onKey, true);
@@ -363,27 +421,41 @@
         var i = openSheets.indexOf(self); if (i >= 0) openSheets.splice(i, 1);
       };
       self.dismiss = function () { self.close(); if (o.cancel) o.cancel(); };
-      self.busy = function (on) { working = !!on; box.classList.toggle("busy", working); if (on) say("Linking…", ""); sync(); };
+      self.busy = function (on) { working = !!on; box.classList.toggle("busy", working); if (on) say(joining ? "Joining\u2026" : "Linking\u2026", ""); sync(); };
       self.fail = function (text, opts) {
         opts = opts || {};
         say(text, "error");
-        if (opts.notFree) {                                  // that name turned out not to be free (somebody was linked a moment ago): show it as taken, back to choosing
+        if (opts.noJoin) {                                   // nobody new can join any more (closed, or full): stop offering it
+          canJoin = false; joining = false;
+          var w = bd.querySelector(".claim-or"); if (w && w.parentNode) w.parentNode.removeChild(w);
+          if (newChip && newChip.parentNode) newChip.parentNode.parentNode.removeChild(newChip.parentNode);
+          if (joinWrap) joinWrap.hidden = true;
+          if (!free && go && go.parentNode) go.parentNode.removeChild(go);
+          go = bd.querySelector('[data-r="primary"]');
+        } else if (opts.notFree) {                           // that name turned out not to be free (somebody was linked a moment ago): show it as taken, back to choosing
           [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) {
             if (b.getAttribute("data-name") !== opts.notFree) return;
             b.disabled = true; b.removeAttribute("aria-pressed"); b.classList.remove("on");
             if (!b.querySelector("small")) b.insertAdjacentHTML("beforeend", "<small>not available</small>");
           });
           selected = null; pinWrap.hidden = true;
+        } else if (opts.keepName) {                          // a name somebody has: stay on the name box
+          if (nameInp) { nameInp.focus(); if (nameInp.select) nameInp.select(); }
         } else if (opts.clear && window.Ui && Ui.pinReset) Ui.pinReset(inp, true);
         sync();
       };
       bd.querySelector(".claim-members").addEventListener("click", function (e) {
         var b = e.target && e.target.closest ? e.target.closest(".claim-chip") : null;
-        if (b && !b.disabled && !working) pick(b.getAttribute("data-name"));
+        if (b && !b.disabled && !working && !b.classList.contains("claim-new")) pick(b.getAttribute("data-name"));
       });
+      if (newChip) newChip.addEventListener("click", function () { if (!working) pickNew(); });
       if (inp) {
-        inp.addEventListener("input", function () { sync(); if (digits().length === 4) submit(); });
+        inp.addEventListener("input", function () { sync(); if (!joining && digits().length === 4) submit(); });
         inp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+      }
+      if (nameInp) {
+        nameInp.addEventListener("input", function () { sync(); });
+        nameInp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); submit(); } });
       }
       if (go) go.onclick = submit;
       bd.querySelector('[data-r="secondary"]').onclick = function () { self.dismiss(); };

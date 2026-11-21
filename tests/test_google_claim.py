@@ -208,7 +208,7 @@ class TheClaimOnTheRealRoutes(unittest.TestCase):
     def test_nothing_leaks_that_should_not(self):
         self.assertEqual(self.r("h_full_addresses_seen"), [], "no full address in any reply")
         self.assertEqual(self.r("h_member_entry_keys"), ["name", "status"], "names and a word each")
-        self.assertEqual(self.r("h_claim_keys"), ["email_masked", "expires_in", "members", "ticket"])
+        self.assertEqual(self.r("h_claim_keys"), ["email_masked", "expires_in", "join", "members", "ticket"])
         self.assertFalse(self.r("h_claim_success_has_ticket"), "the ticket is not echoed once it is spent")
         self.assertFalse(self.r("h_hash_leak"), "no passcode hash in any reply")
 

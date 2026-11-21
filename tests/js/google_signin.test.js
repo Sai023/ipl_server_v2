@@ -49,8 +49,10 @@ const ended = (c) => c.events.filter((e) => e.type === 'ipl:session-ended');
 t('GLUE: the Google calls go to the right addresses with the right bodies, and a session token goes along where there is one', async () => {
   const c = glue({ status: 200, body: { ok: true } }, 'tok-1');
   await c.IplApi.authConfig(); await c.IplApi.authNonce(); await c.IplApi.authGoogle('CRED', 'N1'); await c.IplApi.authLink('CRED2', 'N2'); await c.IplApi.authLogout(); await c.IplApi.adminUnlinkGoogle('Moe');
-  await c.IplApi.authClaim('TICKET', 'Moe', '2222');
+  await c.IplApi.authClaim('TICKET', 'Moe', '2222'); await c.IplApi.authJoin('TICKET2', 'Nina'); await c.IplApi.adminSetJoining(false);
   const by = (u) => c.sent.find((s) => s.url.indexOf(u) === 0);
+  assert.deepStrictEqual(JSON.parse(by('/api/auth/join').opts.body), { ticket: 'TICKET2', name: 'Nina' }, 'a join carries a ticket and a name: no passcode');
+  assert.deepStrictEqual(JSON.parse(by('/api/admin/joining').opts.body), { open: false }); assert.strictEqual(by('/api/admin/joining').opts.headers.Authorization, 'Bearer tok-1', 'only an admin session can close joining');
   assert.ok(by('/api/auth/config') && by('/api/auth/nonce'));
   assert.strictEqual(by('/api/auth/claim').opts.method, 'POST'); assert.deepStrictEqual(JSON.parse(by('/api/auth/claim').opts.body), { ticket: 'TICKET', name: 'Moe', passcode: '2222' });
   assert.strictEqual(by('/api/auth/google').opts.method, 'POST'); assert.deepStrictEqual(JSON.parse(by('/api/auth/google').opts.body), { credential: 'CRED', nonce: 'N1' });
@@ -80,6 +82,18 @@ t('GLUE: a claim that works stores the session token; a refused claim is never "
     assert.ok(err, String(reason)); assert.strictEqual(err.serverData.reason, reason, String(reason));
     assert.strictEqual(ended(c).length, 0, String(reason) + ' was taken for a lost session');
     if (status === 401) assert.strictEqual(c.store.has('ipl_session_token'), false, String(reason) + ': a stale token is cleared, as for a wrong passcode at /api/login');
+  }
+});
+
+t('GLUE: a join that works stores the session token; a refused join is never "your session ended"', async () => {
+  const ok = glue({ status: 200, body: { ok: true, linked: true, joined: true, name: 'Nina', token: 'join-token' } }, null);
+  const d = await ok.IplApi.authJoin('T', 'Nina');
+  assert.strictEqual(d.name, 'Nina'); assert.strictEqual(ok.store.get('ipl_session_token'), 'join-token', 'joining signs the new member in, like a login');
+  for (const reason of ['claim_expired', 'name_taken', 'name_invalid', 'joining_closed', 'members_full', 'google_account_in_use', undefined]) {
+    const status = reason === 'claim_expired' ? 401 : (reason === 'name_invalid' ? 400 : (reason === 'joining_closed' ? 403 : (reason ? 409 : 401)));
+    const c = glue({ status, body: reason ? { ok: false, error: 'x', code: status, reason } : {} }, 'a-stale-token');
+    let err; await c.IplApi.authJoin('T', 'Nina').catch((e) => { err = e; });
+    assert.ok(err, String(reason)); assert.strictEqual(ended(c).length, 0, String(reason) + ' was taken for a lost session');
   }
 });
 
@@ -160,6 +174,7 @@ function mod(o = {}) {
     authGoogle: (cred, nn) => { c.calls.push('google:' + cred + ':' + nn); return o.googleReply ? o.googleReply(cred, nn) : Promise.resolve({ ok: true, linked: true, name: 'Moe', token: 'tok', is_admin: false, must_change: false, email_masked: 'm***@gmail.com' }); },
     authLink: (cred, nn) => { c.calls.push('link:' + cred + ':' + nn); return o.linkReply ? o.linkReply(cred, nn) : Promise.resolve({ ok: true, linked: true, name: 'Moe', email_masked: 'm***@gmail.com' }); },
     authClaim: (ticket, name, pin) => { c.calls.push('claim:' + ticket + ':' + name + ':' + pin); return o.claimReply ? o.claimReply(ticket, name, pin) : Promise.resolve({ ok: true, linked: true, claimed: true, name, token: 'claim-tok', is_admin: false, must_change: false, email_masked: 'n***@gmail.com' }); },
+    authJoin: (ticket, name) => { c.calls.push('join:' + ticket + ':' + name); return o.joinReply ? o.joinReply(ticket, name) : Promise.resolve({ ok: true, linked: true, joined: true, name, token: 'join-tok', is_admin: false, must_change: false, email_masked: 'n***@gmail.com' }); },
   };
   c.Ui = { errorMessage: (e) => 'MSG:' + (((e && e.serverData) || {}).reason || (e && e.message)), errorReason: (e) => (((e && e.serverData) || {}).reason || ''), success() {}, info() {} };
   if (o.gis !== 'blocked' && o.gis !== 'ok-later' && o.gis !== 'none') c.google = fakeGoogle(c);
@@ -305,7 +320,7 @@ t('MODULE: a good Google account nobody has linked is a message, not a sign-in, 
 
 // ---- claiming a name with a Google account nobody has linked (Google sign-in step 2) ----
 const MEMBERS = [{ name: 'Buddy', status: 'free' }, { name: 'Sai', status: 'linked' }, { name: 'Zed', status: 'temp' }];
-const claimOffer = (members) => ({ ok: true, linked: false, email_masked: 'n***@gmail.com', claim: { ticket: 'T1', expires_in: 600, email_masked: 'n***@gmail.com', members: members || MEMBERS } });
+const claimOffer = (members, join) => ({ ok: true, linked: false, email_masked: 'n***@gmail.com', claim: { ticket: 'T1', expires_in: 600, email_masked: 'n***@gmail.com', members: members || MEMBERS, join: join === undefined ? { allowed: true, why: '' } : join } });
 const claimErr = (status, reason, extra) => Object.assign(new Error('HTTP ' + status), { status, serverMessage: 'x', serverData: Object.assign({ ok: false, error: 'x', code: status, reason }, extra || {}) });
 async function offered(o = {}, done) {
   const c = mod(Object.assign({ googleReply: () => Promise.resolve(claimOffer()) }, o));
@@ -383,6 +398,53 @@ t('MODULE: backing out of the claim sheet arms the Google button again with a ne
   lastInit(k).callback({ credential: 'CRED-5' }); await flush();
   await k.claims[0].opts.submit('Buddy', '3333'); await flush();
   assert.strictEqual(again.closed, true, 'the member is in: the sign-in-again sheet is not left behind');
+});
+
+// ---- joining the league with a Google account nobody has linked (Google sign-in step 3) ----
+t('MODULE: the claim sheet is told whether a NEW member may join (open, closed, full), and an older server that says nothing gets no join', async () => {
+  assert.deepStrictEqual(plain((await offered()).claims[0].opts.join), { allowed: true, why: '' });
+  const closed = await offered({ googleReply: () => Promise.resolve(claimOffer(null, { allowed: false, why: 'closed' })) });
+  assert.deepStrictEqual(plain(closed.claims[0].opts.join), { allowed: false, why: 'closed' });
+  const none = await offered({ googleReply: () => Promise.resolve(claimOffer(null, null)) });
+  assert.strictEqual(none.claims[0].opts.join, null);
+  assert.strictEqual(typeof (await offered()).claims[0].opts.submitJoin, 'function');
+});
+
+t('MODULE: joining sends the ticket and the display name ONLY, signs the new member in, welcomes them and closes the sheet (no passcode, no second Google trip)', async () => {
+  const done = [];
+  const c = await offered({}, (d) => done.push(d));
+  await c.claims[0].opts.submitJoin('Nina'); await flush();
+  assert.ok(c.calls.includes('join:T1:Nina'), c.calls.join(' | '));
+  assert.strictEqual(c.calls.filter((x) => x.indexOf('claim:') === 0).length, 0, 'joining is not claiming');
+  assert.strictEqual(c.calls.filter((x) => x.indexOf('google:') === 0).length, 1, 'Google was asked once');
+  assert.deepStrictEqual(c.events.map((e) => e.type).filter((x) => x === 'ipl:google-signed-in' || x === 'ipl:google-joined' || x === 'ipl:google-claimed'), ['ipl:google-signed-in', 'ipl:google-joined'], 'signed in first, then welcomed (not announced as a claim)');
+  const e = ev(c, 'ipl:google-signed-in')[0].detail; assert.deepStrictEqual([e.name, e.token, e.joined], ['Nina', 'join-tok', true]);
+  assert.strictEqual(c.claims[0].closed, true); assert.deepStrictEqual(c.claims[0].busyLog, [true]); assert.strictEqual(done.length, 1);
+  assert.deepStrictEqual(plain(c.IplGoogle.account()), { linked: true, emailMasked: 'n***@gmail.com', pinEnabled: false });
+  assert.strictEqual(c.IplGoogle.wasLinked(), true);
+});
+
+t('MODULE: a name somebody has, or a name that is not usable, keeps the sheet open on the name box so another can be tried', async () => {
+  for (const [status, reason] of [[409, 'name_taken'], [400, 'name_invalid']]) {
+    const c = await offered({ joinReply: () => Promise.reject(claimErr(status, reason)) });
+    await c.claims[0].opts.submitJoin('Moe'); await flush();
+    assert.deepStrictEqual(c.claims[0].fails, [['MSG:' + reason, { keepName: true }]], reason);
+    assert.strictEqual(c.claims[0].closed, false, reason); assert.deepStrictEqual(c.claims[0].busyLog, [true, false]); assert.strictEqual(ev(c, 'ipl:google-signed-in').length, 0);
+  }
+});
+
+t('MODULE: a closed or full league is said so and the sheet stops offering to join; an expired ticket closes the sheet and re-arms the button', async () => {
+  for (const [status, reason] of [[403, 'joining_closed'], [409, 'members_full']]) {
+    const c = await offered({ joinReply: () => Promise.reject(claimErr(status, reason)) });
+    await c.claims[0].opts.submitJoin('Nina'); await flush();
+    assert.deepStrictEqual(c.claims[0].fails, [['MSG:' + reason, { noJoin: true }]], reason);
+    assert.strictEqual(c.claims[0].closed, false, reason + ': the member can still claim their own name');
+  }
+  const c = await offered({ joinReply: () => Promise.reject(claimErr(401, 'claim_expired')) });
+  await c.claims[0].opts.submitJoin('Nina'); await flush();
+  assert.strictEqual(c.claims[0].closed, true);
+  assert.deepStrictEqual(c.viewLog.filter((x) => x[0] === 'status' && x[2] === 'error'), [['status', 'MSG:claim_expired', 'error']]);
+  assert.strictEqual(c.gis.inits.length, 2); assert.strictEqual(lastInit(c).nonce, 'N2');
 });
 
 t('MODULE: a server that sends no claim (an older one) still gets the plain "not linked yet" message, as before', async () => {
@@ -678,6 +740,52 @@ t('PAGE: an admin who unlinks SOMEONE ELSE sees the temporary passcode and nothi
   assert.strictEqual(logged(no, 'api').length, 0, 'a no sends nothing');
 });
 
+t('PAGE: with Google sign-in on the sign-in card has NO passcode registration: a new member is pointed at Continue with Google ("I\'m new here"); with Google off it is as before', () => {
+  const card = (g, names = ['Moe', 'Sai']) => page({ google: g, fns: ['_buildLoginCard'] })._buildLoginCard(names);
+  const on = card({});
+  for (const gone of ['register-input', 'register-passcode', 'Join League', 'Register here']) assert.strictEqual(on.indexOf(gone), -1, gone + ' must not be on the card while Google is on');
+  assert.ok(/New here\? Continue with Google, then choose/.test(on)); assert.ok(on.indexOf('login-chip') >= 0, 'members can still pick their name');
+  const noMembers = card({}, []);
+  assert.strictEqual(noMembers.indexOf('register-input'), -1); assert.ok(/New here\? Continue with Google/.test(noMembers));
+  const off = card(false); assert.ok(off.indexOf('register-input') >= 0 && off.indexOf('Register here') >= 0, 'without Google the passcode registration is as before');
+  assert.ok(card({ block: false }).indexOf('register-input') >= 0, 'until the server says Google is on, nothing changes');
+});
+
+function joiningPage(o = {}) {
+  const c = page({ fns: ['_adminSetJoining', '_buildAdminPasscodesCard'], google: false });
+  c._username = 'Sai'; c._state = {}; c.log = []; c._adminMembersList = o.list === undefined ? [] : o.list; c._adminJoining = o.joining === undefined ? null : o.joining;
+  c._loadAdminMembers = () => c.log.push(['load']); c.render = () => c.log.push(['render']);
+  c.Ui.success = (m) => c.log.push(['success', m]); c.Ui.fail = (e, m) => c.log.push(['fail', m]);
+  c.IplApi = { adminSetJoining: (open) => { c.log.push(['api', open]); return o.reply ? o.reply(open) : Promise.resolve({ ok: true, joining_open: open, member_count: 3, member_cap: 30 }); } };
+  return c;
+}
+
+t('PAGE: the admin card shows whether joining is on and how many places are used, with a button that turns it off or on', () => {
+  const html = joiningPage({ joining: { open: true, count: 3, cap: 30 } })._buildAdminPasscodesCard();
+  assert.ok(/New members can join: On/.test(html) && /3 of 30 places used/.test(html) && /Close joining/.test(html) && /_adminSetJoining\(false\)/.test(html));
+  const off = joiningPage({ joining: { open: false, count: 30, cap: 30 } })._buildAdminPasscodesCard();
+  assert.ok(/New members can join: Off/.test(off) && /Open joining/.test(off) && /_adminSetJoining\(true\)/.test(off));
+  assert.ok(!/New members can join/.test(joiningPage({ joining: null })._buildAdminPasscodesCard()), 'nothing is shown until the server has said');
+});
+
+t('PAGE: the admin switch calls the server, remembers the answer and says what it did; a refusal changes nothing', async () => {
+  const c = joiningPage();
+  c._adminSetJoining(false); await flush();
+  assert.deepStrictEqual(c.log.filter((x) => x[0] === 'api'), [['api', false]]);
+  assert.deepStrictEqual(plain(c._adminJoining), { open: false, count: 3, cap: 30 });
+  assert.deepStrictEqual(c.log.filter((x) => x[0] === 'success'), [['success', 'Joining is closed: nobody new can join.']]);
+  c.log.length = 0; c._adminSetJoining(true); await flush();
+  assert.deepStrictEqual(c.log.filter((x) => x[0] === 'success'), [['success', 'Joining is open: new members can join with Google.']]);
+  const bad = joiningPage({ reply: () => Promise.reject(new Error('HTTP 403')) });
+  bad._adminSetJoining(false); await flush();
+  assert.strictEqual(bad.log.filter((x) => x[0] === 'fail').length, 1); assert.strictEqual(bad._adminJoining, null);
+});
+
+t('PAGE: a new member is welcomed: the page listens for ipl:google-joined and names the member and the masked address', () => {
+  assert.ok(/addEventListener\("ipl:google-joined",function\(e\)\{[^]*?Ui\.success\("Welcome"/.test(HTML), 'no listener that welcomes a new member');
+  assert.ok(/From now on just tap Continue with Google/.test(HTML));
+});
+
 t('PAGE: a claim says what happened: the page listens for ipl:google-claimed and names the member and the masked address', () => {
   assert.ok(/addEventListener\("ipl:google-claimed",function\(e\)\{[^]*?Ui\.success\("Linked"/.test(HTML), 'no listener that confirms the claim');
   assert.ok(/Your passcode is retired: from now on just tap Continue with Google/.test(HTML));
@@ -687,7 +795,7 @@ t('PAGE: a claim says what happened: the page listens for ipl:google-claimed and
 t('PAGE WIRING: the module is loaded, the card is drawn into after every render, events are handled, sign-out ends the session on the server first', () => {
   assert.ok(/<script src="\/static\/auth_google\.js\?v=[\w.]+"><\/script>/.test(HTML), 'the page does not load auth_google.js');
   assert.ok(/\$app\.innerHTML=html;\s*\n\s*if\(!_username&&window\.IplGoogle\)IplGoogle\.afterRender\(\);/.test(HTML), 'render() does not call IplGoogle.afterRender() for the sign-in card');
-  for (const e of ['ipl:google-signed-in', 'ipl:google-linked', 'ipl:google-config', 'ipl:google-claimed']) assert.ok(HTML.indexOf('addEventListener("' + e + '"') >= 0, 'no listener for ' + e);
+  for (const e of ['ipl:google-signed-in', 'ipl:google-linked', 'ipl:google-config', 'ipl:google-claimed', 'ipl:google-joined']) assert.ok(HTML.indexOf('addEventListener("' + e + '"') >= 0, 'no listener for ' + e);
   const lo = fnSource('logout');
   assert.ok(lo.indexOf('IplApi.authLogout()') >= 0 && lo.indexOf('IplApi.authLogout()') < lo.indexOf('IplApi.logoutClearToken()'), 'logout must end the server session BEFORE it forgets the token');
   assert.ok(/_establishSession\(d\.name,d\.is_admin,d\.must_change,d\)/.test(HTML), 'the saved-session check and the Google sign-in pass whoami / the reply on');

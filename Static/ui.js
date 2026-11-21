@@ -46,6 +46,9 @@
     claim_locked:          "Too many wrong passcodes. Try again in about 10 minutes.",
     member_taken:          "That member already has a Google account linked.",
     temp_passcode:         "That member has a temporary passcode. Sign in with it first, choose your own, then switch to Google.",
+    register_closed:       "New members join with Google. Tap Continue with Google.",
+    joining_closed:        "New members can't join right now. Ask the admin.",
+    members_full:          "The league is full.",
     server_error:    "The server had a problem. Please try again in a moment."
   };
   Ui.errorFor = function (reason, fallback) { return Object.prototype.hasOwnProperty.call(REASON_COPY, reason) ? REASON_COPY[reason] : (fallback || ""); };

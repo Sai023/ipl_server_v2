@@ -119,7 +119,7 @@ from config import (
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, GOOGLE_IDENTITY_VER, FUZZY_MATCH_VER,
-    CRICBUZZ_DISCOVERY_VER,
+    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS,
 )
 import tasks
 from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
@@ -334,6 +334,9 @@ def _require_self(n):
 def api_register():
     re_ = _check_rate(_write_limiter)
     if re_: return re_
+    if _gid.enabled():
+        # New members join with Google (POST /api/auth/join): no passcode to choose. This route is the passcode way in and only exists while Google sign-in is off.
+        return jsonify({"ok": False, "error": "New members join with Google. Tap Continue with Google.", "code": 403, "reason": "register_closed"}), 403
     d = request.get_json(force=True, silent=True) or {}
     name = (d.get("name") or "").strip()
     passcode = str(d.get("passcode") or "").strip()
@@ -448,7 +451,7 @@ def api_admin_members():
     for m in db.list_members_admin_view():
         g = m.pop("google_email", None)
         members.append({**m, "linked": bool(g), "email_masked": _gid.mask_email(g) or None})   # even the admin sees the address masked
-    return jsonify({"ok": True, "members": members})
+    return jsonify({"ok": True, "members": members, **_joining_summary()})
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -458,9 +461,9 @@ def api_admin_members():
 # logic/google_identity.py checks the token; these routes decide what a good token MEANS:
 #   /api/auth/google  sign in (a member whose Google account is linked), or hand back a CLAIM for a good account nobody has linked yet
 #   /api/auth/claim   {ticket, name, passcode}: that member proves who they are once; the account is linked, the passcode retired in the same transaction, they are signed in
+#   /api/auth/join    {ticket, name}: a NEW member joins with that Google account and a display name; no passcode exists (an admin can close joining; there is a member cap)
 #   /api/auth/link    a signed-in member links their Google account; their passcode is retired in the same transaction
-# Nothing here works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). Joining with Google, the devices list and the admin
-# joining switch come in the next release.
+# Nothing here works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). The devices list comes in a later release.
 
 _NONCES = _gid.NonceStore()
 _CLAIMS = _gid.ClaimStore()
@@ -480,6 +483,33 @@ def _claim_members():
 
 def _claim_locked():
     return jsonify({"ok": False, "error": "Too many wrong passcodes. Try again in about 10 minutes.", "code": 429, "reason": "claim_locked"}), 429
+
+
+def _clean_member_name(raw):
+    """A display name for a NEW member: white space trimmed and collapsed (a tab or a line break never survives), 1 to 30 characters, printable only. '' when it is not usable."""
+    if not isinstance(raw, str):
+        return ""
+    s = " ".join(raw.split())
+    return s if 1 <= len(s) <= 30 and s.isprintable() else ""
+
+
+def _joining_open():
+    """An admin can close joining (meta key joining_open = "0"); it is open until then."""
+    return db.get_meta("joining_open", "1") != "0"
+
+
+def _join_state():
+    """Can a new member join right now? {allowed, why}: why is '' when allowed, 'closed' (an admin closed joining) or 'full' (the league is at MAX_MEMBERS). (Not named `reason`: that
+    word is reserved for the machine reason of an ERROR, which the page has a sentence for.)"""
+    if not _joining_open():
+        return {"allowed": False, "why": "closed"}
+    if db.count_members() >= MAX_MEMBERS:
+        return {"allowed": False, "why": "full"}
+    return {"allowed": True, "why": ""}
+
+
+def _joining_summary():
+    return {"joining_open": _joining_open(), "member_count": db.count_members(), "member_cap": MAX_MEMBERS}
 
 
 def _google_refusal(e):
@@ -552,7 +582,7 @@ def api_auth_google():
             return jsonify({"ok": False, "error": "Too many sign-ins at once. Wait a minute and try again.", "code": 429, "reason": "rate_limited"}), 429
         masked = _gid.mask_email(claims["email"])
         return jsonify({"ok": True, "linked": False, "email_masked": masked,
-                        "claim": {"ticket": ticket, "expires_in": _CLAIMS.ttl, "email_masked": masked, "members": _claim_members()}})
+                        "claim": {"ticket": ticket, "expires_in": _CLAIMS.ttl, "email_masked": masked, "members": _claim_members(), "join": _join_state()}})
     m = db.get_member_auth(ident["member"]) or {}
     db.touch_identity("google", claims["sub"], claims["email"])
     token = new_session_token()
@@ -618,6 +648,52 @@ def api_auth_claim():
                     "is_admin": bool(m.get("is_admin")), "email_masked": _gid.mask_email(spent["email"])})
 
 
+@bp.route("/api/auth/join", methods=["POST"])
+def api_auth_join():
+    """Join the league with a Google account that belongs to nobody yet. Body {ticket, name}: the ticket came with /api/auth/google (it stands for the Google account the
+    SERVER verified), the name is the display name the new member chose. NO passcode is chosen or kept: the member's only way in is that Google account. The member and the
+    identity are created together in ONE transaction (db.create_member_with_identity), so there is never a member nobody can sign in as. Refused: an unknown or old ticket
+    (401 claim_expired), a name that is not 1-30 printable characters (400 name_invalid), a name somebody already has, compared case-insensitively (409 name_taken: the ticket
+    is NOT used up, so the member can try another), joining closed by the admin (403 joining_closed), a full league (409 members_full), a Google account that already belongs to a
+    member (409 google_account_in_use). Shares the 60/min sign-in limiter."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    if not _gid.enabled():
+        return jsonify({"ok": False, "error": "Google sign-in is not set up yet.", "code": 503, "reason": "google_not_configured"}), 503
+    d = request.get_json(force=True, silent=True)
+    d = d if isinstance(d, dict) else {}
+    ticket = d.get("ticket")
+    if not isinstance(ticket, str) or not ticket:
+        return jsonify({"ok": False, "error": "ticket and name required", "code": 400, "reason": "credentials_required"}), 400
+    name = _clean_member_name(d.get("name"))
+    if not name:
+        return jsonify({"ok": False, "error": "name must be 1-30 characters", "code": 400, "reason": "name_invalid"}), 400
+    pending = _CLAIMS.peek(ticket)
+    if not pending:
+        return jsonify({"ok": False, "error": "That sign-in has expired. Tap Continue with Google to start again.", "code": 401, "reason": "claim_expired"}), 401
+    state = _join_state()
+    if not state["allowed"]:
+        if state["why"] == "full":
+            return jsonify({"ok": False, "error": "The league is full.", "code": 409, "reason": "members_full"}), 409
+        return jsonify({"ok": False, "error": "New members cannot join right now. Ask the admin.", "code": 403, "reason": "joining_closed"}), 403
+    try:
+        db.create_member_with_identity(name, "google", pending["sub"], pending["email"], MAX_MEMBERS)
+    except ValueError as e:
+        why = str(e)
+        if why == "name_taken":
+            return jsonify({"ok": False, "error": "Someone already has that name. Try another.", "code": 409, "reason": "name_taken"}), 409
+        if why == "in_use":
+            return jsonify({"ok": False, "error": "That Google account already belongs to another member.", "code": 409, "reason": "google_account_in_use"}), 409
+        return jsonify({"ok": False, "error": "The league is full.", "code": 409, "reason": "members_full"}), 409
+    _CLAIMS.spend(ticket)                                # the member exists: the ticket is used up (a name that was refused left it alone)
+    db.upsert_member(name, {"this_week": {"team": [], "cap": None, "vc": None}, "next_week": {"team": [], "cap": None, "vc": None}})
+    token = new_session_token()
+    db.create_session(token, name)
+    _log(f"google account joined the league as {name}")
+    return jsonify({"ok": True, "linked": True, "joined": True, "name": name, "token": token, "must_change": False,
+                    "is_admin": False, "email_masked": _gid.mask_email(pending["email"])})
+
+
 @bp.route("/api/auth/link", methods=["POST"])
 def api_auth_link():
     """A signed-in member switches to Google: body {credential, nonce}, Authorization: Bearer <their session>. Links the Google account and retires their passcode in one
@@ -668,6 +744,22 @@ def api_admin_auth_unlink():
         return jsonify({"ok": False, "error": "That member has no Google account linked.", "code": 409, "reason": "not_linked"}), 409
     _log(f"admin {username} unlinked the google account of {target}")
     return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True, "self": own})
+
+
+@bp.route("/api/admin/joining", methods=["POST"])
+def api_admin_joining():
+    """Admin only: open or close joining. Body {open: true|false}. Closing stops NEW members joining with Google (403 joining_closed); members who are already in are untouched."""
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    username, err = _require_admin()
+    if err: return err
+    d = request.get_json(force=True, silent=True)
+    d = d if isinstance(d, dict) else {}
+    if not isinstance(d.get("open"), bool):
+        return jsonify({"ok": False, "error": "open must be true or false", "code": 400, "reason": "bad_request"}), 400
+    db.set_meta("joining_open", "1" if d["open"] else "0")
+    _log(f"admin {username} {'opened' if d['open'] else 'closed'} joining")
+    return jsonify({"ok": True, **_joining_summary()})
 
 
 @bp.route("/api/admin/health", methods=["GET"])

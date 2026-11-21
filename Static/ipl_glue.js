@@ -93,7 +93,7 @@
             // /api/login, /api/register, /api/auth/google or /api/auth/claim (all of them are made while signed out).
             if (res.status === 401 && url.indexOf("/api/") === 0) {
               var why = j && j.reason;
-              var signInAttempt = /^\/api\/(login|register|auth\/google|auth\/claim)(\?|$)/.test(url);
+              var signInAttempt = /^\/api\/(login|register|auth\/google|auth\/claim|auth\/join)(\?|$)/.test(url);
               var sessionProblem = !why || why === "session_ended" || why === "auth_required";
               if (signInAttempt || sessionProblem) IplAuth.clearToken();    // as before, any 401 clears the token, except a Google refusal at /api/auth/link (the member IS signed in)
               // The server refused a token this member was signed in with: their session is over. Tell the page (it says so and lets them sign in
@@ -287,6 +287,20 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticket: ticket, name: name, passcode: passcode }),
       }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    // A NEW member joins with a Google account that belongs to nobody yet: the claim ticket plus the display name they chose (no passcode exists). The reply is a sign-in.
+    authJoin: function (ticket, name) {
+      return _fetchJson("/api/auth/join", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket: ticket, name: name }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    // Admin: open or close joining (new members). Answers {joining_open, member_count, member_cap}.
+    adminSetJoining: function (open) {
+      return _fetchJson("/api/admin/joining", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ open: !!open }),
+      });
     },
     // A signed-in member links their Google account (their passcode is retired by the server in the same step).
     authLink: function (credential, nonce) {

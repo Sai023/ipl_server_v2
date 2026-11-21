@@ -1521,6 +1521,29 @@ class DatabaseManager:
                 con.execute("DELETE FROM sessions WHERE username=%s", (username,))
             return True
 
+    def count_members(self) -> int:
+        with self._read() as con:
+            return int(con.execute("SELECT COUNT(*) AS n FROM members").fetchone()["n"])
+
+    def create_member_with_identity(self, name: str, provider: str, subject: str, email: str, max_members: int, now_iso: str = None) -> dict:
+        """Join: a NEW member whose only way in is this provider account (members.passcode_hash = NO_PIN), created TOGETHER with the identity in ONE transaction, so there is
+        never a member nobody can sign in as, nor an account linked to nobody. Joins are serialised by an advisory lock, so the cap and the name check cannot be raced.
+        Raises ValueError("name_taken") when a member with this name exists (compared case-insensitively: Sai and sai are the same name), ValueError("in_use") when the
+        provider account already belongs to a member, ValueError("full") when the league already has `max_members`. Returns {"member", "email"}."""
+        now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            con.execute("SELECT pg_advisory_xact_lock(%s)", (7430011,))
+            if con.execute("SELECT COUNT(*) AS n FROM members").fetchone()["n"] >= int(max_members):
+                raise ValueError("full")
+            if con.execute("SELECT 1 FROM members WHERE lower(username)=lower(%s)", (name,)).fetchone():
+                raise ValueError("name_taken")
+            if con.execute("SELECT 1 FROM identities WHERE provider=%s AND subject=%s", (provider, subject)).fetchone():
+                raise ValueError("in_use")
+            con.execute("INSERT INTO members (username, passcode_hash, must_change, is_admin, created_at) VALUES (%s,%s,0,0,%s)", (name, NO_PIN, now_iso))
+            con.execute("INSERT INTO identities (provider, subject, member, email, created_at, last_login_at) VALUES (%s,%s,%s,%s,%s,%s)",
+                        (provider, subject, name, email, now_iso, now_iso))
+            return {"member": name, "email": email}
+
     def list_members_for_claim(self) -> list:
         """What the 'Which member are you?' step needs, for every member: {username, linked, has_passcode, must_change}. `linked`: a Google account is already linked
         to them (so their name can never be picked again); `has_passcode`: they still have a passcode of their own to prove who they are with; `must_change`: that

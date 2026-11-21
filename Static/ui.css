@@ -107,4 +107,11 @@
 .claim-pin .pin { margin: 0 auto; }
 .claim-pin-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: var(--sp-2); }
 .claim-sheet .google-status { margin: 0 auto var(--sp-2); text-align: center; }
-.claim-sheet.busy .claim-members, .claim-sheet.busy .claim-pin { opacity: .5; pointer-events: none; }
+.claim-sheet.busy .claim-members, .claim-sheet.busy .claim-pin, .claim-sheet.busy .claim-join { opacity: .5; pointer-events: none; }
+/* joining with Google: the "I'm new here" choice and the display-name box */
+.claim-or { display: flex; align-items: center; gap: var(--sp-3); margin: 2px 0 0; color: var(--dim); font-size: 12px; }
+.claim-or::before, .claim-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.claim-new { border-style: dashed; }
+.claim-join { margin: var(--sp-2) 0; text-align: center; }
+.claim-name-input { width: 100%; max-width: 320px; box-sizing: border-box; min-height: 48px; padding: 10px 14px; font: inherit; font-size: 16px; text-align: center; color: var(--text); background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand-sm); }
+.claim-hint { margin: var(--sp-2) auto 0; max-width: 320px; font-size: 12px; line-height: 1.45; color: var(--muted); }
