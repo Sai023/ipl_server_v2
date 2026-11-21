@@ -194,7 +194,7 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         self.refused("d_unknown", 404, "member_not_found")
         self.refused("d_not_linked", 409, "not_linked")
         r = self.r("d_unlink_moe")
-        self.assertEqual((r["http"], r["body"]), (200, {"ok": True, "target": "Moe", "reset_to": "1234", "must_change": True}))
+        self.assertEqual((r["http"], r["body"]), (200, {"ok": True, "target": "Moe", "reset_to": "1234", "must_change": True, "self": False}))   # "self": an admin unlinking THEMSELVES stays signed in (Google claim release)
         self.refused("d_moe_old_session", 401, "session_ended")
         self.refused("d_moe_google_session", 401, "session_ended")
         self.assertTrue(self.r("d_moe_identity_gone"))

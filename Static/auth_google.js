@@ -10,6 +10,7 @@
 
    The module reports through DOM events, so the page decides what a result means:
      ipl:google-signed-in   detail = the server's reply for a linked member (name, token, is_admin ...): the page establishes the session
+     ipl:google-claimed     detail = the same reply, when the member was just linked by claiming their name (fired right after ipl:google-signed-in: the page may say so)
      ipl:google-linked      detail = the reply of a successful switch (the member's passcode is now retired)
      ipl:google-config      the first answer of /api/auth/config arrived and Google sign-in IS available: the page redraws its sign-in card once
    The DOM work lives in `view` (swapped out by the tests); the logic is everything else. ES5 on purpose, like the other page files. */
@@ -143,9 +144,8 @@
     var call = ctx.mode === "link" ? api().authLink : api().authGoogle;
     call(cred, n).then(function (d) {
       view.busy(ctx.host, false);
-      if (ctx.mode === "signin" && !(d && d.linked)) {   // a good Google account that nobody has linked yet: not an error, but nothing to sign in to
-        view.notLinked(ctx.host, d && d.email_masked);
-        rearm(ctx);
+      if (ctx.mode === "signin" && !(d && d.linked)) {   // a good Google account that nobody has linked yet: not an error, and not a dead end either
+        offerClaim(ctx, d);
         return;
       }
       remember(true);
@@ -157,6 +157,50 @@
       view.busy(ctx.host, false);
       view.status(ctx.host, errText(err), "error");
       rearm(ctx);
+    });
+  }
+
+  // A good Google account that nobody has linked yet. The server remembered WHICH account it verified (a claim ticket) and sent the list of members; the member
+  // picks their name and enters their passcode ONCE, and the server links the account, retires the passcode and signs them in: no second trip to Google. Without
+  // a claim (a server that does not know about them) the old explanation is shown instead.
+  function offerClaim(ctx, d) {
+    var c = d && d.claim;
+    if (!c || !c.ticket) { view.notLinked(ctx.host, d && d.email_masked); rearm(ctx); return; }
+    var sheet = view.claimSheet({
+      emailMasked: c.email_masked || (d && d.email_masked) || "",
+      members: c.members || [],
+      submit: function (name, passcode) { return submitClaim(ctx, c, sheet, name, passcode); },
+      cancel: function () { rearm(ctx); }                // the member backed out: the button gets a fresh nonce for the next attempt
+    });
+    return sheet;
+  }
+  function submitClaim(ctx, c, sheet, name, passcode) {
+    sheet.busy(true);
+    return api().authClaim(c.ticket, name, passcode).then(function (d) {
+      sheet.close();
+      remember(true);
+      account = { linked: true, emailMasked: (d && d.email_masked) || null, pinEnabled: false };
+      forgetConfig();
+      fire("ipl:google-signed-in", d);
+      fire("ipl:google-claimed", d);
+      if (ctx.done) ctx.done(d);
+    }, function (err) {
+      sheet.busy(false);
+      var reason = (window.Ui && Ui.errorReason) ? Ui.errorReason(err) : "";
+      var data = (err && err.serverData) || {};
+      if (reason === "claim_expired" || reason === "claim_locked") {      // the ticket is gone (too old, used up, or too many wrong passcodes): start again from Google
+        sheet.close();
+        view.status(ctx.host, errText(err), "error");
+        rearm(ctx);
+        return;
+      }
+      if (reason === "bad_credentials") {
+        var left = data.attempts_left;
+        sheet.fail("That passcode is not right." + (typeof left === "number" ? " " + left + (left === 1 ? " try" : " tries") + " left." : ""), { clear: true });
+        return;
+      }
+      if (reason === "member_taken" || reason === "temp_passcode") { sheet.fail(errText(err), { clear: true, notFree: name }); return; }   // that name cannot be picked: it is shown as such
+      sheet.fail(errText(err), { clear: true });
     });
   }
 
@@ -273,6 +317,81 @@
       bd.addEventListener("mousedown", function (e) { if (e.target === bd) self.dismiss(); });
       bd.querySelector('[data-r="secondary"]').onclick = self.dismiss;
       openSheets.push(self);
+      return self;
+    },
+    // The "Which member are you?" sheet for a Google account nobody has linked yet. o = {emailMasked, members: [{name, status}], submit(name, passcode), cancel()}.
+    // Only members whose status is "free" can be picked; the others are shown with their reason (a name that has a Google account can never be picked again).
+    // Returns {close(), dismiss(), busy(on), fail(text, {clear, notFree})}; typing the fourth digit sends it, so there is nothing more to tap.
+    claimSheet: function (o) {
+      var bd = document.createElement("div"); bd.className = "ui-backdrop ui-sheet-bd ui-sheet-blocking";
+      var chips = "", free = 0;
+      (o.members || []).forEach(function (m) {
+        var can = m.status === "free"; if (can) free++;
+        var why = m.status === "linked" ? "has Google" : (m.status === "temp" ? "temporary passcode" : "");
+        chips += '<button type="button" class="login-chip claim-chip" data-name="' + esc(m.name) + '"' + (can ? ' aria-pressed="false"' : " disabled") + ">" + esc(m.name) + (why ? "<small>" + why + "</small>" : "") + "</button>";
+      });
+      var who = esc(o.emailMasked || "this Google account");
+      var sub = free ? "Google says you are <b>" + who + "</b>. Pick your name and enter your passcode once to link it: from then on you just tap Continue with Google."
+                     : "Google says you are <b>" + who + "</b>, but no member is free to link. A member who already has a Google account cannot be picked again: ask the admin to remove that link if it is wrong.";
+      var pinHtml = (window.Ui && Ui.pin) ? Ui.pin({ id: "claim-passcode", label: "4-digit passcode", describedby: "claim-status" })
+        : '<input id="claim-passcode" class="pin-input" type="tel" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="4-digit passcode" aria-describedby="claim-status">';
+      bd.innerHTML = '<div class="ui-sheet google-sheet claim-sheet" role="dialog" aria-modal="true" aria-label="Link your Google account">' +
+        '<div class="ui-sheet-grip" aria-hidden="true"></div>' +
+        '<h2 class="ui-sheet-title has-sub">Which member are you?</h2><p class="ui-sheet-sub">' + sub + "</p>" +
+        '<div class="claim-members" role="group" aria-label="Members">' + chips + "</div>" +
+        '<div class="claim-pin" hidden><label class="claim-pin-label" for="claim-passcode">Passcode for <b class="claim-who"></b></label>' + pinHtml + "</div>" +
+        '<div id="claim-status" class="google-status" role="status" aria-live="polite"></div>' +
+        '<div class="ui-sheet-actions">' + (free ? '<button type="button" class="btn btn-teal" data-r="primary" disabled>Link and sign in</button>' : "") +
+        '<button type="button" class="btn btn-ghost" data-r="secondary">' + (free ? "Not me" : "OK") + "</button></div></div>";
+      document.body.appendChild(bd);
+      var box = bd.querySelector(".claim-sheet"), pinWrap = bd.querySelector(".claim-pin"), whoEl = bd.querySelector(".claim-who"), inp = bd.querySelector(".pin-input"),
+          status = bd.querySelector(".google-status"), go = bd.querySelector('[data-r="primary"]'), selected = null, working = false, self = {};
+      function say(text, kind) { status.textContent = text || ""; status.className = "google-status" + (kind ? " " + kind : ""); }
+      function digits() { return String(inp ? inp.value : "").replace(/\D/g, ""); }
+      function sync() { if (go) go.disabled = working || !selected || digits().length !== 4; }
+      function pick(name) {
+        selected = name; whoEl.textContent = name; pinWrap.hidden = false; say("", "");
+        [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) { var on = b.getAttribute("data-name") === name; b.classList.toggle("on", on); if (!b.disabled) b.setAttribute("aria-pressed", on ? "true" : "false"); });
+        if (window.Ui && Ui.pinReset) Ui.pinReset(inp, false); else if (inp) { inp.value = ""; inp.focus(); }
+        sync();
+      }
+      function submit() { if (working || !selected || digits().length !== 4) return; o.submit(selected, digits()); }
+      function onKey(e) { if (e.key === "Escape") { e.preventDefault(); self.dismiss(); } }
+      self.close = function () {
+        document.removeEventListener("keydown", onKey, true);
+        if (bd.parentNode) bd.parentNode.removeChild(bd);
+        var i = openSheets.indexOf(self); if (i >= 0) openSheets.splice(i, 1);
+      };
+      self.dismiss = function () { self.close(); if (o.cancel) o.cancel(); };
+      self.busy = function (on) { working = !!on; box.classList.toggle("busy", working); if (on) say("Linking…", ""); sync(); };
+      self.fail = function (text, opts) {
+        opts = opts || {};
+        say(text, "error");
+        if (opts.notFree) {                                  // that name turned out not to be free (somebody was linked a moment ago): show it as taken, back to choosing
+          [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) {
+            if (b.getAttribute("data-name") !== opts.notFree) return;
+            b.disabled = true; b.removeAttribute("aria-pressed"); b.classList.remove("on");
+            if (!b.querySelector("small")) b.insertAdjacentHTML("beforeend", "<small>not available</small>");
+          });
+          selected = null; pinWrap.hidden = true;
+        } else if (opts.clear && window.Ui && Ui.pinReset) Ui.pinReset(inp, true);
+        sync();
+      };
+      bd.querySelector(".claim-members").addEventListener("click", function (e) {
+        var b = e.target && e.target.closest ? e.target.closest(".claim-chip") : null;
+        if (b && !b.disabled && !working) pick(b.getAttribute("data-name"));
+      });
+      if (inp) {
+        inp.addEventListener("input", function () { sync(); if (digits().length === 4) submit(); });
+        inp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+      }
+      if (go) go.onclick = submit;
+      bd.querySelector('[data-r="secondary"]').onclick = function () { self.dismiss(); };
+      bd.addEventListener("mousedown", function (e) { if (e.target === bd) self.dismiss(); });
+      document.addEventListener("keydown", onKey, true);
+      openSheets.push(self);
+      var first = bd.querySelector(".claim-chip:not([disabled])") || bd.querySelector('[data-r="secondary"]');
+      if (first && first.focus) first.focus();
       return self;
     },
     closeSheets: function () { openSheets.slice().forEach(function (s) { s.close(); }); }

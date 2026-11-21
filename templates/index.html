@@ -14,16 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper11">
-  <link rel="stylesheet" href="/static/style.css?v=paper11">
-  <link rel="stylesheet" href="/static/ui.css?v=paper11">
-  <link rel="stylesheet" href="/static/screens.css?v=paper11">
-  <link rel="stylesheet" href="/static/paper.css?v=paper11">
+  <link rel="stylesheet" href="/static/theme.css?v=paper12">
+  <link rel="stylesheet" href="/static/style.css?v=paper12">
+  <link rel="stylesheet" href="/static/ui.css?v=paper12">
+  <link rel="stylesheet" href="/static/screens.css?v=paper12">
+  <link rel="stylesheet" href="/static/paper.css?v=paper12">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper11"></script>
+<script src="/static/ui.js?v=paper12"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -995,12 +995,21 @@ function _adminResetPasscode(targetUsername){
 }
 // Recovery for a member who cannot sign in with Google (lost the account, a broken device ...): the link is removed, they get the temporary passcode 1234 and their devices are signed out.
 function _adminUnlinkGoogle(target){
-  Ui.confirm({title:"Unlink Google?",message:target+" will sign in with the temporary passcode 1234 and must choose a new one. Their devices are signed out. Use this only if they cannot sign in with Google.",confirmText:"Unlink Google",danger:true}).then(function(ok){
+  var own=(target===_username);   // an admin removing their OWN link stays signed in on this device and chooses a new passcode right now (their other devices are signed out)
+  Ui.confirm({title:"Unlink Google?",message:own
+      ?"Your Google account will be unlinked. You stay signed in here and choose a new passcode now; your other devices are signed out. Afterwards you can link a Google account again."
+      :target+" will sign in with the temporary passcode 1234 and must choose a new one. Their devices are signed out. The name can then be linked to a Google account again. Use this if the link is wrong or they cannot sign in with Google.",confirmText:"Unlink Google",danger:true}).then(function(ok){
     if(!ok)return;
     window.IplApi.adminUnlinkGoogle(target).then(function(d){
       if(!d||!d.ok)throw new Error("unlink failed");
-      Ui.success("Google unlinked for "+target+". Temporary passcode: 1234.");
       _adminMembersList=null;_loadAdminMembers();
+      if(d.self){
+        _mustChange=true;
+        if(window.IplGoogle){IplGoogle.setAccount({linked:false,emailMasked:null,pinEnabled:true});IplGoogle.remember(false);IplGoogle.forgetConfig();}
+        Ui.success("Your Google account is unlinked. Choose a new passcode.");
+        _showResetPasscodeModal(true,"Your Google account is unlinked, so you sign in with a passcode again. Choose a new 4-digit passcode now.");
+        if(_state)render(_state);
+      }else Ui.success("Google unlinked for "+target+". Temporary passcode: 1234.");
     }).catch(function(e){Ui.fail(e,"Could not unlink Google");});
   });
 }
@@ -1431,13 +1440,13 @@ function _submitPasscode(name){
 //                  Cannot be dismissed without setting one (no ×, no Cancel).
 //   forced=false → user-initiated via header button. Has cancel.
 // In BOTH flows we do NOT ask for the current passcode (per project decision).
-function _showResetPasscodeModal(forced){
+function _showResetPasscodeModal(forced,subText){
   var existing=document.getElementById('reset-passcode-modal');
   if(existing)existing.remove();
   var title=forced?'🔑 Set a New Passcode':'🔑 Reset Passcode';
-  var sub=forced
+  var sub=subText||(forced
     ?'Your passcode was reset to the default by an admin. Choose a new 4-digit passcode now.'
-    :'Choose a new 4-digit passcode. Your other devices will be signed out.';
+    :'Choose a new 4-digit passcode. Your other devices will be signed out.');
   var h='<div id="reset-passcode-modal" role="dialog" aria-modal="true" aria-label="Set a passcode" '+(forced?'':'onclick="if(event.target.id===\'reset-passcode-modal\')_closeResetPasscode()"')+' style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">'+title+'</div>';
@@ -2030,6 +2039,11 @@ window.addEventListener("ipl:google-signed-in",function(e){
   if(_sessionLost)_reauthDone(d);else _establishSession(d.name,d.is_admin,d.must_change,d);
 });
 window.addEventListener("ipl:google-linked",function(){if(_state)render(_state);});                    // the menu now says "Signed in with Google"
+// A member claimed their name with a Google account (picked the name, entered the passcode once): ipl:google-signed-in has just signed them in; say what happened.
+window.addEventListener("ipl:google-claimed",function(e){
+  var d=e.detail||{};
+  Ui.success("Linked"+(d.email_masked?" "+d.email_masked:"")+(d.name?" to "+d.name:"")+". Your passcode is retired: from now on just tap Continue with Google.",{duration:6000});
+});
 window.addEventListener("ipl:google-config",function(){if(!_username&&_state)render(_state);});        // Google sign-in is available: the sign-in card gets its button
 window.addEventListener("online",function(){if(_unverified)_recheckSession();});
 function _bootstrap(){
@@ -2106,8 +2120,8 @@ window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper11"></script>
-<script src="/static/mc_hub.js?v=paper11"></script>
-<script src="/static/auth_google.js?v=paper11"></script>
+<script src="/static/ipl_glue.js?v=paper12"></script>
+<script src="/static/mc_hub.js?v=paper12"></script>
+<script src="/static/auth_google.js?v=paper12"></script>
 </body>
 </html>

@@ -88,11 +88,12 @@
           return res.json().catch(function () { return {}; }).then(function (j) {
             // A 401 from our API usually means the session is missing/expired/revoked: clear the token so the next bootstrap drops to the login card.
             // But a 401 can also be the answer to a SIGN-IN attempt (a wrong passcode at /api/login, a Google token that did not check out at
-            // /api/auth/google or /api/auth/link): that is not "your session ended". So the reason is read first: only a missing or refused session
-            // (no reason, "session_ended", "auth_required") ends the session, and never the answer to /api/login, /api/register or /api/auth/google.
+            // /api/auth/google, a wrong passcode or an old ticket at /api/auth/claim, or /api/auth/link): that is not "your session ended". So the reason is
+            // read first: only a missing or refused session (no reason, "session_ended", "auth_required") ends the session, and never the answer to
+            // /api/login, /api/register, /api/auth/google or /api/auth/claim (all of them are made while signed out).
             if (res.status === 401 && url.indexOf("/api/") === 0) {
               var why = j && j.reason;
-              var signInAttempt = /^\/api\/(login|register|auth\/google)(\?|$)/.test(url);
+              var signInAttempt = /^\/api\/(login|register|auth\/google|auth\/claim)(\?|$)/.test(url);
               var sessionProblem = !why || why === "session_ended" || why === "auth_required";
               if (signInAttempt || sessionProblem) IplAuth.clearToken();    // as before, any 401 clears the token, except a Google refusal at /api/auth/link (the member IS signed in)
               // The server refused a token this member was signed in with: their session is over. Tell the page (it says so and lets them sign in
@@ -277,6 +278,14 @@
       return _fetchJson("/api/auth/google", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credential: credential, nonce: nonce }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    // A good Google account that belongs to nobody yet: the sign-in answer carried a claim {ticket, members}; the member says who they are, ONCE (their name and
+    // passcode) and the server links the account, retires the passcode and signs them in (the reply is a sign-in: name, token, is_admin ...).
+    authClaim: function (ticket, name, passcode) {
+      return _fetchJson("/api/auth/claim", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket: ticket, name: name, passcode: passcode }),
       }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
     },
     // A signed-in member links their Google account (their passcode is retired by the server in the same step).

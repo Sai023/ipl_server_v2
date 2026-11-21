@@ -97,3 +97,14 @@
   border: 1.5px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--tint-1); font-size: 12.5px; line-height: 1.5; text-align: center; color: var(--text); }
 .google-blocked code { display: block; max-width: 100%; overflow-wrap: anywhere; font-size: 12px; color: var(--teal-ink); }
 .google-sheet .google-slot-wrap { margin: var(--sp-3) 0 var(--sp-2); }
+/* claiming a name with a Google account: the "Which member are you?" sheet (names to pick, the passcode once) */
+.claim-members { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: center; margin: var(--sp-3) 0 var(--sp-2); }
+.claim-chip { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-width: 96px; min-height: 48px; padding: 8px 18px; cursor: pointer; font-size: 15px; }
+.claim-chip small { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
+.claim-chip.on { border-color: var(--pencil); background: color-mix(in srgb, var(--gold-wash) 36%, var(--sheet-2)); }
+.claim-chip[disabled] { opacity: .55; cursor: not-allowed; box-shadow: none; }
+.claim-pin { margin: var(--sp-2) 0; text-align: center; }
+.claim-pin .pin { margin: 0 auto; }
+.claim-pin-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: var(--sp-2); }
+.claim-sheet .google-status { margin: 0 auto var(--sp-2); text-align: center; }
+.claim-sheet.busy .claim-members, .claim-sheet.busy .claim-pin { opacity: .5; pointer-events: none; }

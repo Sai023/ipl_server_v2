@@ -218,6 +218,116 @@ class TheNonceStore(unittest.TestCase):
         self.assertEqual(sum(wins), 1)
 
 
+class TheClaimStore(unittest.TestCase):
+    """A good Google account that belongs to nobody yet is remembered under a ticket: bound to that account, single-use, short-lived, and its wrong passcodes are
+    counted per Google account (a four-digit passcode must not be guessable by signing in with Google again and again)."""
+
+    def test_a_ticket_stands_for_the_google_account_it_was_issued_for(self):
+        s = gi.ClaimStore()
+        t = s.issue("sub-a", "a@gmail.com")
+        self.assertTrue(t and len(t) >= 24)
+        self.assertEqual(s.peek(t), {"sub": "sub-a", "email": "a@gmail.com"})
+        self.assertEqual(s.peek(t), {"sub": "sub-a", "email": "a@gmail.com"}, "looking is not using")
+        self.assertNotEqual(s.issue("sub-b", "b@gmail.com"), t)
+
+    def test_a_ticket_works_once(self):
+        s = gi.ClaimStore()
+        t = s.issue("sub-a", "a@gmail.com")
+        self.assertEqual(s.spend(t), {"sub": "sub-a", "email": "a@gmail.com"})
+        self.assertIsNone(s.spend(t), "a second use is a replay")
+        self.assertIsNone(s.peek(t))
+
+    def test_a_ticket_we_never_issued_is_refused_everywhere(self):
+        s = gi.ClaimStore()
+        for bad in ("made-up", "", None, 5, ["x"]):
+            self.assertIsNone(s.peek(bad))
+            self.assertIsNone(s.spend(bad))
+            self.assertIsNone(s.wrong_passcode(bad))
+
+    def test_a_ticket_expires_after_ten_minutes(self):
+        now = [1000.0]
+        s = gi.ClaimStore(clock=lambda: now[0])
+        self.assertEqual(s.ttl, 600)
+        a, b = s.issue("sub-a", "a@gmail.com"), s.issue("sub-b", "b@gmail.com")
+        now[0] += 599
+        self.assertIsNotNone(s.spend(a))
+        now[0] += 2
+        self.assertIsNone(s.spend(b))
+        self.assertIsNone(s.peek(b))
+
+    def test_a_google_account_has_one_live_ticket_and_the_newest_wins(self):
+        s = gi.ClaimStore()
+        old = s.issue("sub-a", "a@gmail.com")
+        new = s.issue("sub-a", "a@gmail.com")
+        self.assertNotEqual(old, new)
+        self.assertIsNone(s.peek(old), "the older ticket of the same account is gone")
+        self.assertIsNotNone(s.peek(new))
+
+    def test_wrong_passcodes_are_counted_and_the_fifth_locks_the_google_account_out(self):
+        s = gi.ClaimStore()
+        t = s.issue("sub-a", "a@gmail.com")
+        self.assertEqual(s.max_tries, 5)
+        self.assertEqual([s.wrong_passcode(t) for _ in range(4)], [4, 3, 2, 1])
+        self.assertEqual(s.tries_left("sub-a"), 1)
+        self.assertFalse(s.locked("sub-a"))
+        self.assertEqual(s.wrong_passcode(t), 0)
+        self.assertTrue(s.locked("sub-a"))
+        self.assertIsNone(s.peek(t), "the ticket dies with the last try")
+
+    def test_signing_in_with_google_again_does_not_reset_the_count(self):
+        s = gi.ClaimStore()
+        for _ in range(5):
+            t = s.issue("sub-a", "a@gmail.com")
+            s.wrong_passcode(t)
+        self.assertTrue(s.locked("sub-a"), "five wrong passcodes across five tickets is still five: a new ticket is no fresh start")
+        self.assertFalse(s.locked("sub-b"), "another Google account is unaffected")
+
+    def test_the_lockout_ends_with_the_window_and_a_success_forgets_the_count(self):
+        now = [0.0]
+        s = gi.ClaimStore(clock=lambda: now[0])
+        t = s.issue("sub-a", "a@gmail.com")
+        for _ in range(5):
+            s.wrong_passcode(t)
+        self.assertTrue(s.locked("sub-a"))
+        now[0] += 601
+        self.assertFalse(s.locked("sub-a"), "ten minutes later it may try again")
+        t = s.issue("sub-a", "a@gmail.com")
+        s.wrong_passcode(t)
+        s.wrong_passcode(t)
+        self.assertEqual(s.tries_left("sub-a"), 3)
+        self.assertIsNotNone(s.spend(t))
+        self.assertEqual(s.tries_left("sub-a"), 5, "a claim that worked clears the count")
+
+    def test_a_flood_cannot_grow_the_store_without_limit_and_room_comes_back(self):
+        now = [0.0]
+        s = gi.ClaimStore(ttl=10, cap=3, clock=lambda: now[0])
+        got = [s.issue("sub-%d" % i, "x%d@gmail.com" % i) for i in range(5)]
+        self.assertEqual([x is not None for x in got], [True, True, True, False, False])
+        now[0] += 11
+        self.assertIsNotNone(s.issue("sub-9", "x9@gmail.com"), "expired tickets are purged, so there is room again")
+
+    def test_a_replaced_ticket_makes_room_for_the_same_account_even_when_full(self):
+        s = gi.ClaimStore(cap=2)
+        s.issue("sub-a", "a@gmail.com")
+        s.issue("sub-b", "b@gmail.com")
+        self.assertIsNotNone(s.issue("sub-a", "a@gmail.com"), "the account's own older ticket is replaced, not added")
+        self.assertIsNone(s.issue("sub-c", "c@gmail.com"))
+
+    def test_two_threads_cannot_both_spend_one_ticket(self):
+        s = gi.ClaimStore()
+        t = s.issue("sub-a", "a@gmail.com")
+        wins = []
+        gate = threading.Barrier(8)
+
+        def go():
+            gate.wait()
+            wins.append(s.spend(t) is not None)
+        ts = [threading.Thread(target=go) for _ in range(8)]
+        [x.start() for x in ts]
+        [x.join() for x in ts]
+        self.assertEqual(sum(wins), 1)
+
+
 class CertsServer:
     """Plays Google's certificate endpoint: serves a JWKS made from the keys it is given, and counts the requests."""
 

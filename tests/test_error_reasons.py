@@ -20,7 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WITH_COPY = {"auth_required", "session_ended", "admin_only", "not_your_team", "rate_limited", "locked", "name_taken", "bad_credentials", "server_error",
              "not_found", "too_large", "bad_request",           # (hardening release, 2026-11-21): HTTP errors on /api/ now say what they are, as JSON
              "google_not_configured", "google_unreachable", "token_invalid", "token_expired", "nonce_invalid", "email_unverified",
-             "google_account_in_use", "already_linked", "pin_retired"}      # (Google sign-in, Phase 3, 2026-11-21): the page words each of these itself
+             "google_account_in_use", "already_linked", "pin_retired",      # (Google sign-in, Phase 3, 2026-11-21): the page words each of these itself
+             "claim_expired", "claim_locked", "member_taken", "temp_passcode"}      # (Google claim, 2026-11-21): the same, for claiming a name with a Google account
 # ... and reasons whose server text is already specific and readable ("Choose a captain and a vice-captain before saving"): shown as sent.
 PASS_THROUGH = {"name_invalid", "passcode_invalid", "credentials_required", "target_required", "member_not_found", "invalid_team",
                 "week_changed", "nothing_to_keep",      # the last two (Phase 1.6): the page answers week_changed with its own dialog, and nothing_to_keep says it in the server's words

@@ -1505,17 +1505,32 @@ class DatabaseManager:
             con.execute("UPDATE members SET passcode_hash=%s, must_change=0 WHERE username=%s", (NO_PIN, username))
             return {"member": username, "email": email, "linked_now": True}
 
-    def unlink_identity(self, username: str, temp_passcode_hash: str, provider: str = "google") -> bool:
+    def unlink_identity(self, username: str, temp_passcode_hash: str, provider: str = "google", keep_token: str = None) -> bool:
         """Admin recovery: remove the member's link, give them the temporary passcode (the hash passed in) that they must change at their next sign-in, and
-        end all their sessions. False when they had no link. One transaction."""
+        end all their sessions, except `keep_token` when given (an admin who unlinks THEMSELVES stays signed in on the device they are using, and picks a new
+        passcode there and then). False when they had no link. One transaction."""
         with self._write() as con:
             con.execute("SELECT 1 FROM members WHERE username=%s FOR UPDATE", (username,))
             cur = con.execute("DELETE FROM identities WHERE provider=%s AND member=%s", (provider, username))
             if not cur.rowcount:
                 return False
             con.execute("UPDATE members SET passcode_hash=%s, must_change=1 WHERE username=%s", (temp_passcode_hash, username))
-            con.execute("DELETE FROM sessions WHERE username=%s", (username,))
+            if keep_token:
+                con.execute("DELETE FROM sessions WHERE username=%s AND token<>%s", (username, keep_token))
+            else:
+                con.execute("DELETE FROM sessions WHERE username=%s", (username,))
             return True
+
+    def list_members_for_claim(self) -> list:
+        """What the 'Which member are you?' step needs, for every member: {username, linked, has_passcode, must_change}. `linked`: a Google account is already linked
+        to them (so their name can never be picked again); `has_passcode`: they still have a passcode of their own to prove who they are with; `must_change`: that
+        passcode is only a temporary one (a known value: it must not be enough to take the name). Names and flags only: no hash, no address."""
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT m.username, (i.member IS NOT NULL) AS linked, (m.passcode_hash <> %s) AS has_passcode, (m.must_change <> 0) AS must_change "
+                "FROM members m LEFT JOIN identities i ON i.member = m.username AND i.provider = 'google' "
+                "ORDER BY lower(m.username), m.username", (NO_PIN,)).fetchall()
+            return [dict(r) for r in rows]
 
     def count_pin_members(self) -> int:
         """How many members can still sign in with a passcode (0 once everybody uses Google: the page then drops the passcode screens)."""

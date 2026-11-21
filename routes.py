@@ -456,12 +456,30 @@ def api_admin_members():
 # ════════════════════════════════════════════════════════════════════════════
 # The page shows Google's own button; Google hands the page a signed ID token; the page sends it here together with the nonce it was issued for this attempt.
 # logic/google_identity.py checks the token; these routes decide what a good token MEANS:
-#   /api/auth/google  sign in (a member whose Google account is linked), or say "not linked yet"
+#   /api/auth/google  sign in (a member whose Google account is linked), or hand back a CLAIM for a good account nobody has linked yet
+#   /api/auth/claim   {ticket, name, passcode}: that member proves who they are once; the account is linked, the passcode retired in the same transaction, they are signed in
 #   /api/auth/link    a signed-in member links their Google account; their passcode is retired in the same transaction
 # Nothing here works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). Joining with Google, the devices list and the admin
 # joining switch come in the next release.
 
 _NONCES = _gid.NonceStore()
+_CLAIMS = _gid.ClaimStore()
+
+
+def _claim_members():
+    """The 'Which member are you?' list: every member by name, with why they can or cannot be picked. 'free': they have a passcode of their own and no Google account
+    yet. 'linked': a Google account is already linked to them, so the name can never be picked for another one. 'temp': their passcode is only a temporary one (a
+    known value, so it must not be enough to take a name): they sign in with it first, choose their own passcode, then switch. Names and one word each: no hash,
+    no address."""
+    out = []
+    for r in db.list_members_for_claim():
+        status = "linked" if (r["linked"] or not r["has_passcode"]) else ("temp" if r["must_change"] else "free")
+        out.append({"name": r["username"], "status": status})
+    return out
+
+
+def _claim_locked():
+    return jsonify({"ok": False, "error": "Too many wrong passcodes. Try again in about 10 minutes.", "code": 429, "reason": "claim_locked"}), 429
 
 
 def _google_refusal(e):
@@ -519,20 +537,85 @@ def api_auth_nonce():
 @bp.route("/api/auth/google", methods=["POST"])
 def api_auth_google():
     """Sign in with Google. Body {credential, nonce}. A linked member gets a session exactly as /api/login gives one. A good Google account that belongs to nobody
-    yet is NOT an error: {linked: false} lets the page explain (a member signs in once with their passcode, then switches)."""
+    yet is neither an error nor a dead end: {linked: false, claim: {ticket, members}} lets the member say who they are, ONCE, with their passcode (POST
+    /api/auth/claim): no second trip to Google."""
     re_ = _check_rate(_auth_limiter)
     if re_: return re_
     claims, refusal = _verify_google_body(request.get_json(force=True, silent=True))
     if refusal: return refusal
     ident = db.get_identity("google", claims["sub"])
     if not ident:
-        return jsonify({"ok": True, "linked": False, "email_masked": _gid.mask_email(claims["email"])})
+        if _CLAIMS.locked(claims["sub"]):
+            return _claim_locked()
+        ticket = _CLAIMS.issue(claims["sub"], claims["email"])
+        if ticket is None:
+            return jsonify({"ok": False, "error": "Too many sign-ins at once. Wait a minute and try again.", "code": 429, "reason": "rate_limited"}), 429
+        masked = _gid.mask_email(claims["email"])
+        return jsonify({"ok": True, "linked": False, "email_masked": masked,
+                        "claim": {"ticket": ticket, "expires_in": _CLAIMS.ttl, "email_masked": masked, "members": _claim_members()}})
     m = db.get_member_auth(ident["member"]) or {}
     db.touch_identity("google", claims["sub"], claims["email"])
     token = new_session_token()
     db.create_session(token, ident["member"])
     return jsonify({"ok": True, "linked": True, "name": ident["member"], "token": token, "must_change": False,
                     "is_admin": bool(m.get("is_admin")), "email_masked": _gid.mask_email(claims["email"])})
+
+
+@bp.route("/api/auth/claim", methods=["POST"])
+def api_auth_claim():
+    """Claim a member with a Google account that belongs to nobody yet. Body {ticket, name, passcode}: the ticket came with /api/auth/google (it stands for the
+    Google account the SERVER verified: nothing the page sends can change which account that is), the name and passcode prove who the member is. On success the
+    account is linked and the passcode retired in ONE transaction (db.link_identity) and the member is signed in, exactly as a linked Google sign-in would.
+    Refused: a member who already has a Google account (409 member_taken: a name is linked to one account and is never offered again), one whose passcode is only
+    a temporary one (409 temp_passcode: that value is known to everybody), a wrong passcode (401 bad_credentials with attempts_left; five wrong passcodes lock
+    THAT GOOGLE ACCOUNT out of claiming for ten minutes, 429 claim_locked, however often it signs in again), a ticket that is unknown, used or older than ten minutes
+    (401 claim_expired). The passcode is the only secret here, so this door is no weaker than /api/login and no stronger than the passcode itself."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    if not _gid.enabled():
+        return jsonify({"ok": False, "error": "Google sign-in is not set up yet.", "code": 503, "reason": "google_not_configured"}), 503
+    d = request.get_json(force=True, silent=True)
+    d = d if isinstance(d, dict) else {}
+    ticket = d.get("ticket")
+    name = str(d.get("name") or "").strip()
+    passcode = str(d.get("passcode") or "").strip()
+    if not isinstance(ticket, str) or not ticket or not name or not PASSCODE_RE.match(passcode):
+        return jsonify({"ok": False, "error": "ticket, name and 4-digit passcode required", "code": 400, "reason": "credentials_required"}), 400
+    pending = _CLAIMS.peek(ticket)
+    if not pending:
+        return jsonify({"ok": False, "error": "That sign-in has expired. Tap Continue with Google to start again.", "code": 401, "reason": "claim_expired"}), 401
+    if _CLAIMS.locked(pending["sub"]):
+        return _claim_locked()
+    m = db.get_member_auth(name)
+    if not m:
+        return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
+    if m.get("google_email") or m["passcode_hash"] == NO_PIN:
+        return jsonify({"ok": False, "error": "That member already has a Google account linked.", "code": 409, "reason": "member_taken"}), 409
+    if m["must_change"]:
+        return jsonify({"ok": False, "error": "That member has a temporary passcode. Sign in with it first, choose your own, then switch to Google.", "code": 409, "reason": "temp_passcode"}), 409
+    if not verify_passcode(passcode, name, m["passcode_hash"]):
+        left = _CLAIMS.wrong_passcode(ticket)
+        if left is None:
+            return jsonify({"ok": False, "error": "That sign-in has expired. Tap Continue with Google to start again.", "code": 401, "reason": "claim_expired"}), 401
+        if left == 0:
+            return _claim_locked()
+        return jsonify({"ok": False, "error": "wrong passcode", "code": 401, "reason": "bad_credentials", "attempts_left": left}), 401
+    spent = _CLAIMS.spend(ticket)                       # the passcode was right: the ticket is used up here, whatever happens next
+    if not spent:
+        return jsonify({"ok": False, "error": "That sign-in has expired. Tap Continue with Google to start again.", "code": 401, "reason": "claim_expired"}), 401
+    try:
+        db.link_identity(name, "google", spent["sub"], spent["email"])
+    except LookupError:
+        return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
+    except ValueError as e:
+        if str(e) == "in_use":
+            return jsonify({"ok": False, "error": "That Google account already belongs to another member.", "code": 409, "reason": "google_account_in_use"}), 409
+        return jsonify({"ok": False, "error": "That member already has a Google account linked.", "code": 409, "reason": "member_taken"}), 409
+    token = new_session_token()
+    db.create_session(token, name)
+    _log(f"google account claimed {name}")
+    return jsonify({"ok": True, "linked": True, "claimed": True, "name": name, "token": token, "must_change": False,
+                    "is_admin": bool(m.get("is_admin")), "email_masked": _gid.mask_email(spent["email"])})
 
 
 @bp.route("/api/auth/link", methods=["POST"])
@@ -580,10 +663,11 @@ def api_admin_auth_unlink():
         return jsonify({"ok": False, "error": "target_username required", "code": 400, "reason": "target_required"}), 400
     if not db.get_member_auth(target):
         return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
-    if not db.unlink_identity(target, hash_passcode("1234", target)):
+    own = target == username                              # an admin who unlinks THEMSELVES stays signed in on this device (and picks a new passcode there and then)
+    if not db.unlink_identity(target, hash_passcode("1234", target), keep_token=get_bearer_token() if own else None):
         return jsonify({"ok": False, "error": "That member has no Google account linked.", "code": 409, "reason": "not_linked"}), 409
     _log(f"admin {username} unlinked the google account of {target}")
-    return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True})
+    return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True, "self": own})
 
 
 @bp.route("/api/admin/health", methods=["GET"])

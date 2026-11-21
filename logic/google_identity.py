@@ -1,5 +1,5 @@
 """
-Google sign-in, the server's half                              google_identity v1.0.0
+Google sign-in, the server's half                              google_identity v1.1.0
 ===========================================================================
 Phase 3 of the SA20 readiness plan (2026-11-21). The page shows Google's own "Continue with Google" button; Google hands the page a signed ID token (a JWT);
 the page sends it here. This module checks that token and does NOTHING else: no Flask, no database. What a verified token MEANS (sign in, link, join) is the
@@ -19,6 +19,10 @@ The identity is Google's `sub` (a stable account id that is never reused), NEVER
 
 The keys come from Google's certificate endpoint through PyJWT's PyJWKClient (cached; it refetches when a token names a key it does not hold, which is how a key
 rotation is picked up). PyJWT is imported lazily: if it were ever missing, only Google sign-in would be unavailable, never the whole app.
+
+v1.1.0 (2026-11-21): ClaimStore. A good Google account that belongs to nobody yet is not turned away: the server remembers WHICH verified account it was (a claim
+ticket, kept in memory like the nonces) and the member then proves who they are with their passcode, once, in the same visit. The ticket is bound to the Google
+account the server verified, never to anything the page says; it is single-use, lives ten minutes, and wrong passcodes are counted per Google account.
 """
 import collections
 import hmac
@@ -173,3 +177,115 @@ class NonceStore:
         with self._lock:
             self._purge(now)
             return self._items.pop(nonce, None) is not None
+
+
+# ── claims ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+class ClaimStore:
+    """The memory of 'this Google account was verified and belongs to nobody yet'. issue(sub, email) hands out a CLAIM TICKET; the page gives it back together with
+    a member's name and passcode, and the server links the account to that member (see routes.api_auth_claim). Kept in memory like NonceStore (a restart forgets
+    them: the member simply taps Continue with Google again).
+
+    - a ticket is bound to the verified Google account (`sub`, `email`) it was issued for; nothing the page sends can change that;
+    - single-use (spend) and valid for `ttl` seconds; a Google account has at most ONE live ticket (a newer sign-in replaces the older one);
+    - a passcode has only four digits, so wrong passcodes are counted PER GOOGLE ACCOUNT over the same window, not per ticket: signing in with Google again does not
+      reset the count. After `max_tries` wrong passcodes the account cannot claim anything until the window ends (locked()), and its ticket is gone;
+    - the store is capped: when it is full of live tickets issue() answers None (the route says 'busy') instead of growing without limit."""
+
+    def __init__(self, ttl=600, cap=2000, max_tries=5, clock=time.monotonic):
+        self._ttl, self._cap, self._max_tries, self._clock = ttl, cap, max_tries, clock
+        self._tickets = collections.OrderedDict()         # ticket -> {"sub", "email", "expires"}, oldest first (every ticket lives the same time)
+        self._by_sub = {}                                 # sub -> its live ticket
+        self._fails = {}                                  # sub -> [wrong passcodes so far, when that count is forgotten]
+        self._lock = threading.Lock()
+
+    @property
+    def max_tries(self):
+        return self._max_tries
+
+    @property
+    def ttl(self):
+        return self._ttl
+
+    def _purge(self, now):
+        while self._tickets:
+            ticket, t = next(iter(self._tickets.items()))
+            if t["expires"] > now:
+                break
+            del self._tickets[ticket]
+            if self._by_sub.get(t["sub"]) == ticket:
+                del self._by_sub[t["sub"]]
+        for sub in [s for s, (_, until) in self._fails.items() if until <= now]:
+            del self._fails[sub]
+
+    def _left(self, sub):
+        return max(0, self._max_tries - self._fails.get(sub, (0, 0))[0])
+
+    def locked(self, sub):
+        """True while this Google account has used up its wrong passcodes (it may try again when the window has passed)."""
+        with self._lock:
+            self._purge(self._clock())
+            return self._left(sub) == 0
+
+    def tries_left(self, sub):
+        with self._lock:
+            self._purge(self._clock())
+            return self._left(sub)
+
+    def issue(self, sub, email):
+        """A ticket for this verified Google account, or None when the store is full of live ones. A newer ticket replaces the account's older one."""
+        now = self._clock()
+        with self._lock:
+            self._purge(now)
+            old = self._by_sub.pop(sub, None)
+            if old:
+                self._tickets.pop(old, None)
+            if len(self._tickets) >= self._cap:
+                return None
+            ticket = secrets.token_urlsafe(24)
+            self._tickets[ticket] = {"sub": sub, "email": email, "expires": now + self._ttl}
+            self._by_sub[sub] = ticket
+            return ticket
+
+    def peek(self, ticket):
+        """{"sub", "email"} of a live ticket WITHOUT using it up, or None (unknown, expired or already used)."""
+        if not isinstance(ticket, str) or not ticket:
+            return None
+        with self._lock:
+            self._purge(self._clock())
+            t = self._tickets.get(ticket)
+            return {"sub": t["sub"], "email": t["email"]} if t else None
+
+    def wrong_passcode(self, ticket):
+        """Count a wrong passcode against the Google account behind `ticket`. Returns the tries that account has left (0: it is locked out and the ticket is gone),
+        or None when the ticket is not live."""
+        if not isinstance(ticket, str) or not ticket:
+            return None
+        now = self._clock()
+        with self._lock:
+            self._purge(now)
+            t = self._tickets.get(ticket)
+            if not t:
+                return None
+            fails = self._fails.setdefault(t["sub"], [0, now + self._ttl])
+            fails[0] += 1
+            left = self._left(t["sub"])
+            if left == 0:
+                del self._tickets[ticket]
+                if self._by_sub.get(t["sub"]) == ticket:
+                    del self._by_sub[t["sub"]]
+            return left
+
+    def spend(self, ticket):
+        """{"sub", "email"} exactly once for a live ticket (it is gone afterwards), else None. A successful claim also forgets the account's wrong passcodes."""
+        if not isinstance(ticket, str) or not ticket:
+            return None
+        with self._lock:
+            self._purge(self._clock())
+            t = self._tickets.pop(ticket, None)
+            if not t:
+                return None
+            if self._by_sub.get(t["sub"]) == ticket:
+                del self._by_sub[t["sub"]]
+            self._fails.pop(t["sub"], None)
+            return {"sub": t["sub"], "email": t["email"]}
