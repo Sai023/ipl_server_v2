@@ -57,6 +57,16 @@ its nonce before the server forgets it), `openSwitch()`, `offerSwitch()` (once p
 `ipl:google-config`; the page (templates/index.html) decides what they mean. The DOM part is a replaceable `view`, which is how the tests drive the logic.
 `Static/ipl_glue.js` gained `authConfig`, `authNonce`, `authGoogle`, `authLink`, `authLogout`, `adminUnlinkGoogle`, and its 401 rule changed (see ipl_glue.md).
 
+## Turning it on, and off (operator steps)
+
+1. **Google Cloud console:** a project; OAuth consent screen = External, app name + support email only (no logo, no links); **Testing status is enough** for a sign-in that
+   asks only for the basic scopes (Google: the test-user list does not limit those; members see a small "app is in testing" notice, publishing removes it); Credentials >
+   Create OAuth client ID > **Web application**; **Authorized JavaScript origins** = `https://ipl-fantasy-2026-h0m9.onrender.com` (no redirect URIs; for local tests both
+   `http://localhost` and `http://localhost:<port>`). The Client ID (`....apps.googleusercontent.com`) is public.
+2. **Render dashboard:** Environment > add `GOOGLE_CLIENT_ID` = that value > save (Render restarts the service). Check `GET /api/auth/config`: `google.enabled` is `true`.
+3. **Off again:** delete the variable (the routes answer 503 `google_not_configured`, the page shows no Google block, the passcode works as before for everyone who has not
+   switched). A member who HAS switched can only get back in through the admin's unlink, so switch the three one at a time and keep the `pre-google` rollback tag.
+
 ## Headers (checked against Google's own page, 2026-11-21)
 
 Google's page "Get your Google API client ID" says: the library `gsi/client` is a cross-origin load and **`Referrer-Policy: strict-origin-when-cross-origin` is recommended**
@@ -77,9 +87,11 @@ runtime twin) fails if anybody changes the policy, or adds a COOP without `same-
 
 ## Tests
 
-`tests/test_google_identity.py` (23: real signatures, a local certs server, rotation, outage), `tests/test_google_signin.py` + `tests/helpers/google_scenario.py` (24 on the
-real routes, including two members racing for one account), `tests/js/google_signin.test.js` (36: the glue, the module, the page functions), the error-reason contract
-(`tests/test_error_reasons.py`: every new `reason` needs a sentence in `Static/ui.js` or an entry in the pass-through list).
+`tests/test_google_identity.py` (23: real signatures, a local certs server, rotation, outage), `tests/test_google_signin.py` + `tests/helpers/google_scenario.py` (25 on the
+real routes, including two members racing for one account and the refresh of the stored address and last-login time), `tests/js/google_signin.test.js` (36: the glue, the
+module, the page functions), the error-reason contract (`tests/test_error_reasons.py`: every new `reason` needs a sentence in `Static/ui.js` or an entry in the
+pass-through list), and the header guard in `tests/test_hardening.py`. Deliberate-breakage runs (a script that breaks ONE thing in an exported copy of the committed tree
+and requires the tests to fail): 24 server-side and 26 page-side mutants, all killed (one server survivor, "a sign-in does not refresh the identity", led to the 25th route test).
 
 ## Known limits (harmless for three members; settle them BEFORE the link is opened to everybody)
 
@@ -89,7 +101,9 @@ real routes, including two members racing for one account), `tests/js/google_sig
    the two limiters (writes 30/min, Google 60/min) are each ONE bucket shared by everybody. Three members never notice; a stranger hammering `/api/auth/nonce` could use up the
    Google bucket and make everyone's Google sign-in answer 429 for a minute (the passcode door is not affected). The join release adds a trusted-proxy setting
    (`ProxyFix`, one proxy, rightmost address) and tests for it.
-3. **First sign-in after a start fetches Google's keys** (one extra request, cached afterwards). If Google is unreachable at that moment the answer is 503 `google_unreachable`
+3. **The admin's unlink hands out the well-known temporary passcode `1234`** (the member must change it at their next sign-in), exactly like the existing admin passcode
+   reset. Fine among three friends; once strangers can join, the admin should be shown a random one-time passcode instead.
+4. **First sign-in after a start fetches Google's keys** (one extra request, cached afterwards). If Google is unreachable at that moment the answer is 503 `google_unreachable`
    and the nonce is not spent.
 
 ## Open questions / next releases
