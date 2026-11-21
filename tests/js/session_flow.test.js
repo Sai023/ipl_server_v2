@@ -82,10 +82,10 @@ t('a server error or a network failure is not a session ending', async () => {
 });
 
 // ====================================================================== the page
-const FUNCS = ['_rememberAdmin', '_cachedAdmin', '_timeoutAfter', '_whoamiWithin', '_checkSavedSession', '_scheduleVerify', '_recheckSession', '_sessionEnded', '_showSessionEndedSheet', '_reauthDone', '_closePasscodePrompt'];
+const FUNCS = ['_rememberAdmin', '_cachedAdmin', '_timeoutAfter', '_whoamiWithin', '_checkSavedSession', '_scheduleVerify', '_recheckSession', '_sessionEnded', '_showSessionEndedSheet', '_reauthDone', '_closePasscodePrompt', '_signinTrouble'];
 
 function page(o = {}) {
-  const c = { console, Promise, Error, Math, JSON, events: [], renders: 0, banners: [], hides: 0, calls: [], sheets: [], closed: 0, toasts: [], timers: [], store: new Map() };
+  const c = { console, Promise, Error, Math, JSON, events: [], renders: 0, reasons: [], calls: [], sheets: [], closed: 0, toasts: [], timers: [], store: new Map() };
   c.window = c;
   c.setTimeout = (fn, ms) => { const id = c.timers.length + 1; c.timers.push({ id, fn, ms, cleared: false }); return id; };
   c.clearTimeout = (id) => { const x = c.timers.find((y) => y.id === id); if (x) x.cleared = true; };
@@ -93,12 +93,11 @@ function page(o = {}) {
   c.document = { getElementById: () => null };
   Object.assign(c, { _username: null, _isAdmin: false, _mustChange: false, _authPending: false, _sessionLost: false, _reauth: false, _unverified: false, _verifyTimer: null, _verifyTries: 0, _sessionSheet: null, _state: { members: { Sai: {} } } });
   c.render = () => { c.renders++; };
-  c.showErrorBanner = (m) => { c.banners.push(m); }; c.hideErrorBanner = () => { c.hides++; };
   c.clearUsername = () => { c.calls.push(['clearUsername']); }; c.saveUsername = (n) => { c.calls.push(['saveUsername', n]); };
   c._establishSession = (n, a, m) => { c.calls.push(['establish', n, !!a, !!m]); c._username = n; c._isAdmin = !!a; };
   c._showPasscodePromptModal = (n, note, reauth) => { c.calls.push(['prompt', n, note, !!reauth]); };
   c._showResetPasscodeModal = (f) => { c.calls.push(['resetModal', f]); };
-  c.Ui = { sheetBlocking: (spec) => { const s = { spec, close() { c.closed++; } }; c.sheets.push(s); return s; }, success: (m) => { c.toasts.push(m); } };
+  c.Ui = { sheetBlocking: (spec) => { const s = { spec, close() { c.closed++; } }; c.sheets.push(s); return s; }, success: (m) => { c.toasts.push(m); }, connection: { reason: (name, msg) => { c.reasons.push([name, msg]); } } };
   c.IplApi = { whoami: o.whoami || (() => new Promise(() => {})) };
   vm.createContext(c);
   vm.runInContext(HTML.match(/var _VERIFY_DELAYS=\[[^\]]*\];/)[0], c);
@@ -206,7 +205,7 @@ t('SESSION ENDED: a signed-in member gets the blocking sheet, once, with their p
   c._sessionEnded(); c._sessionEnded();
   assert.strictEqual(c._sessionLost, true); assert.strictEqual(c.sheets.length, 1, 'shown once');
   const s = c.sheets[0].spec; assert.strictEqual(s.title, "You've been signed out"); assert.match(s.message, /picks on this phone are safe/i); assert.strictEqual(s.primary.label, 'Sign in');
-  assert.strictEqual(c.hides, 1, 'the connection banner is cleared');
+  assert.deepStrictEqual(c.reasons, [['signin', '']], 'the "can\'t confirm your sign-in" message is cleared');
 });
 
 t('SESSION ENDED: nobody signed in, or the launch check still deciding, shows nothing', () => {
@@ -259,7 +258,7 @@ t('WIRING: the page listens for a session ending and for the network coming back
   assert.ok(/addEventListener\("ipl:session-ended",_sessionEnded\)/.test(HTML));
   assert.ok(/addEventListener\("online",function\(\)\{if\(_unverified\)_recheckSession\(\);\}\)/.test(HTML));
   assert.ok(/addEventListener\("ipl:retry",function\(\)\{[^}]*_recheckSession\(\)/.test(HTML), '"Retry now" re-checks the sign-in too');
-  const r = fnSource('render'); assert.ok(/if\(_unverified\)showErrorBanner/.test(r) && /else hideErrorBanner\(\)/.test(r));
+  const r = fnSource('render'); assert.ok(/_signinTrouble\(_unverified\)/.test(r), 'every redraw restates whether the sign-in could be checked');
 });
 
 t('WIRING: signing in establishes a fresh session, which clears every flag of the old one', () => {

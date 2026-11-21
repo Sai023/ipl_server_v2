@@ -1,5 +1,7 @@
 > **2026-11-19 - read this first.** The browser no longer schedules or sends a weekly rollover (the Monday 14:00 UTC `setTimeout` in `Static/ipl_glue.js`, `IplRollover` and `IplApi.rollover` are gone) and the red admin button "Simulate Monday rollover" is gone. They could roll a competition that had not started (reproduced on scratch data) and only ever worked for an admin who had the page open. Since 2026-11-20 `POST /api/rollover` applies every overdue week of the stored lock schedule (see [rollover_plan.md](rollover_plan.md)); a forced rollover needs a signed-in admin plus `confirm=<slug>:<week>` (`tests/test_rollover_guards.py`). The redundant automatic triggers come in Phase 2 of the SA20 readiness plan. Sections below that describe the browser timer or the button are historical.
 
+> **2026-11-21 (Phase 1.7) - server trouble is ONE slim banner now.** The full-screen "Server Unavailable" overlay (`_showOverlay` and friends), the "Safe Boot" block (it wrote into an element that no longer existed) and the dead `ipl:rollover-triggered` / `ipl:error` plumbing are gone from this file. A failed poll is silent here; `Ui.connection` in `Static/ui.js` watches every `/api/` call and owns the banner, the probe and the backoff, and this file only refetches at once when it announces `ipl:recovered`. See "Phase 1.7 additions" at the end; sections below that describe the overlay or Safe Boot are historical. Test: `tests/js/connection.test.js`.
+
 # Static/ipl_glue.js — The Frontend Integration Layer
 
 > **Post-cleanup note (2026-05-15).** This document is the snapshot that
@@ -37,11 +39,11 @@ browser-side app. Loaded after the inline script in
    broadcasts `ipl:state-updated` / `ipl:leaderboard-updated` events.
 4. **Schedules the auto-rollover** — a single `setTimeout` set for the
    next Monday at 14:00 UTC. When it fires, calls `IplApi.rollover(false)`.
-5. **Injects CSS** for the maintenance overlay and the Match Centre
-   look-and-feel.
-6. **Provides the "Safe Boot" timeout** — if `/api/state` hasn't
-   responded within 5 seconds, dismiss the loading spinner and show
-   the error banner so the user isn't stuck behind a spinner forever.
+5. **Injects CSS** for the Match Centre look-and-feel. (The maintenance
+   overlay it used to inject is gone: 2026-11-21, Phase 1.7.)
+6. ~~**The "Safe Boot" timeout**~~ — removed 2026-11-21. A slow first load
+   is explained by `Ui.boot` in `ui.js` (stages at 0 / 6 / 25 s, a "Try
+   again" screen at 75 s).
 7. **Overrides several inline renderers** (`_buildHistoryTab`,
    `_buildLeaderboardCard`, `_buildPointsTab`, `_buildMatchesTab`)
    defined in `index.html`. This is the "v7.4 UI OVERRIDES" section at
@@ -82,8 +84,9 @@ The file's docstring still claims version **v7.8** and mentions Phase
     `window.IplConfig`, `window.IplRollover`, `window.normaliseLeaderboard`.
   - Custom events on `window`: `ipl:ready`, `ipl:state-updated`,
     `ipl:leaderboard-updated`, `ipl:players-updated`,
-    `ipl:rollover-triggered`, `ipl:week-changed`, `ipl:season-complete`,
-    `ipl:saved`, `ipl:error`.
+    `ipl:week-changed`, `ipl:season-complete`, `ipl:saved`,
+    `ipl:session-ended`. It listens to `ipl:saved` and `ipl:recovered`.
+    (`ipl:rollover-triggered` and `ipl:error` were removed 2026-11-21.)
   - Side effects: polling loop, rollover timer, CSS injection,
     inline-renderer overrides.
 
@@ -150,16 +153,17 @@ Phase 12 also adds six methods to `IplApi`:
 
 ### 3. ETag invalidation triggers
 - On `ipl:saved` → `_lastStateEtag = null`.
-- On `ipl:rollover-triggered` → `_lastStateEtag = null` + immediate
-  `_pollCycle()`.
-- Together: any save or rollover guarantees the *next* poll picks up
+- On `ipl:recovered` (the server answered again after trouble;
+  2026-11-21) → `_lastStateEtag = null` + immediate `_pollCycle()`.
+- Together: any save or recovery guarantees the *next* poll picks up
   the change without waiting for the 60s tick.
 
-### 4. Safe boot timeout
-- 5 seconds after `_init` runs, if the loading spinner is still
-  visible, dismiss it and show an error banner.
-- This handles the case where `/api/state` is completely unreachable
-  and the user would otherwise be stuck.
+### 4. Safe boot timeout (REMOVED 2026-11-21)
+- It used to give up after 5 s and write into `#error-banner`, an
+  element nobody had rendered for a long time. Gone with the red
+  banner. A slow or failed first load is handled by `Ui.boot` in
+  `ui.js`: a patient message that explains the free server may be
+  waking up, then a "Try again" screen at 75 s.
 
 ### 5. `IplConfig` is populated from `/api/ping`
 On boot, `IplApi.ping()` sets `IplConfig.budget`, `xi_size`,
@@ -232,7 +236,7 @@ From [user_capabilities.md](user_capabilities.md):
 | Item | Notes |
 |------|-------|
 | `_buildLeaderboardCard` override | 413–459. Adds per-week columns to the leaderboard table. **Live**, called by render(). The inline version in `index.html:532` is shorter and shadowed. |
-| Maintenance overlay (`_showOverlay` etc.) | 76–109. **Live**, fires when polls fail with 5xx or `!navigator.onLine`. |
+| Maintenance overlay (`_showOverlay` etc.) | **REMOVED 2026-11-21 (Phase 1.7).** It hid the whole app (an XI being edited included) after any 5xx on the 60 s poll. Replaced by the slim `Ui.connection` banner. |
 | `IplApi.ping`, `getCurrentWeek` | Both used by `_init`. **Live**. |
 | Stale changelog header | 1–16 | Mentions v7.3 Matches tab (now dead) and v7.4 features still in use. Worth pruning to current state. |
 
@@ -257,10 +261,11 @@ D17–D21, D24–D26 are all executed — about **36% of the file**.
    inside `#app` — and `render()` rewrites that entire subtree on
    every state change. The cost is small (no matching selectors) but
    non-zero. D26 cleanup removes the overhead.
-4. **`_safeBootTimer` doesn't fire if `/api/state` returns 200 but
-   `ipl:state-updated` is never dispatched** (e.g. inline script
-   crashes before `render()` runs). Worth adding a hard `setTimeout`
-   that dismisses the loader regardless.
+4. ~~**`_safeBootTimer` doesn't fire if `/api/state` returns 200 but
+   `ipl:state-updated` is never dispatched**~~ (e.g. inline script
+   crashes before `render()` runs). Removed with the Safe Boot block
+   (2026-11-21); `Ui.boot` shows its own "Try again" screen at 75 s
+   whatever the cause.
 5. **`IplApi` is the contract**, but **five dead methods**
    (`getPlayerPoints`, `getUserMatchPoints`, `saveState`, `saveMatch`,
    `seedHistory`) inflate that contract. Worth grouping the
@@ -270,3 +275,9 @@ D17–D21, D24–D26 are all executed — about **36% of the file**.
 ## Phase 1.6 additions (2026-11-20)
 
 `IplApi.saveNextWeek(name, picks, week)` now states the week the draft is FOR (optional; the server answers 409 `week_changed` when a handover moved that on) and `IplApi.keepNextWeek(name, week)` is new (`POST /api/keep-xi/<n>`: "Keep this XI"). See [routes.md](routes.md) and [index_html.md](index_html.md).
+
+## Phase 1.7 additions (2026-11-21): one "server trouble" pattern
+
+What changed in this file: the overlay section, `MAINTENANCE_DELAY`, `SAFE_BOOT_MS`, the overlay/safe-boot timers and the `ipl:rollover-triggered` listener are deleted; `_pollCycle`'s `.catch` is silent (the failed request already told `Ui.connection`); `_init` adds `window.addEventListener("ipl:recovered", ...)` which clears `_lastStateEtag` and polls at once. "Retry now" (`ipl:retry`) is the PAGE's to handle (`templates/index.html` re-runs `_bootstrap()`), so the glue deliberately does not also poll on it (that would fetch everything twice).
+
+The owner of the pattern is `Ui.connection` in `Static/ui.js` (see [index_html.md](index_html.md), "Server trouble, Phase 1.7"). `tests/js/connection.test.js` loads this file too and pins the three glue behaviours above.

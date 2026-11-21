@@ -46,6 +46,12 @@ class BrowserSideRegressions(unittest.TestCase):
         carries on where they were (2026-11-20)."""
         self.run_script("session_flow.test.js")
 
+    def test_server_trouble_is_one_slim_banner_that_blocks_nothing(self):
+        """Phase 1.7 (2026-11-21): the full-screen 'Server Unavailable' overlay and the second red banner are gone. Every /api/ call feeds one
+        banner above the app: a single failure is silent, the second raises it, the quiet probe backs off (3..60 s, never while the tab is hidden),
+        offline outranks server trouble, 'Retry now' checks at once, and the first good answer clears it and refreshes the page."""
+        self.run_script("connection.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

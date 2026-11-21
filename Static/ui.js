@@ -7,7 +7,7 @@
      Ui.errorMessage(err, fallback)  plain-language text for any failed request (uses the server's machine `reason` when we have a sentence for it)
      Ui.errorFor(reason, fallback) / Ui.errorReason(err)  the sentence for a server `reason`, and the reason carried by a failed request
      Ui.stateHtml(kind, {title,message,retry})  loading | empty | error | offline cards
-     Ui.connection.set('offline'|'reconnecting', msg) / .clear()
+     Ui.connection  one slim banner for any trouble reaching the server (health from every /api/ call, quiet probe, backoff, Retry now; Phase 1.7)
      Ui.boot  staged loading messages for a slow first load (server waking up), with a real failure screen + Retry
    Replaces every browser alert()/confirm()/prompt() and the bare red error banner. */
 (function () {
@@ -260,25 +260,146 @@
     return h + "</div>";
   };
 
-  /* ---------- connection banner ---------- */
+  /* ---------- connection health: ONE slim banner for every kind of trouble reaching the server (2026-11-21, Phase 1.7) ----------
+     Evidence comes from every /api/ call (Ui.connection.watch wraps fetch once): an answer below 500 means the server is fine; a 5xx, or no answer, is trouble.
+     One failure shows nothing: a probe of /api/ping follows 3 s later and only a second failure raises the banner, so a single blip never flashes.
+     While in trouble the probe backs off (3, 5, 10, 20, 40, then every 60 s, paused while the tab is hidden); the first good answer clears the banner and fires
+     "ipl:recovered" so the page refreshes at once. The banner sits in the flow ABOVE the app (never over the app bar) and blocks nothing: what happened, what is safe,
+     what to do (Retry now). Offline outranks server trouble, which outranks "can't confirm your sign-in". */
+  var PROBE_DELAYS = [3000, 5000, 10000, 20000, 40000, 60000];
+  var SEVERE_AFTER = 90000;
+  var health = { fails: 0, since: 0, lastOk: 0, probes: 0, timer: null, ticker: null, shownServer: false, offline: false, signin: "" };
+  var rawFetch = null;
   var conn = null;
+  function nowMs() { return Date.now(); }
+  function relAgo(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    if (s < 45) return "just now";
+    var m = Math.round(s / 60);
+    if (m < 60) return (m < 2 ? 1 : m) + " min ago";
+    var h = Math.round(m / 60);
+    return h + (h === 1 ? " hour ago" : " hours ago");
+  }
+  function loaderVisible() {
+    var el = document.getElementById("app-loading");
+    return !!(el && el.classList && !el.classList.contains("hidden"));   // the boot screen already explains a slow start
+  }
   function getConn() {
-    if (conn && document.body.contains(conn)) return conn;
+    if (conn && conn.parentNode) return conn;
     conn = document.createElement("div"); conn.id = "ui-conn"; conn.setAttribute("role", "status"); conn.setAttribute("aria-live", "polite");
-    document.body.appendChild(conn); return conn;
+    document.body.insertBefore(conn, document.body.firstChild);
+    return conn;
+  }
+  // What the banner should say right now, or null for nothing.
+  function compose() {
+    var t = nowMs(), upd = health.lastOk ? " (updated " + relAgo(t - health.lastOk) + ")" : "";
+    if (health.offline) {
+      return loaderVisible()    // before the first screen there is no data to show yet; say what will happen instead
+        ? { kind: "offline", msg: "You're offline. We'll load your league as soon as you're back.", ago: "" }
+        : { kind: "offline", msg: "You're offline. Showing the last data we have.", ago: upd };
+    }
+    if (health.fails >= 2 && !loaderVisible()) {
+      return (t - health.since > SEVERE_AFTER)
+        ? { kind: "severe", msg: "Still can't reach the server. Showing the last data we have. Your picks are kept on this phone.", ago: upd }
+        : { kind: "server", msg: "The server is having a moment. Retrying…", ago: "" };
+    }
+    if (health.signin && !loaderVisible()) return { kind: "signin", msg: health.signin, ago: "" };
+    return null;
+  }
+  function paint() {
+    var c = compose();
+    if (!c) {
+      if (conn) { conn.className = ""; conn.setAttribute("data-msg", ""); }   // a banner that comes back later is rebuilt, so it is announced again
+      if (health.ticker) { clearInterval(health.ticker); health.ticker = null; }
+      return;
+    }
+    var el = getConn();
+    if (el.getAttribute("data-msg") !== c.msg) {          // a changed message is announced; the little "updated ... ago" text is not (aria-hidden)
+      el.setAttribute("data-msg", c.msg);
+      el.innerHTML = '<span class="msg">' + esc(c.msg) + '</span><span class="ago" aria-hidden="true"></span>';
+      var b = document.createElement("button"); b.type = "button"; b.textContent = "Retry now";
+      b.onclick = function () { Ui.connection.retryNow(); };
+      el.appendChild(b);
+    }
+    el.className = "show" + ((c.kind === "offline" || c.kind === "severe") ? " offline" : "");
+    var ag = el.querySelector(".ago"); if (ag) ag.textContent = c.ago ? " " + c.ago : "";
+    if (c.kind === "server" || c.kind === "severe") health.shownServer = true;
+    if (!health.ticker) health.ticker = setInterval(paint, 30000);   // the time since the last good answer, and the move to the longer wording, follow the clock
+  }
+  function probe() {
+    health.probes++;
+    var f = rawFetch || (typeof window.fetch === "function" ? window.fetch : null);
+    if (!f) return;
+    f.call(window, "/api/ping", { cache: "no-store", headers: { "Accept": "application/json" } })
+      .then(function (r) { Ui.connection.report(r.status); }, function () { Ui.connection.report(0); });
+  }
+  function scheduleProbe() {
+    if (health.timer || health.fails === 0 || health.offline) return;      // offline: wait for the online event instead of knocking on a closed door
+    var base = PROBE_DELAYS[Math.min(health.probes, PROBE_DELAYS.length - 1)];
+    health.timer = setTimeout(function () {
+      health.timer = null;
+      if (document.hidden) return;                                          // not looking: no point (visibilitychange probes as soon as they are)
+      probe();
+    }, Math.round(base * (0.8 + 0.4 * Math.random())));
+  }
+  function markOk() {
+    health.lastOk = nowMs();
+    if (health.offline) { health.offline = false; paint(); }   // an answer proves the network works: never stay "offline" on a stale flag (a missed "online" event)
+    if (health.fails === 0) return;
+    var showed = health.shownServer;
+    health.fails = 0; health.since = 0; health.probes = 0; health.shownServer = false;
+    if (health.timer) { clearTimeout(health.timer); health.timer = null; }
+    paint();
+    if (showed) Ui.success("Connected again.", { duration: 2500 });
+    try { window.dispatchEvent(new CustomEvent("ipl:recovered")); } catch (e) {}   // the page refreshes what it missed
   }
   Ui.connection = {
-    set: function (kind, msg) {
-      var c = getConn(); c.className = "show" + (kind === "offline" ? " offline" : "");
-      c.innerHTML = "<span>" + esc(msg || (kind === "offline" ? "You're offline. Reconnect to see the latest scores." : "Having trouble reaching the server — retrying…")) + "</span>";
-      var b = document.createElement("button"); b.type = "button"; b.textContent = "Retry now";
-      b.onclick = function () { window.dispatchEvent(new CustomEvent("ipl:retry")); };
-      c.appendChild(b);
+    // Health evidence: the HTTP status of an /api/ answer, or 0 / null when the request never got one.
+    report: function (status) {
+      if (!status || status >= 500) {
+        if (health.offline) return;                                         // failures while the phone is offline say nothing about the server
+        health.fails++;
+        if (health.fails === 1) { health.since = nowMs(); health.probes = 0; }
+        paint(); scheduleProbe();
+      } else markOk();
     },
-    clear: function () { if (conn) conn.className = ""; }
+    // A named reason that is not about the network (today only "signin": a member who could not be checked stays signed in). "" clears it.
+    reason: function (name, msg) { if (name === "signin") { health.signin = msg || ""; paint(); } },
+    // Check right now (the Retry now button); the page refetches through "ipl:retry".
+    retryNow: function () {
+      if (health.timer) { clearTimeout(health.timer); health.timer = null; }
+      probe();
+      try { window.dispatchEvent(new CustomEvent("ipl:retry")); } catch (e) {}
+    },
+    // Wrap fetch once so every same-origin /api/ call is evidence. The caller still gets the very same promise (results and failures unchanged).
+    watch: function () {
+      if (rawFetch || typeof window.fetch !== "function") return;
+      rawFetch = window.fetch;
+      window.fetch = function (input) {
+        var url = typeof input === "string" ? input : ((input && input.url) || "");
+        var p = rawFetch.apply(this, arguments);
+        if (url.indexOf("/api/") === 0) p.then(function (r) { Ui.connection.report(r.status); }, function (e) { if (!e || e.name !== "AbortError") Ui.connection.report(0); });
+        return p;
+      };
+    },
+    // The boot screen has gone: trouble that was held back while it explained a slow start may show now.
+    refresh: function () { paint(); },
+    state: function () { var c = compose(); return { kind: c ? c.kind : null, msg: c ? c.msg : "", fails: health.fails, since: health.since, lastOk: health.lastOk, offline: health.offline, signin: health.signin }; }
   };
-  window.addEventListener("offline", function () { Ui.connection.set("offline"); });
-  window.addEventListener("online", function () { Ui.connection.clear(); Ui.success("Back online.", { duration: 2500 }); });
+  health.offline = (typeof navigator !== "undefined" && navigator.onLine === false);
+  window.addEventListener("offline", function () { health.offline = true; paint(); });
+  window.addEventListener("online", function () {
+    var was = health.offline;
+    health.offline = false; health.fails = 0; health.since = 0; health.probes = 0;   // what failed while offline was the phone, not the server
+    if (health.timer) { clearTimeout(health.timer); health.timer = null; }
+    paint();
+    if (was) Ui.success("Back online.", { duration: 2500 });
+    probe();                                                                           // and check straight away
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && health.fails > 0 && !health.offline && !health.timer) probe();   // back on screen while in trouble: do not wait for the next timer
+  });
+  Ui.connection.watch();
 
   /* ---------- boot: a slow first load is normal (the free server sleeps), so explain it instead of failing at 5 s ---------- */
   var STAGES = [
@@ -302,7 +423,7 @@
         if (age >= FAIL_AT) {
           clearInterval(iv);
           var sp = cur.querySelector(".spinner"); if (sp) sp.style.display = "none";
-          if (p) p.textContent = "We couldn't reach the server. Check your connection, then try again.";
+          if (p) p.textContent = "We couldn't reach the server. Check your connection, then try again. Your picks are kept on this phone.";
           var b = document.createElement("button"); b.type = "button"; b.className = "btn btn-teal ui-boot-fail"; b.textContent = "Try again";
           b.onclick = function () { location.reload(); };
           cur.appendChild(b); b.focus();

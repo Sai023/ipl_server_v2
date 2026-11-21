@@ -14,17 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper8">
-  <link rel="stylesheet" href="/static/style.css?v=paper8">
-  <link rel="stylesheet" href="/static/ui.css?v=paper8">
-  <link rel="stylesheet" href="/static/screens.css?v=paper8">
-  <link rel="stylesheet" href="/static/paper.css?v=paper8">
+  <link rel="stylesheet" href="/static/theme.css?v=paper9">
+  <link rel="stylesheet" href="/static/style.css?v=paper9">
+  <link rel="stylesheet" href="/static/ui.css?v=paper9">
+  <link rel="stylesheet" href="/static/screens.css?v=paper9">
+  <link rel="stylesheet" href="/static/paper.css?v=paper9">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
-<div id="error-banner" role="alert"></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper8"></script>
+<script src="/static/ui.js?v=paper9"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -48,7 +47,7 @@ var _adminMatches=null,_adminFilter="all";
 var _adminMembersList=null;
 var _switching=false,_switchFailed=false,_swGuard=null,_weekKnown=false,_bootSeq=0;   // competition switch state (see _switchComp); _weekKnown: _currentWeek belongs to the competition on screen; _bootSeq: bumped on every switch so late replies for the old competition are dropped
 var members={},matches=[];
-var $app=document.getElementById("app"),$loading=document.getElementById("app-loading"),$errorBanner=document.getElementById("error-banner");
+var $app=document.getElementById("app"),$loading=document.getElementById("app-loading");
 
 function _buildCatalogue(){
   var map={};
@@ -79,9 +78,9 @@ function saveUsername(n){try{localStorage.setItem(LS_KEY,n);}catch(e){}}
 function clearUsername(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function escAttr(s){return String(s).replace(/\\/g,"\\\\").replace(/'/g,"\\'");}
-function hideLoading(){if($loading&&!$loading.classList.contains("hidden")){$loading.classList.add("hidden");setTimeout(function(){if($loading)$loading.remove();},450);}}
-function showErrorBanner(msg){Ui.connection.set("reconnecting",msg);}
-function hideErrorBanner(){Ui.connection.clear();}
+function hideLoading(){if($loading&&!$loading.classList.contains("hidden")){$loading.classList.add("hidden");setTimeout(function(){if($loading)$loading.remove();},450);Ui.connection.refresh();}}   // trouble held back while the boot screen explained a slow start may show now
+// Trouble reaching the server is ONE slim banner owned by Ui.connection (Static/ui.js), fed by every /api/ call; the page only reports the one thing it alone knows.
+function _signinTrouble(on){Ui.connection.reason("signin",on?"Can\u2019t confirm your sign-in \u2014 retrying\u2026":"");}
 function _avClass(team){
   if(!team)return"";
   switch(team.toLowerCase()){
@@ -303,8 +302,8 @@ function _nwSave(){
       _nwSaving=false;_nwSlow=false;clearTimeout(_nwSlowT);
       if(e&&e.status===423){_nwTooLate();return;}
       if(e&&e.status===409&&Ui.errorReason(e)==="week_changed"){_nwWeekMoved(e,true);return;}
-      var offline=!(e&&e.status);   // no HTTP status = the request never got an answer
-      if(offline)Ui.toast("Could not save your team: "+Ui.errorMessage(e)+" Your picks are kept on this phone.",{type:"error",duration:7000});
+      var trouble=!(e&&e.status)||e.status>=500;   // no HTTP status = the request never got an answer; 5xx = the server had a problem: either way nothing was lost
+      if(trouble)Ui.toast("Could not save your team: "+Ui.errorMessage(e)+" Your picks are kept on this phone.",{type:"error",duration:7000});
       else Ui.fail(e,"Could not save your team");
       if(_state)render(_state);
     });
@@ -1636,7 +1635,7 @@ function render(state){
   _state=state;members=state.members||{};matches=state.matches||[];
   if(_authPending)return;   // keep the loader up until we know which screen to show
   hideLoading();
-  if(_unverified)showErrorBanner("Can't confirm your sign-in — retrying…");else hideErrorBanner();   // a member who could not be checked stays signed in; the banner says why and offers "Retry now"
+  _signinTrouble(_unverified);   // a member who could not be checked stays signed in; the banner says why and offers "Retry now"; a redraw never clears trouble reaching the server
   if(_switching){_renderSwitching();return;}   // a competition switch is in flight: the app bar and a loading card, never the previous competition's content
   var _preserveSearchFocus=false,_preserveSearchPos=0;
   if(_activeTab==="next"){
@@ -1946,7 +1945,7 @@ function _recheckSession(){
 function _sessionEnded(){
   if(!_username||_sessionLost||_authPending)return;   // not signed in, already showing it, or the launch check is deciding it
   _sessionLost=true;_unverified=false;clearTimeout(_verifyTimer);
-  hideErrorBanner();
+  _signinTrouble(false);
   _showSessionEndedSheet();
 }
 function _showSessionEndedSheet(){
@@ -2012,8 +2011,7 @@ function _bootstrap(){
     if(seq!==_bootSeq)return;
     console.error("[IPL] bootstrap:",err);
     if(_switching){_switchFailed=true;clearTimeout(_swGuard);if(_state)render(_state);}   // offer "Try again" instead of a card that never finishes
-    showErrorBanner("Could not reach server \u2014 retrying\u2026");
-    _bootRetry();
+    _bootRetry();   // (the failed request has already told Ui.connection, which shows the banner once the boot screen has gone)
   });
   Promise.all([stP,hP]).then(function(results){
     var state=results[0],history=results[1];
@@ -2042,10 +2040,9 @@ window.addEventListener("ipl:state-updated",function(e){
 });
 window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(e.detail);});
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
-window.addEventListener("ipl:error",function(e){var err=e.detail;if(err&&err.status&&err.status<500)return;showErrorBanner(err&&err.serverMessage?err.serverMessage:"Server error \u2014 retrying in 60 s\u2026");});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper8"></script>
-<script src="/static/mc_hub.js?v=paper8"></script>
+<script src="/static/ipl_glue.js?v=paper9"></script>
+<script src="/static/mc_hub.js?v=paper9"></script>
 </body>
 </html>

@@ -25,8 +25,11 @@ by the `/api/*` endpoints.
 The file is **825 lines, mostly inline JavaScript**:
 
 - `<head>` is 11 lines — meta, manifest, stylesheet.
-- The HTML body is essentially `<div id="app"></div>` plus a loading
-  overlay and an error banner.
+- The HTML body is essentially `<div id="app"></div>` plus the boot
+  screen (`#app-loading`). (The red `#error-banner` is gone since
+  2026-11-21; trouble reaching the server is a slim banner that
+  `Ui.connection` in `ui.js` creates on demand as the first child of
+  `<body>`.)
 - The remaining ~810 lines are the inline `<script>` that defines all
   the renderers (`_buildLoginCard`, `_buildThisWeekCard`,
   `_buildNextWeekCard`, `_buildPicker`, `_buildLeaderboardCard`,
@@ -353,3 +356,16 @@ renderers and their state (D3, D5, D28).
 - **Notices** (`_nwNotices`, managed competitions only): "No XI for Week N. You'll score 0 until Week N+1. You can still draft Week N+1." for a member with no XI for the week that is playing; "Week N is open - Your XI carried over" once (dismissed per week and phone, `ipl_seen_week:<comp>:<name>`), only when last week's draft was never confirmed.
 - **Local time** (`_whenLocal`, `_hhmm`): "Locks Mon 18 Jan, 16:00" under the label, in the phone's own time zone (the countdown keeps following the server clock).
 - Tests: `tests/js/team_edit_ux.test.js` (97 cases, the new ones at the end), `tests/test_pick_flow.py` for the server half.
+
+## Server trouble, Phase 1.7 (2026-11-21, app 2.20.0)
+
+**Before:** two unrelated mechanisms and a blocking one. A full-screen "Server Unavailable" overlay (in `ipl_glue.js`) hid the whole app, an XI being edited included, after any 5xx on the 60 s poll; a bare red `#error-banner` said something else, a redraw wiped it, and it never cleared when the data had not changed.
+
+**Now:** one controller, `Ui.connection` in `Static/ui.js`. Every same-origin `/api/` call reports its outcome (a one-time wrapper around `window.fetch`; the caller gets the very same promise): an answer below 500 means the server is up (a 401/409/422/429 is the server talking), a 5xx or no answer is trouble (an aborted request is neither).
+- **When it shows:** one failure is silent. A quiet probe of `/api/ping` follows after ~3 s and the SECOND consecutive failure raises the banner, so a single blip never flashes. The probe backs off 3, 5, 10, 20, 40, then every 60 s (each +-20 % jitter), never runs while the tab is hidden, and runs at once when the tab is shown again. The first good answer clears the banner, toasts "Connected again." (only if the banner had shown) and fires `ipl:recovered` (the glue refetches at once).
+- **What it says** (priority offline > server > sign-in): "You're offline. Showing the last data we have. (updated 3 min ago)" (before the first screen: "You're offline. We'll load your league as soon as you're back."); "The server is having a moment. Retrying..."; after 90 s "Still can't reach the server. Showing the last data we have. Your picks are kept on this phone." (red); "Can't confirm your sign-in - retrying..." (the page's own `_signinTrouble`, fed by `_unverified`). Server and sign-in messages wait while the boot screen is up (`hideLoading` calls `Ui.connection.refresh()`); offline shows through (the banner sits above the boot screen).
+- **Where:** an element created on demand as the FIRST child of `<body>`, in the normal flow (`position: relative`, never fixed): it pushes the page down and never covers the sticky app bar. Polite live region (`role=status`); the "updated ... ago" text is `aria-hidden`; a changed message is announced, an unchanged repaint is not, and a banner that returns after clearing is rebuilt so it is announced again. "Retry now" (44 px hit area) probes at once and fires `ipl:retry`, which the page answers by re-running `_bootstrap()`.
+- **Stale offline flag:** a good answer from the server proves the phone is online, so a missed `online` event can never leave "You're offline" stuck.
+- **Failed save:** `_nwSave` says "Could not save your team: <reason> Your picks are kept on this phone." for a network failure and for any 5xx (other failures keep `Ui.fail`'s wording).
+- **Gone:** `#error-banner` (element, CSS in `style.css`/`ui.css`), `showErrorBanner`/`hideErrorBanner`, the `ipl:error` listener, the overlay, Safe Boot, `ipl:rollover-triggered`. `tests/js/connection.test.js` fails if any comes back.
+- Tests: `tests/js/connection.test.js` (29 cases, all 39 mutants of the new code killed), `tests/js/session_flow.test.js` (the sign-in message goes through `_signinTrouble`). Checked in a real browser against a rig whose `/api/` can be switched to 503.

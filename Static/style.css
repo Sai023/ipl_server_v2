@@ -7,8 +7,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .spinner{width:36px;height:36px;border:3px solid color-mix(in srgb, var(--gold-line) 24%, transparent);border-top-color:var(--gold-line);border-radius:50%;animation:spin 1s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 #app{min-height:100vh;padding-bottom:60px;}
-#error-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:200;background:color-mix(in srgb, var(--danger-wash) 92%, transparent);color:var(--on-dark);font-size:13px;text-align:center;padding:8px 16px;}
-#error-banner.visible{display:block;}
 .wrap{max-width:900px;margin:0 auto;padding:20px 14px;}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;}
 .card-teal{border-color:color-mix(in srgb, var(--teal-line) 48%, transparent);} .card-locked{border-color:color-mix(in srgb, var(--gold-line) 48%, transparent);background:color-mix(in srgb, var(--gold-wash) 5.8%, transparent);}

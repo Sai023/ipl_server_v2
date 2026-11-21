@@ -19,14 +19,9 @@
   "use strict";
 
   var POLL_INTERVAL_MS  = 60000;
-  var MAINTENANCE_DELAY = 1500;
-  var SAFE_BOOT_MS      = 5000;
 
   var _lastStateEtag  = null;
-  var _overlayTimer   = null;
-  var _overlayVisible = false;
   var _pollTimer      = null;
-  var _safeBootTimer  = null;
 
   var IplConfig = {
     budget:       100.0,
@@ -35,75 +30,8 @@
     current_week: 1,
   };
 
-  // ── MAINTENANCE OVERLAY ──────────────────────────────────────────────────
-
-  function _injectOverlayStyles() {
-    if (document.getElementById("ipl-overlay-style")) return;
-    var s = document.createElement("style");
-    s.id = "ipl-overlay-style";
-    s.textContent = [
-      "#ipl-maintenance-overlay{",
-        "position:fixed;inset:0;z-index:9999;",
-        "background:color-mix(in srgb, var(--paper) 92%, transparent);",
-        "display:flex;align-items:center;justify-content:center;",
-        "animation:ipl-fade-in .3s ease;",
-      "}",
-      "@keyframes ipl-fade-in{from{opacity:0}to{opacity:1}}",
-      ".ipl-mc{",
-        "background:var(--sheet);",
-        "border:1px solid color-mix(in srgb, var(--gold-line) 40%, transparent);",
-        "border-radius:16px;padding:40px 32px;max-width:380px;",
-        "text-align:center;color:var(--text);font-family:sans-serif;",
-      "}",
-      ".ipl-mc-icon{font-size:52px;margin-bottom:12px;}",
-      ".ipl-mc h2{color:var(--gold-ink);font-size:22px;margin:0 0 12px;}",
-      ".ipl-mc p{color:var(--muted);font-size:14px;line-height:1.7;margin:0 0 16px;}",
-      ".ipl-mc .sub{font-size:12px!important;color:var(--dim)!important;}",
-      ".ipl-spin{",
-        "width:32px;height:32px;margin:0 auto 20px;",
-        "border:3px solid color-mix(in srgb, var(--gold-line) 24%, transparent);",
-        "border-top-color:var(--gold-line);border-radius:50%;",
-        "animation:ipl-spin 1s linear infinite;",
-      "}",
-      "@keyframes ipl-spin{to{transform:rotate(360deg)}}",
-    ].join("");
-    document.head.appendChild(s);
-  }
-
-  function _showOverlay() {
-    if (_overlayVisible || document.getElementById("ipl-maintenance-overlay")) return;
-    _injectOverlayStyles();
-    var el = document.createElement("div");
-    el.id = "ipl-maintenance-overlay";
-    el.innerHTML = (
-      '<div class="ipl-mc">'
-      + '<div class="ipl-mc-icon">&#x1F3CF;</div>'
-      + '<h2>Server Unavailable</h2>'
-      + '<p>We\'re having trouble reaching the backend.<br>Retrying every 60 seconds&hellip;</p>'
-      + '<div class="ipl-spin"></div>'
-      + '<p class="sub">Ask the admin to check the server if this persists.</p>'
-      + '</div>'
-    );
-    document.body.appendChild(el);
-    _overlayVisible = true;
-  }
-
-  function _hideOverlay() {
-    var el = document.getElementById("ipl-maintenance-overlay");
-    if (el) el.remove();
-    _overlayVisible = false;
-    if (_overlayTimer) { clearTimeout(_overlayTimer); _overlayTimer = null; }
-  }
-
-  function _scheduleOverlay() {
-    if (_overlayVisible || _overlayTimer) return;
-    _overlayTimer = setTimeout(_showOverlay, MAINTENANCE_DELAY);
-  }
-
-  function _cancelOverlay() {
-    if (_overlayTimer) { clearTimeout(_overlayTimer); _overlayTimer = null; }
-    if (_overlayVisible) _hideOverlay();
-  }
+  // (There used to be a full-screen "Server Unavailable" overlay here. It hid the whole app, draft and all, for any 5xx. Trouble reaching the server is now
+  // ONE slim banner owned by Ui.connection in ui.js, fed by every /api/ call; nothing here blocks the screen any more.)
 
   // ── LEADERBOARD NORMALISATION ────────────────────────────────────────────
 
@@ -363,7 +291,6 @@
     return _fetchJson("/api/poll")
       .then(function (poll) {
         if (poll && poll.server_now_utc) IplClock.sync(poll.server_now_utc, t0, Date.now(), poll.server_recv_utc);
-        _cancelOverlay();
         if (!same()) return;
         var serverEtag = poll && poll.state_etag;
         if (!serverEtag || serverEtag === _lastStateEtag) return;
@@ -386,9 +313,9 @@
             if (lb)    { window.dispatchEvent(new CustomEvent("ipl:leaderboard-updated", { detail: lb })); }
           });
       })
-      .catch(function (err) {
-        window.dispatchEvent(new CustomEvent("ipl:error", { detail: err }));
-        if ((err.status && err.status >= 500) || !navigator.onLine) _scheduleOverlay();
+      .catch(function () {
+        // Nothing to do here: the failed request already told Ui.connection (it watches every /api/ call), which shows the banner and probes the server.
+        // The next poll comes in a minute; a recovery or "Retry now" polls at once (below).
       });
   }
 
@@ -407,27 +334,9 @@
       if (document.hidden) stopPolling(); else { startPolling(); _pollCycle(); }
     });
     window.addEventListener("ipl:saved",             function () { _lastStateEtag = null; });
-    window.addEventListener("ipl:rollover-triggered", function () { _lastStateEtag = null; _pollCycle(); });
-
-    _safeBootTimer = setTimeout(function () {
-      if (window.Ui && window.Ui.boot) return;   // Ui.boot explains a slow start and only fails after ~75 s
-      var loading = document.getElementById("app-loading");
-      if (loading && !loading.classList.contains("hidden")) {
-        loading.classList.add("hidden");
-        setTimeout(function () { if (loading) loading.remove(); }, 450);
-        var banner = document.getElementById("error-banner");
-        if (banner) {
-          banner.textContent = "\u26a0\ufe0f  Could not connect to server \u2014 please check your connection or refresh the page.";
-          banner.classList.add("visible");
-        }
-        console.warn("[IPL] Safe boot timeout: /api/state did not respond within " + (SAFE_BOOT_MS / 1000) + "s.");
-      }
-    }, SAFE_BOOT_MS);
-
-    window.addEventListener("ipl:state-updated", function _clearSafeBoot() {
-      if (_safeBootTimer) { clearTimeout(_safeBootTimer); _safeBootTimer = null; }
-      window.removeEventListener("ipl:state-updated", _clearSafeBoot);
-    });
+    // The server came back (Ui.connection saw a good answer after trouble): fetch what was missed without waiting a minute.
+    // ("Retry now" is handled by the page, which re-runs its whole boot on "ipl:retry".)
+    window.addEventListener("ipl:recovered", function () { _lastStateEtag = null; _pollCycle(); });
 
     window.dispatchEvent(new CustomEvent("ipl:ready"));
   }

@@ -73,11 +73,12 @@
 #app-loading .ui-boot-msg { min-height: 40px; max-width: 280px; margin: 0 auto; transition: opacity .2s; }
 #app-loading .ui-boot-fail { margin-top: var(--sp-4); }
 
-/* ---- connection banner (slim, non-blocking) ---- */
-#ui-conn { position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-banner); display: none; align-items: center; justify-content: center; gap: var(--sp-2);
-  padding: 8px var(--sp-4); font-size: 12.5px; font-weight: 600; text-align: center; color: var(--on-fill); background: var(--gold-fill); border-bottom: 1.5px solid var(--gold-line); box-shadow: var(--shadow-1); }
+/* ---- connection banner (slim, non-blocking): in the flow ABOVE the app, so it pushes the page down and never covers the app bar ---- */
+#ui-conn { position: relative; z-index: var(--z-banner);   /* still in the flow; the z-index only lifts it above the boot screen (z 100), below dialogs and toasts */
+  display: none; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px var(--sp-2);
+  padding: 8px var(--sp-4); font-size: 12.5px; font-weight: 700; line-height: 1.35; text-align: center; color: var(--on-fill); background: var(--gold-fill); border-bottom: 1.5px solid var(--gold-line); }
 #ui-conn.show { display: flex; }
 #ui-conn.offline { background: var(--danger-fill); border-bottom-color: var(--danger-line); color: var(--on-fill); }
-#ui-conn button { background: var(--well); color: inherit; border: 0; border-radius: 6px; padding: 3px 10px; font-weight: 700; font-size: 12px; cursor: pointer; }
-/* the old bare red banner is superseded */
-#error-banner { display: none !important; }
+#ui-conn .ago { font-weight: 600; opacity: .85; }
+#ui-conn button { position: relative; min-height: 32px; background: var(--well); color: inherit; border: 0; border-radius: 6px; padding: 3px 12px; font-weight: 800; font-size: 12px; cursor: pointer; }
+#ui-conn button::after { content: ""; position: absolute; inset: -6px; }   /* a 44px hit area on a 32px button */
