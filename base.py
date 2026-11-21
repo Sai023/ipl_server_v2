@@ -270,7 +270,7 @@ def _handle_unexpected(e):
 def _security_headers(response):
     response.headers["X-Content-Type-Options"]="nosniff"
     response.headers["X-Frame-Options"]="DENY"
-    response.headers["Referrer-Policy"]="same-origin"
+    response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"   # was same-origin: Google documents this value for a page that loads its sign-in library (a cross-origin load); the addresses carry no secrets, and a cross-origin request gets the origin only
     response.headers["Strict-Transport-Security"]="max-age=31536000"   # the app is https-only; no includeSubDomains (the host is Render's, not ours)
     p = request.path
     if p.startswith("/api/"):

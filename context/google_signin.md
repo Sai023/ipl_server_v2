@@ -57,6 +57,16 @@ its nonce before the server forgets it), `openSwitch()`, `offerSwitch()` (once p
 `ipl:google-config`; the page (templates/index.html) decides what they mean. The DOM part is a replaceable `view`, which is how the tests drive the logic.
 `Static/ipl_glue.js` gained `authConfig`, `authNonce`, `authGoogle`, `authLink`, `authLogout`, `adminUnlinkGoogle`, and its 401 rule changed (see ipl_glue.md).
 
+## Headers (checked against Google's own page, 2026-11-21)
+
+Google's page "Get your Google API client ID" says: the library `gsi/client` is a cross-origin load and **`Referrer-Policy: strict-origin-when-cross-origin` is recommended**
+for the page that loads it; a **`Cross-Origin-Opener-Policy`** that is plain `same-origin` breaks the sign-in popup (it must include `same-origin-allow-popups`; no COOP at
+all is fine); and a **Content-Security-Policy**, if there is one, must allow `https://accounts.google.com/gsi/` (`connect-src`, `frame-src`, `default-src`),
+`https://accounts.google.com/gsi/client` (`script-src`) and `https://accounts.google.com/gsi/style` (`style-src`). `X-Frame-Options` is not mentioned (it only limits who may
+frame OUR page). The server therefore sends `strict-origin-when-cross-origin` (it sent `same-origin` until 2.22.0, which sends Google no referrer at all; the addresses carry
+no secrets and a cross-origin request gets the origin only), and **no COOP and no CSP**. `tests/test_hardening.py` (`test_no_header_can_stop_googles_sign_in` and the
+runtime twin) fails if anybody changes the policy, or adds a COOP without `same-origin-allow-popups`, or a CSP without Google's addresses.
+
 ## Business rules
 
 1. Nothing is reachable until `GOOGLE_CLIENT_ID` is set; unset means the app behaves exactly as before.
@@ -70,6 +80,17 @@ its nonce before the server forgets it), `openSwitch()`, `offerSwitch()` (once p
 `tests/test_google_identity.py` (23: real signatures, a local certs server, rotation, outage), `tests/test_google_signin.py` + `tests/helpers/google_scenario.py` (24 on the
 real routes, including two members racing for one account), `tests/js/google_signin.test.js` (36: the glue, the module, the page functions), the error-reason contract
 (`tests/test_error_reasons.py`: every new `reason` needs a sentence in `Static/ui.js` or an entry in the pass-through list).
+
+## Known limits (harmless for three members; settle them BEFORE the link is opened to everybody)
+
+1. **One process.** The nonce store lives in the memory of the one server process (Render runs a single `python server.py` with threads). With several worker processes a
+   nonce issued by one would be unknown to another and sign-ins would fail at random: the store would first have to move into the database.
+2. **"Per address" is really "per proxy".** The server does not read `X-Forwarded-For` (no `ProxyFix`), so behind Render's load balancer `request.remote_addr` is the proxy, and
+   the two limiters (writes 30/min, Google 60/min) are each ONE bucket shared by everybody. Three members never notice; a stranger hammering `/api/auth/nonce` could use up the
+   Google bucket and make everyone's Google sign-in answer 429 for a minute (the passcode door is not affected). The join release adds a trusted-proxy setting
+   (`ProxyFix`, one proxy, rightmost address) and tests for it.
+3. **First sign-in after a start fetches Google's keys** (one extra request, cached afterwards). If Google is unreachable at that moment the answer is 503 `google_unreachable`
+   and the nonce is not spent.
 
 ## Open questions / next releases
 

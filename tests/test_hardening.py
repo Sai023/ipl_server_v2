@@ -62,6 +62,21 @@ class NothingUnexpectedLeaksToAClient(unittest.TestCase):
     def test_hsts_is_sent(self):
         self.assertIn('response.headers["Strict-Transport-Security"]="max-age=31536000"', read("base.py"))
 
+    def test_no_header_can_stop_googles_sign_in(self):
+        """Google's documentation (developers.google.com/identity/gsi/web/guides/get-google-api-clientid): the page that loads its library should send
+        Referrer-Policy strict-origin-when-cross-origin (same-origin and no-referrer send Google no referrer at all); a Cross-Origin-Opener-Policy of plain
+        same-origin breaks the sign-in popup (it must include same-origin-allow-popups); and a Content-Security-Policy must allow accounts.google.com/gsi/.
+        The server sends no COOP and no CSP today: whoever adds one has to read this."""
+        src = read("base.py")
+        self.assertTrue('response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"' in src,
+                        "base.py must send Referrer-Policy strict-origin-when-cross-origin (the value Google documents for its sign-in library)")
+        self.assertFalse('"Referrer-Policy"]="same-origin"' in src, "same-origin sends Google no referrer at all")
+        if "Cross-Origin-Opener-Policy" in src:
+            self.assertTrue("same-origin-allow-popups" in src, "a COOP of plain same-origin blocks the Google sign-in popup")
+        if "Content-Security-Policy" in src:
+            for need in ("https://accounts.google.com/gsi/client", "https://accounts.google.com/gsi/"):
+                self.assertTrue(need in src, "a CSP must allow Google's sign-in library and frames (%s)" % need)
+
 
 def _route_patterns():
     pats = []
@@ -197,6 +212,13 @@ class TheRealAppOnScratchData(unittest.TestCase):
     def test_hsts_is_on_every_kind_of_answer(self):
         for key in ("a_root", "a_static_present", "a_unknown_get", "a_static_missing", "c_health", "b_runtime"):
             self.assertEqual(self.r(key)["headers"].get("Strict-Transport-Security"), "max-age=31536000", key)
+
+    def test_the_referrer_policy_google_documents_is_on_every_kind_of_answer_and_no_coop_or_csp_is_sent(self):
+        for key in ("a_root", "a_static_present", "a_unknown_get", "a_static_missing", "c_health", "b_runtime"):
+            h = self.r(key)["headers"]
+            self.assertEqual(h.get("Referrer-Policy"), "strict-origin-when-cross-origin", key)
+            self.assertIsNone(h.get("Cross-Origin-Opener-Policy"), key)
+            self.assertIsNone(h.get("Content-Security-Policy"), key)
 
     # ── B. unexpected failures ──
     FAILURES = {"b_runtime": ("boom", "RuntimeError"), "b_operational": ("connection to server", "OperationalError"),

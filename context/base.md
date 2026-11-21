@@ -97,7 +97,10 @@ and `server.py`. It must never import from those upper layers.
 7. **Write throttle = 30 requests / 60 seconds per IP.** `_RateLimiter` is
    applied to mutating endpoints via `_check_rate`.
 8. **Security headers on every response.** `X-Content-Type-Options: nosniff`,
-   `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`,
+   `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` (was
+   `same-origin` until 2.22.0: Google's own page says to use this value for a page that loads its
+   sign-in library, and `same-origin` sends no referrer to Google at all), no COOP and no CSP
+   (see [google_signin.md](google_signin.md), "Headers"),
    `Strict-Transport-Security: max-age=31536000` (2026-11-21; no includeSubDomains)
    and `Cache-Control: no-store` on `/api/*` paths.
 9. **Two doors for failures (2026-11-21).** An HTTP error (`_handle_http`) is JSON on
