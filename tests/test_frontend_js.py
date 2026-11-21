@@ -52,6 +52,12 @@ class BrowserSideRegressions(unittest.TestCase):
         offline outranks server trouble, 'Retry now' checks at once, and the first good answer clears it and refreshes the page."""
         self.run_script("connection.test.js")
 
+    def test_google_sign_in_in_the_page_never_trusts_the_page_and_never_ends_a_session_by_mistake(self):
+        """Phase 3 (2026-11-21): the Google button is only drawn once the server says Google sign-in is set up; a built-in browser is never sent to Google; the nonce goes
+        to Google and back with the credential and is never reused; a good Google account nobody has linked is a message, not a sign-in; the switch is offered once and never
+        near a lock; and a Google check that fails at /api/auth/link is NOT taken for 'your session ended' (every 401 used to be)."""
+        self.run_script("google_signin.test.js")
+
 
 if __name__ == "__main__":
     unittest.main()

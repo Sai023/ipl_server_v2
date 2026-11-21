@@ -32,7 +32,7 @@ import unicodedata
 
 from flask import Flask, request, jsonify, render_template, Response
 from werkzeug.exceptions import HTTPException
-from db_manager import DatabaseManager
+from db_manager import DatabaseManager, NO_PIN  # noqa: F401  (NO_PIN is re-exported for routes.py)
 from config import DATABASE_URL, BASE_DIR, DATA_DIR  # paths + DB DSN — single source of truth
 from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated here
 
@@ -183,6 +183,8 @@ class _RateLimiter:
             self._calls[ip].append(now); return True
 
 _write_limiter=_RateLimiter(30,60)
+# Google sign-in has its own budget (a nonce, then the token: two calls per sign-in), so a rush of sign-ins neither starves the saves nor is starved by them.
+_auth_limiter=_RateLimiter(60,60)
 
 def _check_rate(lim):
     ip=request.remote_addr or "unknown"

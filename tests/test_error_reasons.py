@@ -18,11 +18,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Reasons the page shows its OWN sentence for (Static/ui.js REASON_COPY) ...
 WITH_COPY = {"auth_required", "session_ended", "admin_only", "not_your_team", "rate_limited", "locked", "name_taken", "bad_credentials", "server_error",
-             "not_found", "too_large", "bad_request"}          # the last three (hardening release, 2026-11-21): HTTP errors on /api/ now say what they are, as JSON
+             "not_found", "too_large", "bad_request",           # (hardening release, 2026-11-21): HTTP errors on /api/ now say what they are, as JSON
+             "google_not_configured", "google_unreachable", "token_invalid", "token_expired", "nonce_invalid", "email_unverified",
+             "google_account_in_use", "already_linked", "pin_retired"}      # (Google sign-in, Phase 3, 2026-11-21): the page words each of these itself
 # ... and reasons whose server text is already specific and readable ("Choose a captain and a vice-captain before saving"): shown as sent.
 PASS_THROUGH = {"name_invalid", "passcode_invalid", "credentials_required", "target_required", "member_not_found", "invalid_team",
                 "week_changed", "nothing_to_keep",      # the last two (Phase 1.6): the page answers week_changed with its own dialog, and nothing_to_keep says it in the server's words
-                "method_not_allowed"}                    # (hardening release) only a wrong call from code can cause it: no member ever needs a sentence for it
+                "method_not_allowed",                    # (hardening release) only a wrong call from code can cause it: no member ever needs a sentence for it
+                "member_signs_in_with_google", "not_linked"}   # (Google sign-in) admin-facing: the server's own sentence is shown as sent
 
 
 def read(*p):

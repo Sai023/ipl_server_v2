@@ -33,6 +33,15 @@
     not_found:       "That could not be found.",
     too_large:       "That is too large to send.",
     bad_request:     "That request was not understood. Please try again.",
+    google_not_configured: "Google sign-in isn't available right now.",
+    google_unreachable:    "Couldn't reach Google. Try again in a moment.",
+    token_invalid:         "Google sign-in couldn't be verified. Please try again.",
+    token_expired:         "That took too long. Please try again.",
+    nonce_invalid:         "That sign-in expired. Please try again.",
+    email_unverified:      "Google says that email address isn't verified.",
+    google_account_in_use: "That Google account already belongs to another member.",
+    already_linked:        "You already have a Google account linked. Ask the admin to unlink it first.",
+    pin_retired:           "This account signs in with Google.",
     server_error:    "The server had a problem. Please try again in a moment."
   };
   Ui.errorFor = function (reason, fallback) { return Object.prototype.hasOwnProperty.call(REASON_COPY, reason) ? REASON_COPY[reason] : (fallback || ""); };

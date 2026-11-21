@@ -97,6 +97,7 @@ function page(o = {}) {
   c._establishSession = (n, a, m) => { c.calls.push(['establish', n, !!a, !!m]); c._username = n; c._isAdmin = !!a; };
   c._showPasscodePromptModal = (n, note, reauth) => { c.calls.push(['prompt', n, note, !!reauth]); };
   c._showResetPasscodeModal = (f) => { c.calls.push(['resetModal', f]); };
+  c._googleAccount = (a) => { c.calls.push(['googleAccount', a && a.linked ? 'linked' : 'passcode']); };   // (Phase 3: tells the Google module what kind of sign-in this was)
   c.Ui = { sheetBlocking: (spec) => { const s = { spec, close() { c.closed++; } }; c.sheets.push(s); return s; }, success: (m) => { c.toasts.push(m); }, connection: { reason: (name, msg) => { c.reasons.push([name, msg]); } } };
   c.IplApi = { whoami: o.whoami || (() => new Promise(() => {})) };
   vm.createContext(c);

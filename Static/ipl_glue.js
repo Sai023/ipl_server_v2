@@ -85,18 +85,23 @@
         if (res.status === 304) return null;
         if (!res.ok) {
           var err = new Error("HTTP " + res.status); err.status = res.status;
-          // Any 401 from our API means the session is missing/expired/revoked.
-          // Clear the token so the next bootstrap drops to the login card.
-          if (res.status === 401 && url.indexOf("/api/") === 0) {
-            IplAuth.clearToken();
-            // The server refused a token this member was signed in with: their session is over. Tell the page (it says so and lets them sign in
-            // again where they were). A wrong passcode at /api/login is a 401 too, but it is not this.
-            if (sentToken && !/^\/api\/(login|register)(\?|$)/.test(url)) {
-              try { window.dispatchEvent(new CustomEvent("ipl:session-ended", { detail: { url: url } })); } catch (e) {}
-            }
-          }
           return res.json().catch(function () { return {}; }).then(function (j) {
-            err.serverMessage = j.error || j.detail || ""; err.serverData = j; throw err;
+            // A 401 from our API usually means the session is missing/expired/revoked: clear the token so the next bootstrap drops to the login card.
+            // But a 401 can also be the answer to a SIGN-IN attempt (a wrong passcode at /api/login, a Google token that did not check out at
+            // /api/auth/google or /api/auth/link): that is not "your session ended". So the reason is read first: only a missing or refused session
+            // (no reason, "session_ended", "auth_required") ends the session, and never the answer to /api/login, /api/register or /api/auth/google.
+            if (res.status === 401 && url.indexOf("/api/") === 0) {
+              var why = j && j.reason;
+              var signInAttempt = /^\/api\/(login|register|auth\/google)(\?|$)/.test(url);
+              var sessionProblem = !why || why === "session_ended" || why === "auth_required";
+              if (signInAttempt || sessionProblem) IplAuth.clearToken();    // as before, any 401 clears the token, except a Google refusal at /api/auth/link (the member IS signed in)
+              // The server refused a token this member was signed in with: their session is over. Tell the page (it says so and lets them sign in
+              // again where they were).
+              if (sessionProblem && !signInAttempt && sentToken) {
+                try { window.dispatchEvent(new CustomEvent("ipl:session-ended", { detail: { url: url } })); } catch (e) {}
+              }
+            }
+            err.serverMessage = (j && (j.error || j.detail)) || ""; err.serverData = j || {}; throw err;
           });
         }
         return res.json();
@@ -263,6 +268,32 @@
       }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
     },
     whoami: function () { return _fetchJson("/api/whoami"); },
+
+    // ── Phase 3: Google sign-in (the page half is Static/auth_google.js) ──────────────────────────────────────────────────────────────────
+    authConfig: function () { return _fetchJson("/api/auth/config"); },
+    authNonce:  function () { return _fetchJson("/api/auth/nonce"); },
+    // credential: the ID token Google gave the page; nonce: the one this attempt was issued. A linked member gets a session, like /api/login.
+    authGoogle: function (credential, nonce) {
+      return _fetchJson("/api/auth/google", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: credential, nonce: nonce }),
+      }).then(function (d) { if (d && d.token) IplAuth.setToken(d.token); return d; });
+    },
+    // A signed-in member links their Google account (their passcode is retired by the server in the same step).
+    authLink: function (credential, nonce) {
+      return _fetchJson("/api/auth/link", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: credential, nonce: nonce }),
+      });
+    },
+    // Ends THIS device's session on the server (the page clears the token itself); never blocks signing out.
+    authLogout: function () { return _fetchJson("/api/auth/logout", { method: "POST" }); },
+    adminUnlinkGoogle: function (targetUsername) {
+      return _fetchJson("/api/admin/auth/unlink", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_username: targetUsername }),
+      });
+    },
     changePasscode: function (newPasscode) {
       return _fetchJson("/api/passcode/change", {
         method: "POST", headers: { "Content-Type": "application/json" },

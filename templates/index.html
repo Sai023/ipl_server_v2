@@ -14,16 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper10">
-  <link rel="stylesheet" href="/static/style.css?v=paper10">
-  <link rel="stylesheet" href="/static/ui.css?v=paper10">
-  <link rel="stylesheet" href="/static/screens.css?v=paper10">
-  <link rel="stylesheet" href="/static/paper.css?v=paper10">
+  <link rel="stylesheet" href="/static/theme.css?v=paper11">
+  <link rel="stylesheet" href="/static/style.css?v=paper11">
+  <link rel="stylesheet" href="/static/ui.css?v=paper11">
+  <link rel="stylesheet" href="/static/screens.css?v=paper11">
+  <link rel="stylesheet" href="/static/paper.css?v=paper11">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper10"></script>
+<script src="/static/ui.js?v=paper11"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -105,7 +105,8 @@ function _initials(name){
 // ─── SESSION ─────────────────────────────────────────────────────────────────
 // _establishSession is called after a successful /api/login or /api/register
 // (or whoami on bootstrap). It sets globals and triggers initial loads.
-function _establishSession(name, isAdmin, mustChange){
+// acct (optional): whoami's answer or a Google sign-in's reply (says whether a Google account is linked). A passcode sign-in has none: that member has not switched.
+function _establishSession(name, isAdmin, mustChange, acct){
   _username=name;_isAdmin=!!isAdmin;_mustChange=!!mustChange;
   _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
   _rememberAdmin(_isAdmin);
@@ -115,7 +116,27 @@ function _establishSession(name, isAdmin, mustChange){
   saveUsername(name);_loadHistory();
   if(_state)render(_state);
   if(_mustChange) _showResetPasscodeModal(true);
+  _googleAccount(acct);
   return true;
+}
+// What Google sign-in needs to know about the member who just signed in (Phase 3). A member who has not switched is offered the switch ONCE per launch: never while
+// they must set a new passcode, and never when a lock is within 24 hours (nothing may get between a member and their picks then).
+function _googleAccount(acct){
+  if(!window.IplGoogle)return;
+  IplGoogle.setAccount(acct?{linked:!!acct.linked,emailMasked:acct.email_masked||null,pinEnabled:acct.linked?false:acct.pin_enabled!==false}:{linked:false,emailMasked:null,pinEnabled:true});
+  if(!(acct&&acct.linked)&&!_mustChange)IplGoogle.offerSwitchWhenReady({nearLock:_lockWithin(24*3600*1000)});
+}
+function _lockWithin(ms){
+  var dl=_state&&_state.deadline,t=dl&&dl.next_lock_utc?new Date(dl.next_lock_utc).getTime():NaN,now=_nowMs();
+  return isFinite(t)&&t>now-ms&&t-now<ms;   // a lock coming within `ms`, or one that has only just passed (its handover is being set up)
+}
+// A member who signs in with Google signs in again with Google: the sheet with the button (or the passcode prompt where Google is not available).
+function _googleSignInAgain(name,onCancel,passcodeNote,reauth){
+  if(!window.IplGoogle){_showPasscodePromptModal(name,passcodeNote,reauth);return;}
+  IplGoogle.config().then(function(c){
+    if(c.enabled)IplGoogle.signInAgain(name,{onCancel:onCancel});
+    else _showPasscodePromptModal(name,passcodeNote,reauth);
+  },function(){_showPasscodePromptModal(name,passcodeNote,reauth);});
 }
 // attemptLogin(name) is what every member-chip / pill click calls. It opens
 // the passcode prompt. Form submits route to IplApi.login → _establishSession.
@@ -125,7 +146,9 @@ function attemptLogin(name){
   return true;
 }
 function logout(){
+  if(window.IplApi&&IplApi.authLogout)IplApi.authLogout().catch(function(){});   // end this device's session on the server too (it reads the token now, before it is cleared); never blocks signing out
   if(window.IplApi&&IplApi.logoutClearToken)IplApi.logoutClearToken();
+  if(window.IplGoogle){IplGoogle.setAccount(null);IplGoogle.remember(false);}
   _username=null;_isAdmin=false;_mustChange=false;
   _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
   try{localStorage.removeItem("ipl_is_admin");}catch(e){}
@@ -828,7 +851,12 @@ function _buildPitchView(teamArr,capId,vcId){
 
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
-  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>Pick your name to sign in.</p>';
+  var g=window.IplGoogle?IplGoogle.loginBlockHtml():"";   // the Google button block (empty until the server says Google sign-in is set up)
+  var pin=!g||IplGoogle.pinEnabled();                       // the passcode screens go only when Google is on AND nobody has a passcode any more
+  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>'+(g?(pin?'Continue with Google, or pick your name to use your passcode.':'Sign in with Google to continue.'):'Pick your name to sign in.')+'</p>'+g;
+  if(!pin){
+    return h+'</div>';
+  }
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
     memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
@@ -965,6 +993,17 @@ function _adminResetPasscode(targetUsername){
     }).catch(function(e){Ui.fail(e,"Could not reset passcode");});
   });
 }
+// Recovery for a member who cannot sign in with Google (lost the account, a broken device ...): the link is removed, they get the temporary passcode 1234 and their devices are signed out.
+function _adminUnlinkGoogle(target){
+  Ui.confirm({title:"Unlink Google?",message:target+" will sign in with the temporary passcode 1234 and must choose a new one. Their devices are signed out. Use this only if they cannot sign in with Google.",confirmText:"Unlink Google",danger:true}).then(function(ok){
+    if(!ok)return;
+    window.IplApi.adminUnlinkGoogle(target).then(function(d){
+      if(!d||!d.ok)throw new Error("unlink failed");
+      Ui.success("Google unlinked for "+target+". Temporary passcode: 1234.");
+      _adminMembersList=null;_loadAdminMembers();
+    }).catch(function(e){Ui.fail(e,"Could not unlink Google");});
+  });
+}
 function _buildAdminPasscodesCard(){
   var h='<div class="card" style="margin-bottom:14px">';
   h+='<div class="user-header-bar" style="margin-bottom:10px"><h3 class="section-title" style="margin:0">\uD83D\uDD10 Member Passcodes</h3>';
@@ -983,9 +1022,11 @@ function _buildAdminPasscodesCard(){
       ? '&nbsp;<span style="font-size:9px;background:var(--gold-fill);color:var(--on-fill);padding:1px 6px;border-radius:6px;font-weight:700">ADMIN</span>'
       : '';
     var isSelf=(m.username===_username);
+    if(m.linked)statusPill='<span style="font-size:10px;background:color-mix(in srgb, var(--success-wash) 27.6%, transparent);color:var(--success-ink);padding:2px 7px;border-radius:6px;font-weight:600">Google · '+esc(m.email_masked||'')+'</span>';   // switched to Google: no passcode
     h+='<div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;background:var(--tint-1);border:1px solid var(--hair);margin-bottom:7px;">';
     h+='<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--text)">'+esc(m.username)+adminTag+'</div><div style="font-size:11px;color:var(--muted);margin-top:2px">'+statusPill+'</div></div>';
-    h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px"'+(isSelf?' disabled title="Use the header Reset Passcode button for your own account."':'')+' onclick="_adminResetPasscode(\''+escAttr(m.username)+'\')">Reset to 1234</button>';
+    if(m.linked)h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px" onclick="_adminUnlinkGoogle(\''+escAttr(m.username)+'\')">Unlink Google</button>';
+    else h+='<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:6px 10px"'+(isSelf?' disabled title="Use the header Reset Passcode button for your own account."':'')+' onclick="_adminResetPasscode(\''+escAttr(m.username)+'\')">Reset to 1234</button>';
     h+='</div>';
   });
   return h+'</div>';
@@ -1374,6 +1415,9 @@ function _submitPasscode(name){
     if(_sessionLost)_reauthDone(d);   // signing in again after the session ended: carry on where they were
     else _establishSession(d.name,d.is_admin,d.must_change);
   }).catch(function(e){
+    if(Ui.errorReason(e)==="pin_retired"&&window.IplGoogle){   // this member switched to Google (maybe on another phone): carry on with Google, here
+      IplGoogle.remember(true);_closePasscodePrompt(true);_googleSignInAgain(name,null,"");return;
+    }
     var msg=(e&&e.serverMessage)?e.serverMessage:'Wrong passcode';
     if(errEl)errEl.textContent='⚠ '+msg;
     Ui.pinReset(inp,true);
@@ -1617,12 +1661,15 @@ function _buildBottomNav(){
   return h+'</nav>';
 }
 function _userMenuItems(){
-  return [
-    {icon:"book",label:"Scoring rules",onClick:_showRulesModal},
-    {icon:"key",label:"Reset passcode",onClick:function(){_showResetPasscodeModal(false);}},
-    {divider:true},
-    {icon:"logout",label:"Switch user",danger:true,onClick:logout}
-  ];
+  var acc=window.IplGoogle?IplGoogle.account():null,items=[{icon:"book",label:"Scoring rules",onClick:_showRulesModal}];
+  if(acc&&acc.linked){   // signs in with Google: there is no passcode to reset
+    items.push({icon:"key",label:"Signed in with Google",hint:acc.emailMasked||"",onClick:function(){Ui.info("You sign in with Google"+(acc.emailMasked?" ("+acc.emailMasked+")":"")+". There is no passcode to reset.");}});
+  }else{
+    items.push({icon:"key",label:"Reset passcode",onClick:function(){_showResetPasscodeModal(false);}});
+    if(window.IplGoogle&&IplGoogle.enabled())items.push({icon:"key",label:"Switch to Google sign-in",onClick:function(){IplGoogle.openSwitch();}});
+  }
+  items.push({divider:true},{icon:"logout",label:"Switch user",danger:true,onClick:logout});
+  return items;
 }
 function _openUserMenu(){Ui.sheet({title:_username+(_isAdmin?" · Admin":""),items:_userMenuItems()});}
 function _openMoreMenu(){
@@ -1670,6 +1717,7 @@ function render(state){
   html+='</main>';
   if(_username)html+=_buildBottomNav();
   $app.innerHTML=html;
+  if(!_username&&window.IplGoogle)IplGoogle.afterRender();   // the sign-in card was just rebuilt: Google's button goes into it (it asks the server what is set up the first time)
   _syncBarH();
   document.body.classList.toggle("layer-open",!!(_pickOpen&&_activeTab==="next"));
   if(_layTop){var _l2=document.querySelector(".nw-right.layer-open");if(_l2)_l2.scrollTop=_layTop;}
@@ -1905,13 +1953,14 @@ var _VERIFY_DELAYS=[3000,8000,20000,60000];
 function _checkSavedSession(savedUser,state){
   _whoamiWithin(25000).then(function(d){
     _authPending=false;
-    if(d&&d.ok&&d.name===savedUser){_establishSession(d.name,d.is_admin,d.must_change);}
+    if(d&&d.ok&&d.name===savedUser){_establishSession(d.name,d.is_admin,d.must_change,d);}
     else{_username=null;_isAdmin=false;_mustChange=false;clearUsername();render(_state||state);}   // an answer that is not for this member: the login card
   },function(err){
     _authPending=false;
     if(err&&err.status===401){   // a real "no": the saved sign-in is over. Ask for the passcode straight away, for the member who was signed in
       _username=null;_isAdmin=false;_mustChange=false;clearUsername();render(_state||state);
-      _showPasscodePromptModal(savedUser,"Your session ended. Enter your 4-digit passcode to continue.");
+      if(window.IplGoogle&&IplGoogle.wasLinked())_googleSignInAgain(savedUser,null,"Your session ended. Enter your 4-digit passcode to continue.");
+      else _showPasscodePromptModal(savedUser,"Your session ended. Enter your 4-digit passcode to continue.");
       return;
     }
     _username=savedUser;_isAdmin=_cachedAdmin();_mustChange=false;_unverified=true;   // anything else is not an answer: stay signed in on trust
@@ -1931,6 +1980,7 @@ function _recheckSession(){
     if(!_unverified)return;
     if(d&&d.ok&&d.name===_username){
       _unverified=false;_verifyTries=0;_isAdmin=!!d.is_admin;_mustChange=!!d.must_change;_rememberAdmin(_isAdmin);
+      if(window.IplGoogle)IplGoogle.setAccount({linked:!!d.linked,emailMasked:d.email_masked||null,pinEnabled:d.pin_enabled!==false});
       if(_state)render(_state);   // the banner goes
       if(_mustChange)_showResetPasscodeModal(true);
     } else _sessionEnded();
@@ -1951,7 +2001,12 @@ function _sessionEnded(){
 function _showSessionEndedSheet(){
   if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
   _sessionSheet=Ui.sheetBlocking({title:"You've been signed out",message:"Your picks on this phone are safe.",
-    primary:{label:"Sign in",onClick:function(){_sessionSheet=null;_showPasscodePromptModal(_username,"Your session ended. Enter your 4-digit passcode to continue.",true);}}});
+    primary:{label:"Sign in",onClick:function(){
+      _sessionSheet=null;
+      var note="Your session ended. Enter your 4-digit passcode to continue.";
+      if(window.IplGoogle&&IplGoogle.wasLinked())_googleSignInAgain(_username,function(){_showSessionEndedSheet();},note,true);   // cancelling brings this sheet back: the member is still signed out
+      else _showPasscodePromptModal(_username,note,true);
+    }}});
 }
 // The member signed in again after their session ended: carry on exactly where they were (same tab, same unsaved picks), do not start over.
 function _reauthDone(d){
@@ -1961,12 +2016,21 @@ function _reauthDone(d){
   saveUsername(d.name);_rememberAdmin(_isAdmin);
   if(_state)render(_state);
   if(_mustChange)_showResetPasscodeModal(true);
+  _googleAccount(d.linked?d:null);
   Ui.success("Signed in again. Your picks are as you left them.",{duration:4000});
 }
 var _bootTries=0;
 function _bootRetry(){if(!$loading||_bootTries>=12)return;_bootTries++;setTimeout(function(){if(!_state)_bootstrap();},Math.min(2000*_bootTries,10000));}
 window.addEventListener("ipl:retry",function(){_bootTries=0;_bootstrap();if(_unverified)_recheckSession();});
 window.addEventListener("ipl:session-ended",_sessionEnded);   // fired by IplApi when the server refuses a signed-in member's token (a 401)
+// Google sign-in (Static/auth_google.js) reports through events; the page decides what they mean.
+window.addEventListener("ipl:google-signed-in",function(e){
+  var d=e.detail||{};
+  if(window.IplGoogle)IplGoogle.closeSheets();
+  if(_sessionLost)_reauthDone(d);else _establishSession(d.name,d.is_admin,d.must_change,d);
+});
+window.addEventListener("ipl:google-linked",function(){if(_state)render(_state);});                    // the menu now says "Signed in with Google"
+window.addEventListener("ipl:google-config",function(){if(!_username&&_state)render(_state);});        // Google sign-in is available: the sign-in card gets its button
 window.addEventListener("online",function(){if(_unverified)_recheckSession();});
 function _bootstrap(){
   var seq=_bootSeq;   // replies that arrive after a competition switch belong to the old competition: every handler below drops them
@@ -2042,7 +2106,8 @@ window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper10"></script>
-<script src="/static/mc_hub.js?v=paper10"></script>
+<script src="/static/ipl_glue.js?v=paper11"></script>
+<script src="/static/mc_hub.js?v=paper11"></script>
+<script src="/static/auth_google.js?v=paper11"></script>
 </body>
 </html>

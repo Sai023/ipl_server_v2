@@ -2,6 +2,7 @@ Flask>=3.0,<4.0
 requests>=2.31,<3.0
 APScheduler>=3.10,<4.0
 psycopg[binary,pool]>=3.2,<4.0   # INF-1: managed Postgres driver + connection pool
+PyJWT[crypto]>=2.8,<3.0          # Phase 3: checks the signed ID token Google hands the page (logic/google_identity.py); [crypto] brings `cryptography` for RS256
 
 # APScheduler powers tasks.start_daily_discovery_scheduler() — the in-process
 # daily cron that fires logic.cricbuzz_discovery + scraper.run_full_scrape

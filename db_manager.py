@@ -27,6 +27,10 @@ from logic.session_policy import SESSION_TTL_DAYS, new_expiry, renewed_expiry
 from logic import rollover_plan as _plan
 from logic.rollover_engine import pick_active_team as _pick_active_team
 
+# The passcode_hash of a member who signs in with Google only (a member who switched, or one who joined with Google). It can never equal a real passcode hash (those are 64 hex
+# characters), so the passcode check can never pass for such a member; the login route also says why ("pin_retired"). Phase 3, 2026-11-21.
+NO_PIN = "-"
+
 
 _SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS competitions (
@@ -143,6 +147,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     username    TEXT NOT NULL,
     expires_at  TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"')
+);
+CREATE TABLE IF NOT EXISTS identities (
+    provider       TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    member         TEXT NOT NULL REFERENCES members (username) ON DELETE CASCADE ON UPDATE CASCADE,
+    email          TEXT NOT NULL,
+    created_at     TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"'),
+    last_login_at  TEXT,
+    PRIMARY KEY (provider, subject),
+    UNIQUE (provider, member)
 );
 CREATE TABLE IF NOT EXISTS competition_weeks (
     competition_id  TEXT    NOT NULL,
@@ -1421,10 +1435,13 @@ class DatabaseManager:
 
     # ── Passcode / auth DAO ───────────────────────────────────────────────
     def get_member_auth(self, username: str):
+        """The member's sign-in facts: username, passcode_hash (NO_PIN when they sign in with Google only), must_change, is_admin, and `google_email`
+        (the address of the Google account linked to them, None when none is). One statement."""
         with self._read() as con:
             r = con.execute(
-                "SELECT username, passcode_hash, must_change, is_admin "
-                "FROM members WHERE username=%s", (username,)).fetchone()
+                "SELECT m.username, m.passcode_hash, m.must_change, m.is_admin, i.email AS google_email "
+                "FROM members m LEFT JOIN identities i ON i.member = m.username AND i.provider = 'google' "
+                "WHERE m.username=%s", (username,)).fetchone()
             return dict(r) if r else None
 
     def upsert_member_auth(self, username: str, passcode_hash: str,
@@ -1445,11 +1462,65 @@ class DatabaseManager:
                         (passcode_hash, int(must_change), username))
 
     def list_members_admin_view(self) -> list:
+        """Every member for the admin's list. `google_email` is the linked Google address or None (the route masks it; the full address never leaves the server)."""
         with self._read() as con:
             rows = con.execute(
-                "SELECT username, must_change, is_admin, created_at "
-                "FROM members ORDER BY username").fetchall()
+                "SELECT m.username, m.must_change, m.is_admin, m.created_at, i.email AS google_email "
+                "FROM members m LEFT JOIN identities i ON i.member = m.username AND i.provider = 'google' "
+                "ORDER BY m.username").fetchall()
             return [dict(r) for r in rows]
+
+    # ── Identities: Google sign-in (Phase 3, 2026-11-21) ──────────────────
+    def get_identity(self, provider: str, subject: str):
+        """{member, email, created_at, last_login_at} for a provider's account id (Google's `sub`), or None."""
+        with self._read() as con:
+            r = con.execute("SELECT member, email, created_at, last_login_at FROM identities WHERE provider=%s AND subject=%s",
+                            (provider, subject)).fetchone()
+            return dict(r) if r else None
+
+    def touch_identity(self, provider: str, subject: str, email: str, now_iso: str = None) -> None:
+        """A sign-in happened: remember when, and the address Google reports today (an address can change; the `sub` never does)."""
+        now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            con.execute("UPDATE identities SET email=%s, last_login_at=%s WHERE provider=%s AND subject=%s", (email, now_iso, provider, subject))
+
+    def link_identity(self, username: str, provider: str, subject: str, email: str, now_iso: str = None) -> dict:
+        """Link a provider account to an existing member AND retire their passcode, in ONE transaction (so a member is never left with neither way in).
+        The member row is locked first, so two attempts for the same member are served one after the other.
+        Returns {"member", "email", "linked_now"} (linked_now is False when this very account was already linked to them: a harmless repeat).
+        Raises LookupError("member") when there is no such member, ValueError("in_use") when the account belongs to another member, and
+        ValueError("already_linked") when the member already has a different account of this provider (an admin must unlink it first)."""
+        now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+        with self._write() as con:
+            if not con.execute("SELECT 1 FROM members WHERE username=%s FOR UPDATE", (username,)).fetchone():
+                raise LookupError("member")
+            made = con.execute("INSERT INTO identities (provider, subject, member, email, created_at, last_login_at) VALUES (%s,%s,%s,%s,%s,%s) "
+                               "ON CONFLICT DO NOTHING RETURNING member", (provider, subject, username, email, now_iso, now_iso)).fetchone()
+            if not made:
+                row = con.execute("SELECT member FROM identities WHERE provider=%s AND subject=%s", (provider, subject)).fetchone()
+                if row and row["member"] == username:
+                    con.execute("UPDATE identities SET email=%s, last_login_at=%s WHERE provider=%s AND subject=%s", (email, now_iso, provider, subject))
+                    return {"member": username, "email": email, "linked_now": False}
+                raise ValueError("in_use" if row else "already_linked")
+            con.execute("UPDATE members SET passcode_hash=%s, must_change=0 WHERE username=%s", (NO_PIN, username))
+            return {"member": username, "email": email, "linked_now": True}
+
+    def unlink_identity(self, username: str, temp_passcode_hash: str, provider: str = "google") -> bool:
+        """Admin recovery: remove the member's link, give them the temporary passcode (the hash passed in) that they must change at their next sign-in, and
+        end all their sessions. False when they had no link. One transaction."""
+        with self._write() as con:
+            con.execute("SELECT 1 FROM members WHERE username=%s FOR UPDATE", (username,))
+            cur = con.execute("DELETE FROM identities WHERE provider=%s AND member=%s", (provider, username))
+            if not cur.rowcount:
+                return False
+            con.execute("UPDATE members SET passcode_hash=%s, must_change=1 WHERE username=%s", (temp_passcode_hash, username))
+            con.execute("DELETE FROM sessions WHERE username=%s", (username,))
+            return True
+
+    def count_pin_members(self) -> int:
+        """How many members can still sign in with a passcode (0 once everybody uses Google: the page then drops the passcode screens)."""
+        with self._read() as con:
+            return int(con.execute("SELECT COUNT(*) AS n FROM members WHERE passcode_hash <> %s", (NO_PIN,)).fetchone()["n"])
 
     # ── Sessions ──────────────────────────────────────────────────────────
     def create_session(self, token: str, username: str, ttl_days: int = SESSION_TTL_DAYS) -> str:
@@ -1484,3 +1555,10 @@ class DatabaseManager:
         with self._write() as con:
             cur = con.execute("DELETE FROM sessions WHERE username=%s", (username,))
             return cur.rowcount or 0
+
+    def delete_session(self, token: str) -> bool:
+        """Sign THIS device out for real (the token stops working at once). False when there was no such session."""
+        if not token:
+            return False
+        with self._write() as con:
+            return bool(con.execute("DELETE FROM sessions WHERE token=%s", (token,)).rowcount)

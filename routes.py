@@ -1,6 +1,10 @@
 """
 IPL Fantasy 2026 — API Route Handlers                       routes v1.4.0
 ===========================================================================
+v1.15.0 (Google sign-in, step 1, 2026-11-21, app 2.22.0):
+  GET /api/auth/config, GET /api/auth/nonce, POST /api/auth/google, POST /api/auth/link, POST /api/auth/logout, POST /api/admin/auth/unlink. The server checks the ID token
+  Google hands the page (logic/google_identity.py) and a single-use nonce it issued; a member switches from the passcode to Google and the passcode is retired in the same
+  transaction; the admin can unlink (recovery). Nothing works until GOOGLE_CLIENT_ID is set. /api/login answers a switched member with reason pin_retired.
 v1.14.0 (hardening release, 2026-11-21, app 2.21.0):
   Routes no longer catch `Exception`: base.py answers every unexpected failure (a logged traceback under a short request id, a fixed sentence to the
   caller) and every HTTP error (JSON on /api/, never the app page). A route only answers failures it EXPECTS, with its own sentence and `reason`.
@@ -102,11 +106,11 @@ def _push_if_hosted(reason: str, extra_paths: list | None = None) -> None:
 
 import base as _base
 from base import (
-    db, _log, _write_limiter, _check_rate,
+    db, _log, _write_limiter, _auth_limiter, _check_rate,
     resolve_player_id, resolve_id_list, needs_resolving, _ID_RE, _jloads,
     BASE_DIR, DATA_DIR, STATIC_DIR,
     BUDGET_TOTAL, XI_SIZE, MAX_WEEKS,
-    PASSCODE_RE, hash_passcode, verify_passcode,
+    PASSCODE_RE, hash_passcode, verify_passcode, NO_PIN,
     new_session_token, get_bearer_token,
 )
 from config import (
@@ -114,13 +118,14 @@ from config import (
     APP_VERSION, VERSION_MAP,
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
-    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, FUZZY_MATCH_VER,
+    SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, GOOGLE_IDENTITY_VER, FUZZY_MATCH_VER,
     CRICBUZZ_DISCOVERY_VER,
 )
 import tasks
 from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
 from logic import rollover_plan as _rp                                       # the stored lock schedule: what is due, and whether picking is locked (Phase 1.5)
 from logic import competition_import as _ci
+from logic import google_identity as _gid                                    # checks the ID token Google hands the page (Phase 3 sign-in, 2026-11-21)
 
 bp = Blueprint("api", __name__)
 
@@ -174,6 +179,7 @@ def api_version():
             "rollover_engine":    ROLLOVER_ENGINE_VER,
             "rollover_plan":      ROLLOVER_PLAN_VER,
             "session_policy":     SESSION_POLICY_VER,
+            "google_identity":    GOOGLE_IDENTITY_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },
@@ -359,6 +365,9 @@ def api_login():
     if not name or not PASSCODE_RE.match(passcode):
         return jsonify({"ok": False, "error": "name + 4-digit passcode required", "code": 400, "reason": "credentials_required"}), 400
     m = db.get_member_auth(name)
+    if m and m["passcode_hash"] == NO_PIN:
+        # A member who switched to Google (or joined with it) has no passcode any more. Say so rather than "wrong passcode": the name list is public anyway.
+        return jsonify({"ok": False, "error": "This account signs in with Google.", "code": 401, "reason": "pin_retired"}), 401
     if not m or not verify_passcode(passcode, name, m["passcode_hash"]):
         # Same error message for unknown-user vs wrong-passcode — don't
         # leak which member names exist beyond what /api/state already shows.
@@ -377,7 +386,10 @@ def api_whoami():
     m = db.get_member_auth(username) or {}
     return jsonify({"ok": True, "name": username,
                     "must_change": bool(m.get("must_change")),
-                    "is_admin": bool(m.get("is_admin"))})
+                    "is_admin": bool(m.get("is_admin")),
+                    "linked": bool(m.get("google_email")),                              # a Google account is linked (the passcode is then retired)
+                    "email_masked": _gid.mask_email(m.get("google_email")) or None,     # "s***@gmail.com": only the member themself ever sees even this
+                    "pin_enabled": m.get("passcode_hash", NO_PIN) != NO_PIN})
 
 
 @bp.route("/api/passcode/change", methods=["POST"])
@@ -390,6 +402,9 @@ def api_passcode_change():
     new_pc = str(d.get("new") or "").strip()
     if not PASSCODE_RE.match(new_pc):
         return jsonify({"ok": False, "error": "new passcode must be exactly 4 digits", "code": 400, "reason": "passcode_invalid"}), 400
+    if (db.get_member_auth(username) or {}).get("passcode_hash") == NO_PIN:
+        # Setting a passcode would quietly bring the passcode way in back for a member who chose Google. Recovery is the admin's unlink, not this.
+        return jsonify({"ok": False, "error": "This account signs in with Google.", "code": 403, "reason": "pin_retired"}), 403
     # No current-passcode check by design — user is already authenticated via
     # bearer token; for forced resets (must_change=1) the user can't verify
     # the current passcode anyway because the admin reset it without telling
@@ -416,6 +431,8 @@ def api_admin_passcode_reset():
     m = db.get_member_auth(target)
     if not m:
         return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
+    if m.get("google_email") or m.get("passcode_hash") == NO_PIN:
+        return jsonify({"ok": False, "error": "That member signs in with Google. Unlink their Google account first (it gives them a temporary passcode).", "code": 409, "reason": "member_signs_in_with_google"}), 409
     db.set_passcode(target, hash_passcode("1234", target), must_change=1)
     # Force the target to re-login with 1234 on whatever device they're on.
     db.delete_sessions_for_user(target)
@@ -427,7 +444,146 @@ def api_admin_passcode_reset():
 def api_admin_members():
     username, err = _require_admin()
     if err: return err
-    return jsonify({"ok": True, "members": db.list_members_admin_view()})
+    members = []
+    for m in db.list_members_admin_view():
+        g = m.pop("google_email", None)
+        members.append({**m, "linked": bool(g), "email_masked": _gid.mask_email(g) or None})   # even the admin sees the address masked
+    return jsonify({"ok": True, "members": members})
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 1.6 GOOGLE SIGN-IN (Phase 3, 2026-11-21)
+# ════════════════════════════════════════════════════════════════════════════
+# The page shows Google's own button; Google hands the page a signed ID token; the page sends it here together with the nonce it was issued for this attempt.
+# logic/google_identity.py checks the token; these routes decide what a good token MEANS:
+#   /api/auth/google  sign in (a member whose Google account is linked), or say "not linked yet"
+#   /api/auth/link    a signed-in member links their Google account; their passcode is retired in the same transaction
+# Nothing here works until GOOGLE_CLIENT_ID is set in the environment (503 google_not_configured). Joining with Google, the devices list and the admin
+# joining switch come in the next release.
+
+_NONCES = _gid.NonceStore()
+
+
+def _google_refusal(e):
+    """The reply for a refused token. The reason and detail go to the log (never the token); the caller gets a sentence and the machine reason."""
+    _log(f"google sign-in refused: {e.reason} ({e.detail})", "warning")
+    r = e.reason
+    if r == "google_not_configured":
+        return jsonify({"ok": False, "error": "Google sign-in is not set up yet.", "code": 503, "reason": "google_not_configured"}), 503
+    if r == "google_unreachable":
+        return jsonify({"ok": False, "error": "Could not reach Google. Please try again in a moment.", "code": 503, "reason": "google_unreachable"}), 503
+    if r == "token_expired":
+        return jsonify({"ok": False, "error": "That took too long. Please try again.", "code": 401, "reason": "token_expired"}), 401
+    if r == "nonce_invalid":
+        return jsonify({"ok": False, "error": "That sign-in has expired. Please try again.", "code": 401, "reason": "nonce_invalid"}), 401
+    if r == "email_unverified":
+        return jsonify({"ok": False, "error": "Google says that email address is not verified.", "code": 403, "reason": "email_unverified"}), 403
+    return jsonify({"ok": False, "error": "Google sign-in could not be verified. Please try again.", "code": 401, "reason": "token_invalid"}), 401
+
+
+def _verify_google_body(d):
+    """(claims, None) for a good token, or (None, reply). The token is checked first and the nonce is spent only when the token is good, so a Google outage
+    in the middle does not burn it (the page can send the same token again)."""
+    if not isinstance(d, dict):
+        d = {}
+    nonce = d.get("nonce")
+    try:
+        claims = _gid.verify_id_token(d.get("credential"), audience=_gid.client_id(), expected_nonce=nonce)
+        if not _NONCES.consume(nonce):
+            raise _gid.GoogleAuthError("nonce_invalid", "not issued here, already used, or expired")
+    except _gid.GoogleAuthError as e:
+        return None, _google_refusal(e)
+    return claims, None
+
+
+@bp.route("/api/auth/config", methods=["GET"])
+def api_auth_config():
+    """What the sign-in screen needs: is Google sign-in set up (and our client id, which is public by design), and does anybody still sign in with a passcode?"""
+    cid = _gid.client_id()
+    return jsonify({"ok": True, "google": {"enabled": bool(cid), "client_id": cid or None}, "pin_enabled": db.count_pin_members() > 0})
+
+
+@bp.route("/api/auth/nonce", methods=["GET"])
+def api_auth_nonce():
+    """A single-use, ten-minute nonce for ONE sign-in attempt. The page gives it to Google, which puts it inside the token it signs."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    if not _gid.enabled():
+        return jsonify({"ok": False, "error": "Google sign-in is not set up yet.", "code": 503, "reason": "google_not_configured"}), 503
+    nonce = _NONCES.issue()
+    if nonce is None:
+        return jsonify({"ok": False, "error": "Too many sign-ins at once. Wait a minute and try again.", "code": 429, "reason": "rate_limited"}), 429
+    return jsonify({"ok": True, "nonce": nonce})
+
+
+@bp.route("/api/auth/google", methods=["POST"])
+def api_auth_google():
+    """Sign in with Google. Body {credential, nonce}. A linked member gets a session exactly as /api/login gives one. A good Google account that belongs to nobody
+    yet is NOT an error: {linked: false} lets the page explain (a member signs in once with their passcode, then switches)."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    claims, refusal = _verify_google_body(request.get_json(force=True, silent=True))
+    if refusal: return refusal
+    ident = db.get_identity("google", claims["sub"])
+    if not ident:
+        return jsonify({"ok": True, "linked": False, "email_masked": _gid.mask_email(claims["email"])})
+    m = db.get_member_auth(ident["member"]) or {}
+    db.touch_identity("google", claims["sub"], claims["email"])
+    token = new_session_token()
+    db.create_session(token, ident["member"])
+    return jsonify({"ok": True, "linked": True, "name": ident["member"], "token": token, "must_change": False,
+                    "is_admin": bool(m.get("is_admin")), "email_masked": _gid.mask_email(claims["email"])})
+
+
+@bp.route("/api/auth/link", methods=["POST"])
+def api_auth_link():
+    """A signed-in member switches to Google: body {credential, nonce}, Authorization: Bearer <their session>. Links the Google account and retires their passcode in one
+    transaction. 409 google_account_in_use when that account belongs to another member; 409 already_linked when they already have a different one."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    username, err = _require_token()
+    if err: return err
+    claims, refusal = _verify_google_body(request.get_json(force=True, silent=True))
+    if refusal: return refusal
+    try:
+        res = db.link_identity(username, "google", claims["sub"], claims["email"])
+    except LookupError:
+        return jsonify({"ok": False, "error": "member not found", "code": 404, "reason": "member_not_found"}), 404
+    except ValueError as e:
+        if str(e) == "in_use":
+            return jsonify({"ok": False, "error": "That Google account already belongs to another member.", "code": 409, "reason": "google_account_in_use"}), 409
+        return jsonify({"ok": False, "error": "You already have a Google account linked. Ask the admin to unlink it first.", "code": 409, "reason": "already_linked"}), 409
+    _log(f"google account {'linked to' if res['linked_now'] else 're-confirmed for'} {username}")
+    return jsonify({"ok": True, "linked": True, "name": username, "email_masked": _gid.mask_email(claims["email"])})
+
+
+@bp.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    """Sign THIS device out for real: the session token stops working at once. Safe to repeat; no token, or one the server does not know, is fine."""
+    re_ = _check_rate(_auth_limiter)
+    if re_: return re_
+    db.delete_session(get_bearer_token())
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/admin/auth/unlink", methods=["POST"])
+def api_admin_auth_unlink():
+    """Recovery (admin only): remove a member's Google link, give them the temporary passcode 1234 (they must change it at their next sign-in) and end their
+    sessions. For a member who lost their Google account or cannot sign in with it."""
+    re_ = _check_rate(_write_limiter)
+    if re_: return re_
+    username, err = _require_admin()
+    if err: return err
+    d = request.get_json(force=True, silent=True) or {}
+    target = (d.get("target_username") or "").strip()
+    if not target:
+        return jsonify({"ok": False, "error": "target_username required", "code": 400, "reason": "target_required"}), 400
+    if not db.get_member_auth(target):
+        return jsonify({"ok": False, "error": "target user not found", "code": 404, "reason": "member_not_found"}), 404
+    if not db.unlink_identity(target, hash_passcode("1234", target)):
+        return jsonify({"ok": False, "error": "That member has no Google account linked.", "code": 409, "reason": "not_linked"}), 409
+    _log(f"admin {username} unlinked the google account of {target}")
+    return jsonify({"ok": True, "target": target, "reset_to": "1234", "must_change": True})
 
 
 @bp.route("/api/admin/health", methods=["GET"])
