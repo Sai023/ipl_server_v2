@@ -28,6 +28,11 @@
 > **Google sign-in, step 1 (2026-11-21, routes 1.15.0, app 2.22.0).** New routes in section 1.6: `GET /api/auth/config`, `GET /api/auth/nonce`, `POST /api/auth/google`,
 > `POST /api/auth/link`, `POST /api/auth/logout`, `POST /api/admin/auth/unlink`; `/api/login` answers a switched member with `pin_retired`; `/api/whoami` and
 > `/api/admin/members` carry `linked` and a masked email. Everything is dormant until `GOOGLE_CLIENT_ID` is set. Full description: [google_signin.md](google_signin.md).
+>
+> **Google sign-in, step 2 (2026-11-21, routes 1.16.0, app 2.23.0).** A good Google account nobody has linked is offered a claim instead of a dead end: `POST /api/auth/google` answers
+> `{linked:false, claim:{ticket, members:[{name, status free|linked|temp}]}}` and the new `POST /api/auth/claim {ticket, name, passcode}` links that account to that member (and retires
+> their passcode) in one transaction and signs them in. New reasons: `claim_expired`, `claim_locked`, `member_taken`, `temp_passcode`. `POST /api/admin/auth/unlink` keeps the caller's own
+> session when an admin unlinks themselves (`self: true`).
 
 ## What it does (business view)
 
@@ -114,10 +119,11 @@ Phase 7.
 | 1.5 | Auth | `/api/whoami` | GET | Phase 12 — validate the bearer token. Used by the bootstrap to decide whether to auto-login or drop to the login card. Also `linked` (a Google account is linked), `email_masked` (`s***@gmail.com`) and `pin_enabled` (2026-11-21). |
 | 1.6 | Google | `/api/auth/config` | GET | **(2026-11-21)** Is Google sign-in set up (`google.enabled`, and our public `client_id`), and does anybody still use a passcode (`pin_enabled`)? |
 | 1.6 | Google | `/api/auth/nonce` | GET | A single-use, ten-minute nonce for ONE sign-in attempt (the page gives it to Google, which signs it into the token). Own rate limit (60/min). |
-| 1.6 | Google | `/api/auth/google` | POST | Sign in: `{credential, nonce}`. A linked member gets a session like `/api/login`; a good Google account nobody has linked answers `{linked:false}` (not an error). Reasons: `token_invalid`, `token_expired`, `nonce_invalid`, `email_unverified`, `google_unreachable`, `google_not_configured`. |
+| 1.6 | Google | `/api/auth/google` | POST | Sign in: `{credential, nonce}`. A linked member gets a session like `/api/login`; a good Google account nobody has linked answers `{linked:false, claim:{ticket, expires_in, email_masked, members}}` and no session (2.23.0). Reasons: `token_invalid`, `token_expired`, `nonce_invalid`, `email_unverified`, `google_unreachable`, `google_not_configured`, `claim_locked`. |
+| 1.6 | Google | `/api/auth/claim` | POST | **(2026-11-21)** `{ticket, name, passcode}`: the member proves who they are ONCE; the account is linked and the passcode retired in one transaction; they are signed in (`claimed:true`). 401 `claim_expired`, 429 `claim_locked`, 409 `member_taken` / `temp_passcode`, 401 `bad_credentials` (+ `attempts_left`), 404 `member_not_found`, 400 `credentials_required`. Shares the 60/min sign-in limiter. |
 | 1.6 | Google | `/api/auth/link` | POST | A signed-in member switches to Google: links the account and retires their passcode in ONE transaction. 409 `google_account_in_use` / `already_linked`. |
 | 1.6 | Google | `/api/auth/logout` | POST | Ends THIS device's session on the server. Always 200. |
-| 1.6 | Google | `/api/admin/auth/unlink` | POST | Admin recovery: removes a member's Google link, temporary passcode `1234` (must be changed), their sessions ended. 409 `not_linked` when there is nothing to unlink. |
+| 1.6 | Google | `/api/admin/auth/unlink` | POST | Admin only: removes a member's Google link, temporary passcode `1234` (must be changed), their sessions ended (an admin unlinking THEMSELVES keeps the session of the device they use: `self:true`). 409 `not_linked` when there is nothing to unlink. |
 | 1.5 | Auth | `/api/passcode/change` | POST | Phase 12 — set a new passcode (no current verification, see rule #8). Rotates every session for this user. |
 | 1.5 | Auth | `/api/admin/passcode/reset` | POST | Phase 12 — admin-only. Resets target user's passcode to `1234` and `must_change=1`, deletes their sessions. |
 | 1.5 | Auth | `/api/admin/members` | GET | Phase 12 — admin-only. Lists every member with `must_change` + `is_admin` flags for the Member Passcodes card. |
