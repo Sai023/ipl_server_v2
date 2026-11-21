@@ -46,7 +46,7 @@ DEADLINE_HOUR = 14
 DEADLINE_MIN  = 0
 
 # ── Versioning ────────────────────────────────────────────────────────────────
-APP_VERSION = "2.19.0"
+APP_VERSION = "2.20.0"   # 2.20.0 (2026-11-21): one server-trouble banner, front-end only (Ui.connection; the blocking overlay and the red banner are gone); assets paper9
 
 # Per-script version pins
 SERVER_VER       = "13.5"   # INF-2: boot-time PAT-health check (cloud_sync.check_token).
