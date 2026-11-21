@@ -190,14 +190,33 @@ out["e_refused"] = call("POST", "/api/save-next-week/Moe?comp=h_b", "tok-moe", {
 out["e_draft_after_refused"] = draft("Moe", "h_b")
 out["e_marker_after_refused"] = draft("Moe", "h_a")
 out["e_marker_before"] = MARK0
+# what the save hands the resolver: a connection only when something needs looking up
+seen = []
+real_ril = routes.resolve_id_list
+
+
+def spy(con, items, **k):
+    seen.append("a connection" if con is not None else "no connection")
+    return real_ril(con, items, **k)
+
+
 # a save by NAME that is accepted: the name resolves inside THIS competition (h_b: Zed Alpha is p2, not h_a's p1)
 BYNAME = ["Zed Alpha"] + [f"p{i}" for i in range(3, 13)]
-out["e_by_name"] = call("POST", "/api/save-next-week/Moe?comp=h_b", "tok-moe", {"team": BYNAME, "cap": "p3", "vc": "p4"})
+with Patched(routes, "resolve_id_list", spy):
+    out["e_by_name"] = call("POST", "/api/save-next-week/Moe?comp=h_b", "tok-moe", {"team": BYNAME, "cap": "p3", "vc": "p4"})
+out["e_by_name_resolver_got"] = list(seen)
+seen.clear()
 out["e_draft_after_by_name"] = draft("Moe", "h_b")
 out["e_marker_after_by_name"] = draft("Moe", "h_a")
-# a normal save (canonical ids) must not touch the player list at all
-with Patched(base, "_load_all_players", boom("the player list was read during a normal save")):
-    out["e_fast_path"] = call("POST", "/api/save-next-week/Moe?comp=h_b", "tok-moe", {"team": CANON, "cap": "p1", "vc": "p2"})
+# a normal save (canonical ids) must not touch the player list at all, and must not even check out a connection to resolve
+with Patched(routes, "resolve_id_list", spy):
+    with Patched(base, "_load_all_players", boom("the player list was read during a normal save")):
+        out["e_fast_path"] = call("POST", "/api/save-next-week/Moe?comp=h_b", "tok-moe", {"team": CANON, "cap": "p1", "vc": "p2"})
+out["e_fast_path_resolver_got"] = list(seen)
+seen.clear()
+out["e_needs_resolving"] = {"canonical_ids": base.needs_resolving(*CANON, "p1", "p2"), "only_empty_values": base.needs_resolving("p1", None, ""),
+                            "a_name": base.needs_resolving("Zed Alpha", "p1"), "an_id_of_another_shape": base.needs_resolving("ext_10945"),
+                            "a_name_as_captain": base.needs_resolving("p1", "p2", "Zed Alpha")}
 out["e_resolve_b"] = call("POST", "/api/resolve-player?comp=h_b", "tok-moe", {"query": "Zed Alpha"})
 out["e_resolve_a"] = call("POST", "/api/resolve-player?comp=h_a", "tok-moe", {"query": "Zed Alpha"})
 out["e_no_db_con"] = not hasattr(base, "_db_con")

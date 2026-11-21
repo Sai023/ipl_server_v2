@@ -311,6 +311,11 @@ class TheRealAppOnScratchData(unittest.TestCase):
         self.assertEqual(r["http"], 200, "the player list was read during a save with canonical ids: " + str(r["body"]))
         self.assertEqual({x["action"] for x in r["body"]["resolution_log"]}, {"passthrough"})
         self.assertTrue(self.r("e_no_db_con"), "the resolver's own unpooled connection is gone")
+        self.assertEqual(self.r("e_fast_path_resolver_got"), ["no connection"], "a save with canonical ids must not even check out a connection to resolve")
+        self.assertEqual(self.r("e_by_name_resolver_got"), ["a connection"], "(control: a name does need one)")
+
+    def test_what_counts_as_needing_the_player_list(self):
+        self.assertEqual(self.r("e_needs_resolving"), {"canonical_ids": False, "only_empty_values": False, "a_name": True, "an_id_of_another_shape": True, "a_name_as_captain": True})
 
     # ── F. removed routes ──
     def test_the_unused_diagnostic_routes_are_gone(self):
