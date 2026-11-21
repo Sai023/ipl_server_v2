@@ -64,7 +64,7 @@ along the dependency chain:
 | 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md`, **`competition_import.md`** (admin roster + fixture import), **`session_policy.md`** (60-day sessions renewed on use), **`rollover_plan.md`** (the lock schedule and the weekly handover) |
 | 3 | Data Layer | `db_manager.md`, `init_db.md` |
 | 4 | Ingestion | `scraper.md`, `tasks.md`, `seed_players.md`, `seed_matches.md` |
-| 5 | API & Server | `routes.md`, `server.md` |
+| 5 | API & Server | `routes.md`, `server.md`, **`google_signin.md`** (Phase 3: Google sign-in, server + page) |
 | 6 | Frontend | `index_html.md`, `ipl_glue.md`, `mc_hub.md` |
 | 7 | Operations | `daily_sync_workflow.md`, **`monday_rollover_workflow.md`** (Phase 11), `audit_scores_ps1.md`, `setup_cloudflare_ps1.md`, `cloudflared_exe.md`, **`render_yaml.md`** (Phase 11) |
 

@@ -366,6 +366,26 @@ t('MODULE: a host that left the page while the answers were in flight is never d
   assert.strictEqual(c.gis.inits.length, 0); assert.strictEqual(c.viewLog.length, 0);
 });
 
+t('MODULE: afterRender (called after every redraw of the sign-in card): asks the server once, then draws the button only where the card has its slot', async () => {
+  const host = { id: 'google-signin' };
+  let c = mod(); c.byId = {};
+  c.IplGoogle.afterRender(); c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.calls.filter((x) => x === 'config').length, 1, 'two redraws before the answer arrives: still one request');
+  assert.strictEqual(c.gis.inits.length, 0, 'no slot in the card yet: nothing drawn');
+  assert.strictEqual(ev(c, 'ipl:google-config').length, 1, 'the page is told Google is available, so it redraws the card (which now has the slot)');
+  c.byId = { 'google-signin': host };
+  c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.gis.inits.length, 1); assert.strictEqual(c.gis.renders[0].host, host, 'drawn into the slot');
+  c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.gis.renders.length, 2, 'every redraw of the card draws its button again'); assert.strictEqual(c.calls.filter((x) => x === 'nonce').length, 1, 'with the same unspent nonce');
+  c = mod({ config: { ok: true, google: { enabled: false, client_id: null } } }); c.byId = { 'google-signin': host };
+  c.IplGoogle.afterRender(); await flush(); c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.gis.inits.length, 0); assert.strictEqual(ev(c, 'ipl:google-config').length, 0);
+  c = mod({ configError: new Error('HTTP 500') }); c.byId = { 'google-signin': host };
+  c.IplGoogle.afterRender(); await flush(); c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.calls.filter((x) => x === 'config').length, 2, 'a failed answer is asked again at the next redraw'); assert.strictEqual(c.viewLog.length, 0, 'and nothing is shown for it');
+});
+
 t('MODULE: the switch is offered once per launch, only to a member who has not switched, and never near a lock', async () => {
   const mk = async (o, account) => { const c = mod(o); await c.IplGoogle.config(); if (account !== undefined) c.IplGoogle.setAccount(account); return c; };
   let c = await mk({}, { linked: false });
@@ -524,10 +544,15 @@ t('PAGE WIRING: the module is loaded, the card is drawn into after every render,
   assert.ok(/IplGoogle\.wasLinked\(\)\)_googleSignInAgain/.test(HTML), 'a signed-out Google member is offered Google, not a passcode');
 });
 
+// A test that waits for a promise that never settles would let Node leave quietly with exit code 0 and the later tests would never run (a silent pass).
+// So every test has a time limit, and leaving early is itself a failure.
+const withTimeout = (p, ms, name) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after ' + ms + ' ms: a promise never settled')), ms))]);
 (async () => {
-  let failed = 0;
+  let failed = 0, ran = 0;
+  process.on('exit', (code) => { if (ran < tests.length && code === 0) { console.log('\nINCOMPLETE: only ' + ran + ' of ' + tests.length + ' tests ran'); process.exitCode = 1; } });
   for (const x of tests) {
-    try { await x.fn(); console.log('PASS  ' + x.name); } catch (e) { failed++; console.log('FAIL  ' + x.name + '\n      ' + String(e && e.stack || e).split('\n').slice(0, 4).join('\n      ')); }
+    try { await withTimeout(Promise.resolve().then(x.fn), 8000, x.name); console.log('PASS  ' + x.name); } catch (e) { failed++; console.log('FAIL  ' + x.name + '\n      ' + String(e && e.stack || e).split('\n').slice(0, 4).join('\n      ')); }
+    ran++;
   }
   if (failed) { console.log('\n' + failed + ' FAILED'); process.exit(1); }
   console.log('\nall passed');

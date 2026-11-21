@@ -57,7 +57,7 @@ and `server.py`. It must never import from those upper layers.
     matches; with 8, the W8→W9 Monday rollover silently no-op'd
     because `api_rollover` short-circuits on `current_week >= MAX_WEEKS`)
   - **Paths:** `BASE_DIR`, `DATA_DIR`, `STATIC_DIR`
-  - **Helpers:** `_log`, `_jloads`, `_check_rate`, `needs_resolving`
+  - **Helpers:** `_log`, `_jloads`, `_check_rate`, `needs_resolving`; `NO_PIN` (re-exported from db_manager: the `passcode_hash` of a member who signs in with Google only) and `_auth_limiter` (60 calls / 60 s per address, for the Google sign-in routes only, so a rush of sign-ins neither starves the saves nor is starved by them), 2026-11-21
   - **Player resolution:** `resolve_player_id`, `resolve_id_list`, `_ID_RE`
   - **Passcode + sessions (Phase 12):** `PASSCODE_RE` (4-digit regex),
     `hash_passcode(passcode, username)`, `verify_passcode(...)` (constant-time

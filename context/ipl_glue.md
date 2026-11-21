@@ -123,10 +123,12 @@ from the quickest trip (any trip under 300 ms always replaces the previous one; 
 `IplClock.now()` applies the offset; until the server's time is known it is the phone's clock. The page's lock functions (`_deadlineLocked`, `_lockUrgent`,
 `_deadlineText`, `_lockIn`) read it through `_nowMs()` in `templates/index.html`. Tests: `tests/js/server_clock.test.js`, `tests/test_server_clock.py`.
 
-### 2c. A refused token ends the session in the open (2026-11-20)
-`_fetchJson` forgets the token on any 401. When a token WAS sent (a signed-in member) and the call was not `/api/login` or `/api/register` (a wrong passcode is
-a 401 too, but it is not a session ending), it also dispatches `ipl:session-ended`; the page answers with the blocking "You've been signed out" sheet
-(see index_html.md, "Session handling"). Test: `tests/js/session_flow.test.js`.
+### 2c. A refused token ends the session in the open (2026-11-20; the rule changed 2026-11-21)
+`_fetchJson` reads a 401's `reason` first. A 401 with no reason, `session_ended` or `auth_required` means the session is gone: the token is forgotten and, when a token
+WAS sent (a signed-in member) and the call was not a sign-in attempt, `ipl:session-ended` is dispatched; the page answers with the blocking "You've been signed out" sheet
+(see index_html.md, "Session handling"). A sign-in attempt (`/api/login`, `/api/register`, `/api/auth/google`) never ends a session, but a 401 there still clears a
+stale token, as before. **Any other 401 reason is not a session ending**: a Google token that did not check out at `/api/auth/link` (`token_invalid`, `nonce_invalid` ...)
+is a refusal for a member who IS signed in; before 2026-11-21 every 401 was taken for a session ending. Tests: `tests/js/session_flow.test.js`, `tests/js/google_signin.test.js`.
 
 ### 3. Bearer-token attach is URL-prefix-scoped (Phase 12)
 
@@ -279,5 +281,11 @@ D17–D21, D24–D26 are all executed — about **36% of the file**.
 ## Phase 1.7 additions (2026-11-21): one "server trouble" pattern
 
 What changed in this file: the overlay section, `MAINTENANCE_DELAY`, `SAFE_BOOT_MS`, the overlay/safe-boot timers and the `ipl:rollover-triggered` listener are deleted; `_pollCycle`'s `.catch` is silent (the failed request already told `Ui.connection`); `_init` adds `window.addEventListener("ipl:recovered", ...)` which clears `_lastStateEtag` and polls at once. "Retry now" (`ipl:retry`) is the PAGE's to handle (`templates/index.html` re-runs `_bootstrap()`), so the glue deliberately does not also poll on it (that would fetch everything twice).
+
+## Phase 3 additions (2026-11-21): Google sign-in
+
+New `IplApi` methods: `authConfig`, `authNonce`, `authGoogle(credential, nonce)` (stores the session token like `login`), `authLink(credential, nonce)`, `authLogout()`
+(ends THIS device's session on the server; the page calls it before it forgets the token), `adminUnlinkGoogle(name)`. The 401 rule changed (2c). The page's half is
+`Static/auth_google.js`, see [google_signin.md](google_signin.md).
 
 The owner of the pattern is `Ui.connection` in `Static/ui.js` (see [index_html.md](index_html.md), "Server trouble, Phase 1.7"). `tests/js/connection.test.js` loads this file too and pins the three glue behaviours above.

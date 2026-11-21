@@ -171,6 +171,11 @@ curl -X POST http://localhost:5000/api/rollover?force=1
 | GET | `/api/version` | Module version pins |
 | GET | `/api/ping` | Health check + config |
 | GET | `/api/health` | One `SELECT 1`: is the server up and its database reachable (the banner's probe) |
+| GET | `/api/auth/config` | Is Google sign-in set up (and our public client id)? |
+| GET | `/api/auth/nonce` | A single-use nonce for one Google sign-in attempt |
+| POST | `/api/auth/google` | Sign in with Google (`{credential, nonce}`) |
+| POST | `/api/auth/link` | A signed-in member switches from the passcode to Google |
+| POST | `/api/auth/logout` | End this device's session on the server |
 | GET | `/api/state` | Full app state (includes `player_pts`) |
 | GET | `/api/players` | Player roster sorted by `season_pts DESC` |
 | GET | `/api/leaderboard` | Cumulative rankings — pure `SUM(week_pts)` |

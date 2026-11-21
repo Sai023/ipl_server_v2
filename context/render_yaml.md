@@ -66,6 +66,9 @@ The container itself just runs Flask.
       Actions.
     - `ROLLOVER_TOKEN` — random string; same value also added as
       a GitHub Actions repo secret (`monday_rollover.yml` sends it).
+    - `GOOGLE_CLIENT_ID` (2026-11-21, Google sign-in; set in the Render dashboard, NOT in this file) — the OAuth Web client id from the Google Cloud console
+      (`....apps.googleusercontent.com`). It is public by design, not a secret. Unset means Google sign-in is off and the app behaves as before. See
+      [google_signin.md](google_signin.md).
 - **Outputs:**
   - A running web service named `ipl-fantasy-2026` in the operator's
     Render workspace.
