@@ -147,6 +147,14 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         who = self.r("c_moe_new_session_whoami")["body"]
         self.assertEqual((who["name"], who["linked"], who["pin_enabled"]), ("Moe", True, False))
 
+    def test_a_google_sign_in_refreshes_the_address_google_reports_today_and_the_time(self):
+        """The scenario planted a stale address and the time 2000-01-01 on Moe's identity just before this sign-in. An address can change at Google (the sub never
+        does), and last_login_at is how an admin can tell a live account from a dead one: both must be refreshed by the sign-in itself."""
+        row = self.r("c_moe_identity_after_signin")
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row[0]["email"], "moe.test@gmail.com", "the sign-in must store the address Google reports today")
+        self.assertTrue(str(row[0]["last_login_at"]) > "2001", "last_login_at must move on at every sign-in (it was planted as 2000-01-01): %s" % row[0]["last_login_at"])
+
     def test_members_who_have_not_switched_are_untouched(self):
         self.assertEqual(self.r("c_buddy_pin_login")["http"], 200)
         w = self.r("c_buddy_whoami")["body"]

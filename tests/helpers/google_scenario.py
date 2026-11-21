@@ -80,6 +80,11 @@ def sql(query, params=()):
         return [dict(r) for r in con.execute(query, params).fetchall()]
 
 
+def sql_exec(query, params=()):
+    with db._pool.connection() as con:
+        con.execute(query, params)
+
+
 out = {}
 
 # ── members: Sai (admin), Moe, Buddy, Zed, each with the passcode 1234 and a session ─────────────────────────────────────────────────────────
@@ -135,7 +140,10 @@ out["c_moe_whoami_after"] = call("GET", "/api/whoami", "tok-moe")
 out["c_moe_pin_login"] = call("POST", "/api/login", None, {"name": "Moe", "passcode": "1234"})
 out["c_moe_db"] = sql("SELECT passcode_hash, must_change FROM members WHERE username='Moe'")[0]
 out["c_moe_identity_db"] = sql("SELECT provider, subject, member, email FROM identities WHERE member='Moe'")
+# a sign-in refreshes what Google reports today (an address can change at Google, the sub never does) and the time: plant a stale address and an old time first
+sql_exec("UPDATE identities SET email=%s, last_login_at=%s WHERE member='Moe'", ("stale.address@gmail.com", "2000-01-01T00:00:00+00:00"))
 out["c_moe_google_signin"], _, _ = sign_in("g-moe", "moe.test@gmail.com")
+out["c_moe_identity_after_signin"] = sql("SELECT email, last_login_at FROM identities WHERE member='Moe'")
 new_tok = (out["c_moe_google_signin"]["body"] or {}).get("token") or "none"
 out["c_moe_new_session_whoami"] = call("GET", "/api/whoami", new_tok)
 out["c_moe_pin_change"] = call("POST", "/api/passcode/change", "tok-moe", {"new": "4321"})
