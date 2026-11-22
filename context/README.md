@@ -61,7 +61,7 @@ along the dependency chain:
 |-------|-------|-------|
 | 0 | User capabilities & docs audit | `user_capabilities.md`, `docs_audit.md` |
 | 1 | Foundation | `config.md`, `base.md`, `logic_package.md`, **`cloud_sync.md`** (Phase 11) |
-| 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md`, **`competition_import.md`** (admin roster + fixture import), **`session_policy.md`** (60-day sessions renewed on use), **`origin.md`** (the app's public address, one setting, and the "We've moved" switch for an old address; the written plan for an address change is **`move_plan.md`**), **`rollover_plan.md`** (the lock schedule and the weekly handover) |
+| 2 | Logic Engines | `scoring_engine.md`, `rollover_engine.md`, `fuzzy_match.md`, `cricbuzz_discovery.md`, **`competition_import.md`** (admin roster + fixture import), **`session_policy.md`** (60-day sessions renewed on use), **`origin.md`** (the app's public address, one setting, and the "We've moved" switch for an old address; the written plan for an address change is **`move_plan.md`**), **`ops.md`** (Phase 2: the clocks, the tick and status routes, the admin alerts to Telegram), **`rollover_plan.md`** (the lock schedule and the weekly handover) |
 | 3 | Data Layer | `db_manager.md`, `init_db.md` |
 | 4 | Ingestion | `scraper.md`, `tasks.md`, `seed_players.md`, `seed_matches.md` |
 | 5 | API & Server | `routes.md`, `server.md`, **`google_signin.md`** (Phase 3: Google sign-in, server + page) |

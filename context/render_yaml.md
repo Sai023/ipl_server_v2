@@ -74,6 +74,10 @@ The container itself just runs Flask.
       domain is added (`RENDER_EXTERNAL_URL` does not follow a custom domain). `/api/version` shows what the server believes. See [origin.md](origin.md).
     - `MOVED_TO_URL` (2026-11-22; set ONLY on an old service after a move) — the new address: every link there becomes a "We've moved" page and the API answers 410. A typo is
       ignored and reported in `/api/version` (`origin_problems`). See [move_plan.md](move_plan.md).
+    - `OPS_TOKEN` (2026-11-22, Phase 2, optional; set in the Render dashboard, NOT in this file) — the secret an external clock (Supabase, the PC) sends to `POST /api/ops/tick`. The existing
+      scheduler token `ROLLOVER_TOKEN` is accepted too. See [ops.md](ops.md).
+    - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (2026-11-22, Phase 2, optional; dashboard only) — turn the admin alerts on (both needed). The token is a secret: never in the repo, a chat or a log.
+    - `OPS_APP_CLOCK` (optional) — `0` turns the server's own ops clock off on a hosted service (it is on by default there), `1` turns it on elsewhere.
 - **Outputs:**
   - A running web service named `ipl-fantasy-2026` in the operator's
     Render workspace.

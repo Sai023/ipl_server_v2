@@ -157,6 +157,13 @@ After the database line the boot log says which public address the server believ
 `none` = it will take the address of each request), whether the "We've moved" page is on, and a warning for every address setting that is set but unusable (ignored, never fatal):
 `Address: <url> [<source>]; moved page: off|ON -> <url>`. The decisions are made in `logic/origin.py` ([origin.md](origin.md)). `SERVER_VER` is 13.6.
 
+## The server's own ops clock (2026-11-22, Phase 2)
+
+After the scheduler step the boot starts a daemon thread, `routes.ops_clock_loop`, when the service is hosted (or `OPS_APP_CLOCK=1`; `OPS_APP_CLOCK=0` turns it off). It ticks about 3 seconds after
+boot (a visit that wakes a sleeping Render service is the "first touch after a lock": the boot catches a missed handover up at once) and then at the rhythm the tick answers (never more than five
+minutes, never less than five seconds); a failed cycle is logged and retried in a minute. It is deliberately NOT a hook on `/api/poll` or `/api/state`: those paths are held to a fixed
+number of database statements by the hardening tests. See [ops.md](ops.md). `SERVER_VER` is 13.7.
+
 ## HOSTED mode (Phase 11)
 
 `IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")`
