@@ -41,6 +41,7 @@ v1.0.0 (Phase 7): 24 @bp.route handlers in 8 groups.
 Dependency: base.py → routes.py  (routes never imports from server)
 """
 
+import hmac
 import json as _json
 import os
 import re
@@ -119,7 +120,7 @@ from config import (
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, GOOGLE_IDENTITY_VER, FUZZY_MATCH_VER,
-    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS, HANDOFF_VER, ORIGIN_VER,
+    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS, HANDOFF_VER, ORIGIN_VER, OPS_PLAN_VER, OPS_NOTIFY_VER,
 )
 import tasks
 from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
@@ -128,6 +129,8 @@ from logic import competition_import as _ci
 from logic import google_identity as _gid                                    # checks the ID token Google hands the page (Phase 3 sign-in, 2026-11-21)
 from logic import app_handoff as _handoff                                    # one-time codes that carry a signed-in member from the browser into the installed app (2026-11-21)
 from logic import origin as _origin                                          # the app's public address (PUBLIC_BASE_URL) and the "We've moved" switch (plan item 1.10, 2026-11-22)
+from logic import ops_plan as _ops                                           # what the clocks, the Ops card and the admin alerts need to know (Phase 2, 2026-11-22)
+import ops_notify as _notify                                                 # the only code that talks to Telegram (dormant until a bot token is set)
 
 bp = Blueprint("api", __name__)
 
@@ -189,6 +192,8 @@ def api_version():
             "google_identity":    GOOGLE_IDENTITY_VER,
             "app_handoff":        HANDOFF_VER,
             "origin":             ORIGIN_VER,
+            "ops_plan":           OPS_PLAN_VER,
+            "ops_notify":         OPS_NOTIFY_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },
@@ -1722,6 +1727,156 @@ def api_rollover():
         return jsonify(body_for(rep)), (500 if rep.get("error") else 200)
     except LookupError as e:
         return jsonify({"ok": False, "error": str(e), "code": 404}), 404
+
+# ════════════════════════════════════════════════════════════════════════════
+# OPS (Phase 2, 2026-11-22): the tick, the status, the test alert, and the server's own clock
+# ════════════════════════════════════════════════════════════════════════════
+# Several things call the SAME routine: a clock (POST /api/ops/tick, from Supabase, the PC, GitHub) and the server itself (a thread that ticks at boot and then at
+# the rhythm the server sets). The routine is db.reconcile_competition, which is safe to repeat and to run at the same moment from two places (one all-or-nothing
+# transaction per week under a row lock, recorded once in the ledger), so every layer can fire without knowing about the others: whichever gets there first does the
+# work and the rest find nothing due. What to say to the admin, and when, is decided by logic/ops_plan.py; Telegram is ops_notify.py (dormant until configured).
+
+OPS_CLOCK_MAX_SLEEP_S = 300     # the in-server clock never sleeps longer than this, so a schedule stored a moment ago is noticed within five minutes
+
+
+def _ops_caller():
+    """Who is calling an ops route: ("clock", None) with the shared token (OPS_TOKEN, or the existing scheduler token ROLLOVER_TOKEN), ("admin:<name>", None) with an
+    admin session, else (None, an error response). A caller that proves nothing counts against the sign-in rate limit, so a token cannot be guessed."""
+    sent = get_bearer_token() or ""
+    for var in ("OPS_TOKEN", "ROLLOVER_TOKEN"):
+        expected = os.environ.get(var, "").strip()
+        if sent and expected and hmac.compare_digest(sent.encode("utf-8"), expected.encode("utf-8")):
+            return "clock", None
+    name, err = _require_admin()
+    if err:
+        return None, (_check_rate(_auth_limiter) or err)
+    return "admin:" + name, None
+
+
+def _ops_source():
+    """Which clock is calling (?source=supabase|pc|github ...): a short lower-case word, never "app" (that is the server's own clock), else "clock"."""
+    s = (request.args.get("source") or "").strip().lower()
+    return s if re.fullmatch(r"[a-z][a-z0-9_-]{0,19}", s) and s != "app" else "clock"
+
+
+def _ops_alert(snap, now):
+    """Judge the snapshot and send what has to be said. Dormant, and free, until Telegram is set up. Returns how many messages went out."""
+    if not _notify.configured():
+        return 0
+    base_url = _origin.resolve_public_base(os.environ)[0]
+    recent = db.recent_applied(12)
+    messages = db.ops_alert_step(lambda state: _ops.evaluate_alerts(snap, recent, state, now))
+    failed = []
+    for m in messages:
+        text = m["text"] + ((" Open: " + base_url) if base_url and m["kind"] in ("new", "still") else "")
+        ok, detail = _notify.send(text)
+        if not ok:
+            failed.append(m)
+            _log(f"ops alert {m['key']} not sent: {detail}", "warn")
+    if failed:                                                  # a new incident or an event that did not get out is raised again by the next call
+        db.ops_alert_step(lambda state: ([], _ops.forget_unsent(state, failed)))
+    return len(messages) - len(failed)
+
+
+def _ops_run(source, now=None, beat=True):
+    """The one routine every clock calls: apply whatever handover is due for any competition (safe to repeat), leave this clock's heartbeat, judge how things look, and
+    send the alerts that judgement calls for. Returns the report the tick route answers with."""
+    now = _rp.parse_utc(now) or datetime.now(timezone.utc)
+    applied, errors = [], []
+    for st in _ops.build_snapshot(db.ops_competitions(), [], now)["states"]:
+        if not st["due"]:
+            continue
+        try:
+            rep = db.reconcile_competition(st["slug"], now, triggered_by="tick:" + source)
+        except LookupError:
+            continue
+        for a in rep["applied"]:
+            applied.append({"competition": st["slug"], "kind": a["kind"], "to_week": a["to_week"], "members": a["members"], "activated": a["activated"]})
+        if rep["applied"]:
+            _log(f"ops tick {source}: {st['slug']} applied weeks {[a['to_week'] for a in rep['applied']]}")
+            _push_if_hosted(f"rollover:{st['slug']}:w{rep['applied'][-1]['to_week']}")
+        if rep.get("error"):
+            errors.append(f"{st['slug']}: {rep['error']}")
+            _log(f"ops tick {source}: {st['slug']}: {rep['error']}", "error")
+    if beat:
+        what = " | ".join(p for p in (("applied " + ", ".join(f"{a['competition']} week {a['to_week']}" for a in applied)) if applied else "", ("ERROR " + "; ".join(errors)) if errors else "") if p) or "nothing due"
+        try:
+            db.touch_heartbeat("tick:" + source, what, now=now)
+        except Exception as e:
+            _log(f"ops heartbeat: {e}", "error")
+    snap = _ops.build_snapshot(db.ops_competitions(), db.get_heartbeats(), now)
+    sent = 0
+    try:
+        sent = _ops_alert(snap, now)
+    except Exception as e:                                      # an alert that cannot be judged or sent must never fail the handover that has just run
+        _log(f"ops alerts: {type(e).__name__}: {e}", "error")
+    rep = {"ok": not errors, "now": snap["now"], "source": source, "applied": applied, "errors": errors, "mode": snap["rhythm"]["mode"],
+           "next_tick_in_s": snap["rhythm"]["next_tick_in_s"], "health": snap["health"]["level"], "alerts_sent": sent}
+    if errors:
+        rep.update(error="; ".join(errors), code=500)
+    return rep
+
+
+def ops_clock_loop(stop, run=None, first_delay_s=3, max_cycles=None):
+    """The server's own clock (the "app" source), run on a thread by server.py: it ticks once soon after boot (a visit that wakes a sleeping Render service is the "first
+    touch after a lock": the boot catches the handover up at once) and then at the rhythm the server sets (every minute near a lock, never later than five minutes).
+    `stop` is a threading.Event; `run` is for tests; a failed cycle is logged and tried again in a minute."""
+    run = run or (lambda: _ops_run("app"))
+    delay, cycles = first_delay_s, 0
+    while not stop.wait(delay):
+        try:
+            delay = max(5, min(int(run().get("next_tick_in_s") or 60), OPS_CLOCK_MAX_SLEEP_S))
+        except Exception as e:
+            _log(f"ops clock: {type(e).__name__}: {e}", "error")
+            delay = 60
+        cycles += 1
+        if max_cycles is not None and cycles >= max_cycles:
+            return
+
+
+@bp.route("/api/ops/tick", methods=["POST"])
+def api_ops_tick():
+    """A clock calls this (Authorization: Bearer OPS_TOKEN, or the scheduler token ROLLOVER_TOKEN; ?source=supabase|pc|github names it) or an admin does. It applies
+    whatever handover is due, records the heartbeat, sends any alert, and answers how soon to call again (`next_tick_in_s`: 60 near a lock, 1800 otherwise)."""
+    who, err = _ops_caller()
+    if err:
+        return err
+    rep = _ops_run(_ops_source() if who == "clock" else "admin")
+    return jsonify(rep), (200 if rep["ok"] else 500)
+
+
+@bp.route("/api/ops/status", methods=["GET"])
+def api_ops_status():
+    """The Ops card: health, the clocks and their ages, every competition's state with its last handover, and whether Telegram is set up. Admin or the clock token."""
+    who, err = _ops_caller()
+    if err:
+        return err
+    now = datetime.now(timezone.utc)
+    snap = _ops.build_snapshot(db.ops_competitions(), db.get_heartbeats(), now)
+    last = {}
+    for r in db.recent_applied(30):
+        last.setdefault(r["slug"], r)
+    for st in snap["states"]:
+        st["last_run"] = last.get(st["slug"])
+    base_url, base_source = _origin.resolve_public_base(os.environ, request.host)
+    return jsonify({"ok": True, **snap,
+                    "alerts": {"telegram": "configured" if _notify.configured() else "not_configured", "open_incidents": sorted((db.ops_alert_state().get("incidents") or {}))},
+                    "tokens": {"ops_token": bool(os.environ.get("OPS_TOKEN", "").strip()), "scheduler_token": bool(os.environ.get("ROLLOVER_TOKEN", "").strip())},
+                    "address": {"public_base_url": base_url, "source": base_source}})
+
+
+@bp.route("/api/ops/test-alert", methods=["POST"])
+def api_ops_test_alert():
+    """An admin asks for one test message to the Telegram chat ("Send test alert" on the Ops card). Says plainly whether Telegram is set up and what went wrong."""
+    re_ = _check_rate(_write_limiter)
+    if re_:
+        return re_
+    name, err = _require_admin()
+    if err:
+        return err
+    ok, detail = _notify.send(f"TEST: an alert from the Ops card, asked for by {name}.")
+    return jsonify({"ok": ok, "configured": _notify.configured(), "detail": detail})
+
 
 @bp.route("/api/matches-status", methods=["GET"])
 def api_matches_status():

@@ -478,6 +478,17 @@ if __name__ == "__main__":
         tasks.start_daily_discovery_scheduler()
         atexit.register(tasks.stop_scheduler)
 
+    # Phase 2 (2026-11-22): the server's own ops clock. It ticks soon after boot (a visit that wakes a sleeping Render service is the "first touch after a lock":
+    # the boot catches a missed handover up at once) and then at the rhythm the server sets. On by default in HOSTED mode; OPS_APP_CLOCK=1 turns it on anywhere
+    # and OPS_APP_CLOCK=0 turns it off.
+    _clock_env = os.environ.get("OPS_APP_CLOCK", "").strip().lower()
+    if (IS_HOSTED and _clock_env not in ("0", "off", "false", "no")) or _clock_env in ("1", "on", "true", "yes"):
+        from routes import ops_clock_loop
+        threading.Thread(target=ops_clock_loop, args=(threading.Event(),), name="ops-app-clock", daemon=True).start()
+        _log("Ops: the server's own clock is running (a tick soon after boot, then at the rhythm the server sets)")
+    else:
+        _log("Ops: the server's own clock is off (OPS_APP_CLOCK=1 turns it on; it is on by default on a hosted service)")
+
     if args.tunnel and IS_HOSTED:
         _log("HOSTED mode: --tunnel ignored. The host platform already "
              "provides a public URL.")

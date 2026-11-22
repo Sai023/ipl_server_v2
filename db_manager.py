@@ -968,15 +968,68 @@ class DatabaseManager:
         self.update_week_points(competition_id=slug)
         return {"competition": slug, "undone_week": to_week, "kind": row["kind"], "undone_at": now_iso}
 
-    def touch_heartbeat(self, source, detail="") -> None:
-        """Record that something that should be running (the app, a clock, the PC runner) has just run."""
+    def touch_heartbeat(self, source, detail="", now=None) -> None:
+        """Record that something that should be running (the app, a clock, the PC runner) has just run. `now` is for tests; the real clock otherwise."""
+        at = (_plan.parse_utc(now) or datetime.now(timezone.utc)).isoformat()
         with self._write() as con:
             con.execute("INSERT INTO ops_heartbeat (source,last_at,detail) VALUES (%s,%s,%s) ON CONFLICT (source) DO UPDATE SET last_at=EXCLUDED.last_at, detail=EXCLUDED.detail",
-                        (source, datetime.now(timezone.utc).isoformat(), str(detail or "")[:500]))
+                        (source, at, str(detail or "")[:500]))
 
     def get_heartbeats(self) -> list:
         with self._read() as con:
             return [dict(r) for r in con.execute("SELECT source, last_at, detail FROM ops_heartbeat ORDER BY source").fetchall()]
+
+    # ── Ops (Phase 2, 2026-11-22): what the clocks, the status card and the alerts read ─────────────────────────────────────────────
+    def ops_competitions(self) -> list:
+        """Everything logic.ops_plan needs about EVERY competition, from one read transaction: [{slug, name, status, max_weeks, rows, handled, held, auto_activate}].
+        `rows` is the stored lock schedule (empty for a competition that has none), `handled` the weeks in force, `held` the weeks an admin undid."""
+        with self._read() as con:
+            comps = [dict(r) for r in con.execute("SELECT slug, name, status, max_weeks FROM competitions ORDER BY created_at, slug").fetchall()]
+            rows, applied, held = {}, {}, {}
+            for r in con.execute("SELECT competition_id, week_no, lock_at_utc, first_match_utc FROM competition_weeks ORDER BY competition_id, week_no").fetchall():
+                rows.setdefault(r["competition_id"], []).append({"week_no": r["week_no"], "lock_at_utc": r["lock_at_utc"], "first_match_utc": r["first_match_utc"]})
+            for r in con.execute("SELECT competition_id, to_week, undone_at FROM rollover_log").fetchall():
+                (held if r["undone_at"] else applied).setdefault(r["competition_id"], set()).add(r["to_week"])
+            autos = {r["key"][len("auto_activate:"):] for r in con.execute("SELECT key FROM meta WHERE key LIKE %s AND value='1'", ("auto_activate:%",)).fetchall()}
+        for c in comps:
+            s = c["slug"]
+            c.update(rows=rows.get(s, []), handled=sorted(applied.get(s, ())), held=sorted(held.get(s, ())), auto_activate=s in autos)
+        return comps
+
+    def recent_applied(self, limit=12) -> list:
+        """The newest handovers that are in force (an undone one is not), newest first: [{slug, name, kind, to_week, applied_at, triggered_by, members, summary,
+        activated}], `summary` counting what each member's step was (promoted, carried, kept, empty, created_empty ...)."""
+        with self._read() as con:
+            rows = con.execute(
+                "SELECT l.competition_id AS slug, c.name AS name, l.kind, l.to_week, l.applied_at, l.triggered_by, l.members, l.detail_json "
+                "FROM rollover_log l JOIN competitions c ON c.slug = l.competition_id WHERE l.undone_at IS NULL ORDER BY l.applied_at DESC, l.to_week DESC LIMIT %s",
+                (int(limit),)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            detail = _jloads(d.pop("detail_json"), {})
+            summary = {}
+            for e in detail.get("members", []):
+                summary[e.get("action")] = summary.get(e.get("action"), 0) + 1
+            d.update(summary=summary, activated=bool(detail.get("activated")))
+            out.append(d)
+        return out
+
+    OPS_ALERTS_KEY = "ops_alerts"
+
+    def ops_alert_state(self) -> dict:
+        """The remembered alert state (open incidents, announced events), for the status card. Read only."""
+        return _jloads(self.get_meta(self.OPS_ALERTS_KEY, ""), {}) or {}
+
+    def ops_alert_step(self, fn):
+        """One atomic read-modify-write of the alert state under a row lock, so two clocks that call at the same moment cannot both decide to send the same
+        message. `fn(state)` returns (messages, new_state); the new state is stored and `messages` is returned. Nothing slow (no network) may happen inside `fn`."""
+        with self._pool.connection() as con:
+            con.execute("INSERT INTO meta (key,value) VALUES (%s,%s) ON CONFLICT (key) DO NOTHING", (self.OPS_ALERTS_KEY, "{}"))
+            row = con.execute("SELECT value FROM meta WHERE key=%s FOR UPDATE", (self.OPS_ALERTS_KEY,)).fetchone()
+            messages, new_state = fn(_jloads(row["value"], {}) or {})
+            con.execute("UPDATE meta SET value=%s WHERE key=%s", (json.dumps(new_state), self.OPS_ALERTS_KEY))
+        return messages
 
     # ── Rebuild / hydrate (JSON archives) ─────────────────────────────────
     def rebuild_scores_and_points(self, json_dir=None, competition_id=None) -> dict:

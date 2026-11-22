@@ -41,4 +41,7 @@ origin             — normalize_base_url(), resolve_public_base(), moved_target
                      the app's public address (PUBLIC_BASE_URL) and the
                      "We've moved" switch for an old address (see
                      context/origin.md).
+ops_plan           — competition_ops_state(), clock_rhythm(), health(),
+                     evaluate_alerts(): what the clocks, the Ops card and the
+                     admin alerts need to know (see context/ops.md).
 """
