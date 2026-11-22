@@ -36,4 +36,9 @@ session_policy     — new_expiry(), renewed_expiry(); SESSION_TTL_DAYS = 60,
                      SESSION_RENEW_BELOW_DAYS = 30. How long a sign-in lasts
                      and when using the app renews it (see
                      context/session_policy.md).
+origin             — normalize_base_url(), resolve_public_base(), moved_target(),
+                     config_problems(), moved_decision(), moved_page_html():
+                     the app's public address (PUBLIC_BASE_URL) and the
+                     "We've moved" switch for an old address (see
+                     context/origin.md).
 """

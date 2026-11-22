@@ -83,6 +83,7 @@ IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")
 import base as _base
 from base import app, db, _log, BASE_DIR, DATA_DIR, BUDGET_TOTAL, XI_SIZE, MAX_WEEKS
 from config import DB_PATH
+from logic import origin as _origin   # the public address and the "We've moved" switch (plan item 1.10): logged at boot
 import init_db
 import tasks   # v13.3: daily auto-sync scheduler
 
@@ -425,6 +426,10 @@ if __name__ == "__main__":
 
     lan_ip = get_lan_ip(); tunnel = None
     _log("Database: Postgres (DATABASE_URL)")
+    _pub, _pub_src = _origin.resolve_public_base(os.environ)
+    _log(f"Address: {_pub or 'not set (each request tells its own)'} [{_pub_src}]; moved page: {('ON -> ' + _origin.moved_target(os.environ)) if _origin.moved_target(os.environ) else 'off'}")
+    for _problem in _origin.config_problems(os.environ):
+        _log("Address setting: " + _problem, "warn")
     _log(f"Season: {MAX_WEEKS} weeks | Budget: {BUDGET_TOTAL:.0f} CR | XI: {XI_SIZE}")
 
     # v13.4 (Phase 1+2): In HOSTED mode, pull latest committed data before

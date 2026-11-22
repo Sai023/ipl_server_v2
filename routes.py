@@ -119,7 +119,7 @@ from config import (
     SERVER_VER, ROUTES_VER, DB_VER, SCRAPER_VER, INIT_DB_VER, TASKS_VER,
     SEED_MATCHES_VER,
     SCORING_ENGINE_VER, ROLLOVER_ENGINE_VER, ROLLOVER_PLAN_VER, SESSION_POLICY_VER, GOOGLE_IDENTITY_VER, FUZZY_MATCH_VER,
-    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS, HANDOFF_VER,
+    CRICBUZZ_DISCOVERY_VER, MAX_MEMBERS, HANDOFF_VER, ORIGIN_VER,
 )
 import tasks
 from logic.rollover_engine import last_monday_deadline, selections_locked   # the old Monday-14:00 rules: only for a competition with NO stored lock schedule
@@ -127,6 +127,7 @@ from logic import rollover_plan as _rp                                       # t
 from logic import competition_import as _ci
 from logic import google_identity as _gid                                    # checks the ID token Google hands the page (Phase 3 sign-in, 2026-11-21)
 from logic import app_handoff as _handoff                                    # one-time codes that carry a signed-in member from the browser into the installed app (2026-11-21)
+from logic import origin as _origin                                          # the app's public address (PUBLIC_BASE_URL) and the "We've moved" switch (plan item 1.10, 2026-11-22)
 
 bp = Blueprint("api", __name__)
 
@@ -166,8 +167,13 @@ def _comp_cfg(slug):
 
 @bp.route("/api/version", methods=["GET"])
 def api_version():
+    base_url, base_source = _origin.resolve_public_base(os.environ, request.host)
     return jsonify({
         "ok": True, "app_version": APP_VERSION,
+        # where this server believes it lives (PUBLIC_BASE_URL, else the platform's own address, else the one this request came to), the new address if this is an
+        # OLD address that has been switched to the "We've moved" page, and any setting that is set but unusable (ignored, never fatal)
+        "public_base_url": base_url, "public_base_source": base_source,
+        "moved_to": _origin.moved_target(os.environ), "origin_problems": _origin.config_problems(os.environ),
         "modules": {
             "server":             SERVER_VER,
             "routes":             ROUTES_VER,
@@ -182,6 +188,7 @@ def api_version():
             "session_policy":     SESSION_POLICY_VER,
             "google_identity":    GOOGLE_IDENTITY_VER,
             "app_handoff":        HANDOFF_VER,
+            "origin":             ORIGIN_VER,
             "fuzzy_match":        FUZZY_MATCH_VER,
             "cricbuzz_discovery": CRICBUZZ_DISCOVERY_VER,   # Phase 9
         },

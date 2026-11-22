@@ -24,6 +24,7 @@ import collections
 import hashlib as _hashlib
 import json as _json
 import logging as _logging
+import os
 import re
 import secrets as _secrets
 import threading
@@ -35,6 +36,7 @@ from werkzeug.exceptions import HTTPException
 from db_manager import DatabaseManager, NO_PIN  # noqa: F401  (NO_PIN is re-exported for routes.py)
 from config import DATABASE_URL, BASE_DIR, DATA_DIR  # paths + DB DSN — single source of truth
 from logic.fuzzy_match import _SEMANTIC_MAP  # single source — was duplicated here
+from logic import origin as _origin           # the app's public address and the "We've moved" switch (plan item 1.10)
 
 # ── Paths / Game constants ──────────────────────────────────────────────────────────
 
@@ -207,6 +209,30 @@ app = Flask(
     static_url_path="/static",
 )
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
+
+
+# ── The "We've moved" gate (plan item 1.10, 2026-11-22) ─────────────────────────────────────────────────────────────────────────────────
+# If the app's address ever changes, the OLD service is redeployed with MOVED_TO_URL set to the new address: every link then opens a "We've moved" page and
+# every API call except /api/ping, /api/health and /api/version answers 410 (reason "moved"). Everything else is decided in logic/origin.py (pure, tested).
+# While the variable is not set (the normal case) this costs one dictionary lookup and changes nothing. It runs BEFORE the routes and the error handlers; the
+# security headers in _security_headers below still go out with its answers.
+
+@app.before_request
+def _moved_gate():
+    moved_to = _origin.moved_target(os.environ)
+    if not moved_to:
+        return None
+    own = {_origin.origin_of_host(request.host)}          # the address THIS request came to (never the configured one: one service may answer an old and a new hostname)
+    what = _origin.moved_decision(request.method, request.path, moved_to, own)
+    if what == "page":
+        resp = Response(_origin.moved_page_html(moved_to), mimetype="text/html")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    if what == "gone":
+        resp = jsonify(_origin.moved_gone_body(moved_to))
+        resp.status_code = 410
+        return resp
+    return None
 
 
 # ── Flask error handling + middleware ────────────────────────────────────────────────
