@@ -281,7 +281,7 @@ Direct 1:1 with [user_capabilities.md](user_capabilities.md):
 | §1.1 Register (Phase 12) | `_buildLoginCard` + `_doRegister` |
 | §1.2 Login (Phase 12) | `attemptLogin` → `_showPasscodePromptModal` → `_submitPasscode` → `_establishSession` |
 | §1.3 Reset Passcode (Phase 12) | header "🔑 Reset Passcode" → `_showResetPasscodeModal(false)`; forced variant auto-opened from `_establishSession` when `must_change=1` |
-| §1.4 Switch user | `logout()` + Switch user button (also clears `ipl_session_token`) |
+| §1.4 Sign out | `logout()` + the "Sign out" menu item (also clears `ipl_session_token`; since 2.26.0 also drops a history request still on its way) |
 | §8.6 Member Passcodes (Admin, Phase 12) | `_buildAdminPasscodesCard` + `_adminResetPasscode` |
 | §3 Match Centre | delegated to `mc_hub.js` |
 | §4.1 This Week XI | `_buildThisWeekCard` + `_buildPitchView` |

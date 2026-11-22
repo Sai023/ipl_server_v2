@@ -39,6 +39,9 @@
 > `POST /api/admin/joining {open}`; the claim payload carries `join: {allowed, why}`; `GET /api/admin/members` carries `joining_open`, `member_count`, `member_cap`; `POST /api/register`
 > answers 403 `register_closed` while Google sign-in is on (it works as before while it is off). New reasons: `register_closed`, `joining_closed`, `members_full`.
 >
+> **Sign-in UX pass (2026-11-22, routes 1.19.0, app 2.26.0).** `GET /api/auth/config` also carries `pin_members` (the names of the members who still have a passcode: `db.list_pin_members()`), so the
+> sign-in card offers a passcode chip only to them. Nothing else on the server changed (see [google_signin.md](google_signin.md), "The sign-in UX pass").
+>
 > **Sign in from the app, step 4 (2026-11-21, routes 1.18.0, app 2.25.0).** The Android app cannot sign in with Google itself (a WebView), so the browser hands the member back with a one-time code:
 > new `POST /api/auth/handoff {challenge}` (the browser's session asks for a single-use two-minute code bound to the member and the app's challenge) and `POST /api/auth/handoff/redeem
 > {code, verifier}` (the app proves it holds the secret and gets its OWN new session). New reason `handoff_expired`; `/api/version` lists the module `app_handoff` (`logic/app_handoff.py`).
@@ -126,7 +129,7 @@ Phase 7.
 | 1.5 | Auth | `/api/register` | POST | Phase 12 — create a new member with display name + 4-digit passcode. Returns `{ok, name, token, must_change:false, is_admin:false}`. **Since 2.24.0 it answers 403 `register_closed` while Google sign-in is on** (a new member joins with Google: `/api/auth/join`); it is the fallback while Google is off. |
 | 1.5 | Auth | `/api/login` | POST | Phase 12 — verify passcode, issue a 60-day bearer token (renewed while used). Returns `{ok, name, token, must_change, is_admin}`. Generic 401 hides unknown-user vs wrong-passcode. |
 | 1.5 | Auth | `/api/whoami` | GET | Phase 12 — validate the bearer token. Used by the bootstrap to decide whether to auto-login or drop to the login card. Also `linked` (a Google account is linked), `email_masked` (`s***@gmail.com`) and `pin_enabled` (2026-11-21). |
-| 1.6 | Google | `/api/auth/config` | GET | **(2026-11-21)** Is Google sign-in set up (`google.enabled`, and our public `client_id`), and does anybody still use a passcode (`pin_enabled`)? |
+| 1.6 | Google | `/api/auth/config` | GET | **(2026-11-21)** Is Google sign-in set up (`google.enabled`, and our public `client_id`), does anybody still use a passcode (`pin_enabled`), and (2.26.0) who: `pin_members`, the sorted names of the members who still have a passcode (names only). |
 | 1.6 | Google | `/api/auth/nonce` | GET | A single-use, ten-minute nonce for ONE sign-in attempt (the page gives it to Google, which signs it into the token). Own rate limit (60/min). |
 | 1.6 | Google | `/api/auth/google` | POST | Sign in: `{credential, nonce}`. A linked member gets a session like `/api/login`; a good Google account nobody has linked answers `{linked:false, claim:{ticket, expires_in, email_masked, members}}` and no session (2.23.0). Reasons: `token_invalid`, `token_expired`, `nonce_invalid`, `email_unverified`, `google_unreachable`, `google_not_configured`, `claim_locked`. |
 | 1.6 | Google | `/api/auth/claim` | POST | **(2026-11-21)** `{ticket, name, passcode}`: the member proves who they are ONCE; the account is linked and the passcode retired in one transaction; they are signed in (`claimed:true`). 401 `claim_expired`, 429 `claim_locked`, 409 `member_taken` / `temp_passcode`, 401 `bad_credentials` (+ `attempts_left`), 404 `member_not_found`, 400 `credentials_required`. Shares the 60/min sign-in limiter. |

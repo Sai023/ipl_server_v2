@@ -65,8 +65,8 @@ backend context file should map its work back to one of these capabilities.
   modal opens automatically right after login, has no × close button, and
   blocks the rest of the UI until a new passcode is set.
 
-### 1.4 Switch user / log out
-- **What:** "Switch user" button in the header bar.
+### 1.4 Sign out (was "Switch user" until 2.26.0)
+- **What:** "Sign out" in the account menu (the avatar; "More" on a phone). The label said "Switch user" before, but it only ever signed out.
 - **Effect:** clears `_username`, drops `ipl_session_token` from
   `localStorage`, calls `IplApi.logoutClearToken()`, and re-renders the
   login screen. The bearer token stays valid server-side until the next

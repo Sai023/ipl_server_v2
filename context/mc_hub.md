@@ -114,6 +114,12 @@ That means a scraper run that updates state guarantees the next visit
 to the Match Centre tab re-fetches fresh data, no manual refresh
 required.
 
+**Update (2.26.0, 2026-11-22).** The event now marks the cache stale instead (the numbers stay on screen: no spinner flash) and, when the Matches tab is the open one, **asks again at
+once**. The page's own `ipl:state-updated` listener runs first and redraws, which may start the request; this listener then cancels that request as older than the update. It used to
+wait for "the next render", which never came after the Android app returned from the browser sign-in: "Loading Match Centre" for ever, until the member switched tabs. Also new:
+`_mcFailed` (the request failed or said "not ok": an error card with Try again, nothing is retried by an ordinary redraw so a server in trouble is not hammered, and `ipl:recovered` asks
+again by itself; with numbers already on screen a failure stays quiet), `_mcSlow` (no answer for `MC_SLOW_MS` = 25 s and nothing to show: the spinner says the server may be waking up and
+offers Try again; the answer, if it still comes, is shown), `window._mcRetry()`. A reply is dropped when its sequence number is no longer the newest (`_mcSeq`).
 ### 8. Idempotent style injection
 `_injectTabStyles()` checks for `#ipl-tab-styles` before adding the
 `<style>` element. Safe to call multiple times.
