@@ -151,6 +151,12 @@ Hardcoded `WIDE = 64`. Every line is padded to that width — purely
 cosmetic, but worth knowing because long Cloudflare URLs wrap across
 multiple banner lines via the `range(0, len(url), WIDE-4)` chunker.
 
+## The address line (2026-11-22, plan item 1.10)
+
+After the database line the boot log says which public address the server believes it has and where that came from (`env` = `PUBLIC_BASE_URL`, `platform` = Render's own address,
+`none` = it will take the address of each request), whether the "We've moved" page is on, and a warning for every address setting that is set but unusable (ignored, never fatal):
+`Address: <url> [<source>]; moved page: off|ON -> <url>`. The decisions are made in `logic/origin.py` ([origin.md](origin.md)). `SERVER_VER` is 13.6.
+
 ## HOSTED mode (Phase 11)
 
 `IS_HOSTED = os.environ.get("HOSTED", "").lower() in ("true", "1", "yes")`

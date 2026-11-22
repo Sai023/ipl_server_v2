@@ -69,6 +69,11 @@ The container itself just runs Flask.
     - `GOOGLE_CLIENT_ID` (2026-11-21, Google sign-in; set in the Render dashboard, NOT in this file) — the OAuth Web client id from the Google Cloud console
       (`....apps.googleusercontent.com`). It is public by design, not a secret. Unset means Google sign-in is off and the app behaves as before. See
       [google_signin.md](google_signin.md).
+    - `PUBLIC_BASE_URL` (2026-11-22, optional; set in the Render dashboard, NOT in this file) — the app's own address as an origin, e.g. `https://league.example.org` (https, host, no
+      path). Unset: the app uses the address Render gives every web service (`RENDER_EXTERNAL_URL`, set by Render itself), so nothing breaks without it. Set it when a custom
+      domain is added (`RENDER_EXTERNAL_URL` does not follow a custom domain). `/api/version` shows what the server believes. See [origin.md](origin.md).
+    - `MOVED_TO_URL` (2026-11-22; set ONLY on an old service after a move) — the new address: every link there becomes a "We've moved" page and the API answers 410. A typo is
+      ignored and reported in `/api/version` (`origin_problems`). See [move_plan.md](move_plan.md).
 - **Outputs:**
   - A running web service named `ipl-fantasy-2026` in the operator's
     Render workspace.

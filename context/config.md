@@ -37,7 +37,7 @@ Python's standard library (`pathlib`).
   - **Versions:** `APP_VERSION` plus a version pin per script
     (`SERVER_VER`, `ROUTES_VER`, `DB_VER`, `SCRAPER_VER`, `TASKS_VER`,
     `INIT_DB_VER`, `SEED_MATCHES_VER`, `SCORING_ENGINE_VER`,
-    `ROLLOVER_ENGINE_VER`, `ROLLOVER_PLAN_VER`, `FUZZY_MATCH_VER`, `CRICBUZZ_DISCOVERY_VER`)
+    `ROLLOVER_ENGINE_VER`, `ROLLOVER_PLAN_VER`, `FUZZY_MATCH_VER`, `CRICBUZZ_DISCOVERY_VER`, `ORIGIN_VER` (2026-11-22))
   - **`VERSION_MAP`:** a human-readable changelog of every phase the app has been through.
 
 ## Key business rules it enforces
