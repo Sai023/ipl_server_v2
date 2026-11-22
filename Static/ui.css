@@ -111,6 +111,9 @@
 /* joining with Google: the "I'm new here" choice and the display-name box */
 .claim-or { display: flex; align-items: center; gap: var(--sp-3); margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 .claim-or::before, .claim-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+/* the sign-in card: the newcomer hint sits right under the Google button; the "or use your passcode" divider comes only with the passcode names */
+.login-hero .login-new { margin: -8px 0 0; }   /* (the Google block reserves a status line under the button: the hint sits close to the button, not below an empty line) */
+.google-or + .login-member-chips { margin-top: 12px; }
 .claim-new { border-style: dashed; }
 .claim-join { margin: var(--sp-2) 0; text-align: center; }
 .claim-name-input { width: 100%; max-width: 320px; box-sizing: border-box; min-height: 48px; padding: 10px 14px; font: inherit; font-size: 16px; text-align: center; color: var(--text); background: var(--sheet-2); border: 1.5px solid var(--border-strong); border-radius: var(--r-hand-sm); }

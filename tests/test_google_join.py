@@ -89,6 +89,11 @@ class JoiningOnTheRealRoutes(unittest.TestCase):
         self.assertEqual(self.r("b_identity_db"), [{"subject": "g-join-one", "member": "Nina", "email": "person.one@gmail.com"}])
         self.refused("b_pin_login", 401, "pin_retired")
 
+    def test_the_sign_in_card_offers_no_passcode_chip_to_a_member_who_has_no_passcode(self):
+        c = self.r("b_config")["body"]
+        self.assertEqual(c["pin_members"], ["Moe", "Sai"], "Nina joined with Google: there is no passcode for a chip to ask for")
+        self.assertTrue(c["pin_enabled"])
+
     def test_the_new_member_is_part_of_the_league(self):
         self.assertGreaterEqual(self.r("b_selection_rows"), 1, "an (empty) team row exists, like for every member")
         self.assertTrue(self.r("b_state_has_member"))

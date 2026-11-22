@@ -29,15 +29,67 @@
   var _mcComp    = '';
   var _mcUser    = '';
   var _mcStale   = false;   // true: _mcData is still shown while a newer copy is fetched in the background
-  var _mcLoading = false;
+  var _mcLoading = false;   // a request is in flight
+  var _mcFailed  = false;   // the last request failed (or said "not ok"): no automatic retry from an ordinary render; with nothing on screen an error card offers Try again
+  var _mcSlow    = false;   // the request in flight has not answered for MC_SLOW_MS and there is nothing to show: the spinner says so and offers Try again
   var _mcSeq     = 0;
+  var MC_SLOW_MS = 25000;   // a sleeping server can take most of a minute: that is "slow", not "failed"; the answer, if it still comes, is shown
 
   function _curComp() { try { return (window.IplComp && IplComp.get && IplComp.get()) || ''; } catch (e) { return ''; } }
-  function _mcReset()     { _mcData = null; _mcComp = ''; _mcUser = ''; _mcStale = false; _mcLoading = false; _mcSeq++; }
-  // New scores or a refresh: keep showing what we have (no spinner flash) and fetch it again quietly.
-  function _mcMarkStale() { _mcStale = true; _mcLoading = false; _mcSeq++; }
+  function _mcReset()     { _mcData = null; _mcComp = ''; _mcUser = ''; _mcStale = false; _mcLoading = false; _mcFailed = false; _mcSlow = false; _mcSeq++; }
+  function _mcShowing()   { return !!(window._state && window._activeTab === 'match-centre'); }
+  function _mcRepaint()   { if (_mcShowing()) render(window._state); }
+
+  // Ask the server for the Match Centre of the competition and member on screen (never two requests at once). The answer repaints the page.
+  function _mcFetch() {
+    var user = window._username;
+    if (!user || _mcLoading) return;
+    var comp = _curComp();
+    _mcLoading = true; _mcFailed = false; _mcSlow = false;
+    var seq = ++_mcSeq;
+    var slow = setTimeout(function () {                           // no answer yet and nothing to show: say so, keep waiting
+      if (seq === _mcSeq && _mcLoading && !_mcData) { _mcSlow = true; _mcRepaint(); }
+    }, MC_SLOW_MS);
+    function failed(why) {
+      clearTimeout(slow);
+      if (seq !== _mcSeq) return;
+      if (why) console.warn('[MC] fetch failed:', why);
+      _mcLoading = false; _mcSlow = false; _mcFailed = true; _mcComp = comp; _mcUser = user;   // with numbers on screen this stays quiet (no error card over good data)
+      _mcRepaint();
+    }
+    IplApi.getMatchCentre(user).then(function (d) {
+      clearTimeout(slow);
+      if (seq !== _mcSeq) return;                                 // reset, competition switch or a newer update since this request was made: the answer is stale
+      if (!(d && d.ok)) { failed('not ok'); return; }
+      _mcLoading = false; _mcSlow = false; _mcFailed = false;
+      _mcData = d; _mcComp = comp; _mcUser = user; _mcStale = false;
+      _mcRepaint();
+    }, function (err) { failed(err && err.message ? err.message : String(err)); });
+  }
+
+  // New scores or a refresh: keep showing what we have (no spinner flash) and fetch it again quietly. The page's own "state-updated" listener runs BEFORE this one and RENDERS, which
+  // may have started (or found in flight) a request: that request is older than this update, so it is cancelled here and must be made again NOW. Waiting for "the next render"
+  // left the spinner for good (seen on a phone, 2026-11-22). With another tab open nothing is fetched: opening the Matches tab renders, and renders ask.
+  function _mcMarkStale() {
+    _mcStale = true; _mcFailed = false; _mcSlow = false;
+    if (_mcLoading) { _mcLoading = false; _mcSeq++; }
+    if (_mcShowing()) _mcFetch();
+  }
+  // The server is back after trouble: a Match Centre that failed asks again by itself.
+  function _mcRecovered() {
+    if (!_mcFailed) return;
+    _mcFailed = false;
+    if (_mcShowing()) { _mcFetch(); _mcRepaint(); }
+  }
+  // "Try again" on the error card or on a slow spinner: abandon whatever is running and ask once more.
+  window._mcRetry = function () {
+    if (_mcLoading) { _mcLoading = false; _mcSeq++; }
+    _mcFailed = false; _mcSlow = false;
+    _mcFetch(); _mcRepaint();
+  };
 
   window.addEventListener('ipl:state-updated', _mcMarkStale);
+  window.addEventListener('ipl:recovered',     _mcRecovered);
   window.addEventListener('ipl:comp-changed',  _mcReset);   // switching competition must never leave the previous one's Match Centre on screen
 
   // ── Responsive tab nav (Phase 9.5) ───────────────────────────────────────
@@ -412,34 +464,24 @@
            + '<p class="empty">Log in to view your Match Centre.</p></div>';
     }
     var comp = _curComp(), user = window._username;
-    if (_mcData && (_mcComp !== comp || _mcUser !== user)) _mcReset();   // another competition or member: never show it
+    if ((_mcData || _mcFailed) && (_mcComp !== comp || _mcUser !== user)) _mcReset();   // another competition or member: never show it (or its error)
     if (_mcData && !_mcStale) return _renderHub(_mcData);
 
-    if (!_mcLoading) {
-      _mcLoading = true;
-      var seq = ++_mcSeq;
-      IplApi.getMatchCentre(user)
-        .then(function (d) {
-          if (seq !== _mcSeq) return;   // reset or competition switch since this request was made: the answer is stale
-          _mcLoading = false;
-          if (d && d.ok) {
-            _mcData = d;
-            _mcComp = comp;
-            _mcUser = user;
-            _mcStale = false;
-            if (window._state && window._activeTab === 'match-centre') {
-              render(window._state);
-            }
-          }
-        })
-        .catch(function (err) {
-          if (seq !== _mcSeq) return;
-          _mcLoading = false;
-          console.warn('[MC] fetch failed:', err && err.message ? err.message : err);
-        });
-    }
+    if (!_mcLoading && !_mcFailed) _mcFetch();   // (a failed request is not asked again by every render: that would hammer a server that is in trouble)
 
-    if (_mcData) return _renderHub(_mcData);   // a stale copy for this competition and member stays on screen while the fresh one loads
+    if (_mcData) return _renderHub(_mcData);   // a stale copy for this competition and member stays on screen while the fresh one loads (or after a refresh failed)
+    if (_mcFailed) {
+      return '<div id="match-centre-tab" class="card" style="min-height:160px">'
+           + (window.Ui ? Ui.stateHtml('error', { title: 'Could not load the Match Centre', message: 'Check your connection and try again.', retry: '_mcRetry()', retryLabel: 'Try again' })
+                        : '<p class="empty">Could not load the Match Centre. <button type="button" onclick="_mcRetry()">Try again</button></p>')
+           + '</div>';
+    }
+    if (_mcSlow) {   // still waiting after a long time (a sleeping server): the spinner stays, because the request is still running, and says why it is taking long
+      return '<div id="match-centre-tab" class="card" style="min-height:160px">'
+           + (window.Ui ? Ui.stateHtml('loading', { title: 'Still loading the Match Centre\u2026', message: 'The server may be waking up. This can take up to a minute.', retry: '_mcRetry()', retryLabel: 'Try again' })
+                        : '<p class="empty">Still loading the Match Centre\u2026 <button type="button" onclick="_mcRetry()">Try again</button></p>')
+           + '</div>';
+    }
     return '<div id="match-centre-tab" class="card" style="min-height:160px">'
          + '<div class="mm-loading"><div class="ui-spinner" aria-hidden="true"></div>Loading Match Centre\u2026</div>'
          + '</div>';

@@ -153,6 +153,7 @@ out["c_moe_db_after_refusals"] = sql("SELECT passcode_hash FROM members WHERE us
 out["c_buddy_pin_login"] = call("POST", "/api/login", None, {"name": "Buddy", "passcode": "1234"})
 out["c_buddy_whoami"] = call("GET", "/api/whoami", "tok-buddy")
 out["c_config_still_pin"] = call("GET", "/api/auth/config")
+out["c_pin_names_db"] = [r["username"] for r in sql("SELECT username FROM members WHERE passcode_hash <> '-' ORDER BY lower(username), username")]
 
 # conflicts
 out["c_buddy_takes_moes_account"] = link("tok-buddy", "g-moe", "moe.test@gmail.com")
@@ -218,6 +219,7 @@ for who in ("Sai", "Buddy", "Zed"):
     link(sess, "g-" + who.lower(), who.lower() + ".test@gmail.com")
 out["g_pins_left"] = sql("SELECT username FROM members WHERE passcode_hash <> '-' ORDER BY username")
 out["g_config"] = call("GET", "/api/auth/config")
+out["g_config_keys"] = sorted(out["g_config"]["body"])
 
 # ── H. the sign-in budget (last: it uses the limiter up) ────────────────────────────────────────────────────────────────────────────────────
 base._auth_limiter._max = 5

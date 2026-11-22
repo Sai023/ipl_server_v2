@@ -12,7 +12,9 @@
      ipl:google-signed-in   detail = the server's reply for a linked member (name, token, is_admin ...): the page establishes the session
      ipl:google-claimed     detail = the same reply, when the member was just linked by claiming their name (fired right after ipl:google-signed-in: the page may say so)
      ipl:google-linked      detail = the reply of a successful switch (the member's passcode is now retired)
-     ipl:google-config      the first answer of /api/auth/config arrived and Google sign-in IS available: the page redraws its sign-in card once
+     ipl:google-config      an answer of /api/auth/config arrived and Google sign-in IS available: the page redraws its sign-in card (the first answer, and each refresh)
+     ipl:google-unavailable the answer says Google sign-in is not available, or no answer came (the request failed, or took longer than 4 s): the page redraws its card, which
+                            shows the passcode choices (until then it only says it is getting ready, instead of drawing the wrong card for a moment)
    The DOM work lives in `view` (swapped out by the tests); the logic is everything else. ES5 on purpose, like the other page files. */
 (function (window) {
   "use strict";
@@ -22,7 +24,9 @@
   var NONCE_MAX_AGE_MS = 8 * 60 * 1000;          // the server keeps a nonce 10 minutes: ask for a fresh one a little before
   var LS_LINKED = "ipl_linked";
 
-  var cfg = null, cfgP = null;                    // what /api/auth/config said
+  var cfg = null, cfgP = null;                    // what /api/auth/config said, and a request for it in flight
+  var cfgStale = false, cfgDown = false, cfgTimer = null;   // stale: the passcode names may have changed (asked again in the background); down: no answer came (the card falls back to passcodes)
+  var CONFIG_WAIT_MS = 4000;                      // the sign-in card waits this long for the first answer before it shows the passcode choices
   var account = null;                             // {linked, emailMasked, pinEnabled} of the signed-in member
   var nonce = null, nonceAt = 0, nonceP = null;   // the unspent nonce, when we got it, and a request in flight
   var gisP = null;                                // loading Google's library
@@ -51,20 +55,43 @@
   }
 
   // ── what the server says is set up ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  // {enabled, clientId, pinEnabled}. Cached; a failed request is not cached, so the next try asks again.
+  // {enabled, clientId, pinEnabled, pinMembers}. What is known is answered at once; a stale answer is asked for again in the background. A failed first request is not cached,
+  // so the next try asks again.
   function config() {
-    if (cfg) return Promise.resolve(cfg);
+    if (cfg) { if (cfgStale) fetchConfig().then(function () {}, function () {}); return Promise.resolve(cfg); }
+    return fetchConfig();
+  }
+  function stopConfigTimer() { if (cfgTimer) { clearTimeout(cfgTimer); cfgTimer = null; } }
+  function fetchConfig() {
     if (cfgP) return cfgP;
+    var had = cfg;
+    // The sign-in card draws nothing wrong while it waits, but it does not wait for ever: after a few seconds it falls back to the passcode choices.
+    if (!had && !cfgTimer) cfgTimer = setTimeout(function () { cfgTimer = null; if (!cfg && !cfgDown) { cfgDown = true; fire("ipl:google-unavailable"); } }, CONFIG_WAIT_MS);
     cfgP = api().authConfig().then(function (d) {
       var g = (d && d.google) || {};
-      cfg = { enabled: !!(g.enabled && g.client_id), clientId: g.client_id || null, pinEnabled: !(d && d.pin_enabled === false) };
-      cfgP = null;
-      if (cfg.enabled) fire("ipl:google-config", cfg);
+      // pinMembers: the names who can still sign in with a passcode (the card offers a chip to these only). null = the server did not say (an older server): offer everybody.
+      var pm = d && Array.isArray(d.pin_members) ? d.pin_members.filter(function (n) { return typeof n === "string"; }) : null;
+      cfg = { enabled: !!(g.enabled && g.client_id), clientId: g.client_id || null, pinEnabled: !(d && d.pin_enabled === false), pinMembers: pm };
+      cfgP = null; cfgStale = false; cfgDown = false; stopConfigTimer();
+      fire(cfg.enabled ? "ipl:google-config" : "ipl:google-unavailable", cfg);
       return cfg;
-    }, function (e) { cfgP = null; throw e; });
+    }, function (e) {
+      cfgP = null; cfgStale = false; stopConfigTimer();
+      if (had) return had;                         // a refresh that failed: carry on with what was known
+      if (!cfgDown) { cfgDown = true; fire("ipl:google-unavailable"); }
+      throw e;
+    });
     return cfgP;
   }
-  function forgetConfig() { cfg = null; }        // after a switch: whether anybody still has a passcode may have changed
+  // After a sign-in, a switch or a join the passcode names may have changed. What is known stays (the card must not flash back to the passcode-only card while the answer is asked
+  // for again); the member who just switched or joined is dropped from the names at once, because they have no passcode now.
+  function forgetConfig(name) {
+    cfgStale = true;
+    if (cfg && name && cfg.pinMembers) {
+      cfg.pinMembers = cfg.pinMembers.filter(function (n) { return n !== name; });
+      cfg.pinEnabled = cfg.pinMembers.length > 0;
+    }
+  }
 
   // ── the browser we are in ──────────────────────────────────────────────────────────────────────────────────────────────────────────
   // Google refuses sign-in inside the built-in browser of other apps and inside an Android WebView (the old BCL Fantasy app is one). {blocked, app}
@@ -166,7 +193,7 @@
       }
       remember(true);
       account = { linked: true, emailMasked: (d && d.email_masked) || null, pinEnabled: false };
-      forgetConfig();
+      forgetConfig(d && d.name);
       fire(ctx.mode === "link" ? "ipl:google-linked" : "ipl:google-signed-in", d);
       if (ctx.done) ctx.done(d);
     }, function (err) {
@@ -198,7 +225,7 @@
       sheet.close();
       remember(true);
       account = { linked: true, emailMasked: (d && d.email_masked) || null, pinEnabled: false };
-      forgetConfig();
+      forgetConfig(d && d.name);
       fire("ipl:google-signed-in", d);
       fire("ipl:google-claimed", d);
       if (ctx.done) ctx.done(d);
@@ -229,7 +256,7 @@
       sheet.close();
       remember(true);
       account = { linked: true, emailMasked: (d && d.email_masked) || null, pinEnabled: false };
-      forgetConfig();
+      forgetConfig(d && d.name);
       fire("ipl:google-signed-in", d);
       fire("ipl:google-joined", d);
       if (ctx.done) ctx.done(d);
@@ -384,14 +411,15 @@
   function loginBlockHtml() { return (cfg && cfg.enabled) ? view.loginBlockHtml() : ""; }
   // After every draw of the page: put the button into the sign-in card (the card is rebuilt on each draw, so the button is drawn again; its nonce is reused).
   function afterRender() {
-    if (!cfg) { if (!cfgP) config().then(function () {}, function () {}); return; }
+    if (!cfg) { config().then(function () {}, function () {}); return; }
+    if (cfgStale) config().then(function () {}, function () {});       // the passcode names may be out of date: ask again; the card is drawn from what is known meanwhile
     if (!cfg.enabled) return;
     var host = document.getElementById("google-signin");
     if (host) mount(host, "signin", null);
   }
   // A signed-in member with a passcode switches to Google.
   function openSwitch() {
-    var sheet = view.sheet({ title: "Switch to Google sign-in", message: "From now on you sign in with Google: no passcode to remember. Two taps. Your passcode is retired once it works, and the old Android app (which cannot sign in with Google) will need Chrome instead.", secondary: "Not now" });
+    var sheet = view.sheet({ title: "Switch to Google sign-in", message: "From now on you sign in with Google: no passcode to remember. Two taps. Your passcode is retired once it works. If you use the BCL Fantasy app, it needs version 1.5 or later: it signs in with Google through your browser.", secondary: "Not now" });
     mount(sheet.slot, "link", function (d) {
       sheet.finish("Done: " + ((d && d.email_masked) || "your Google account") + ". Your passcode is retired. On a new phone, just sign in with Google.");
     });
@@ -419,9 +447,11 @@
   function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
   function wrapOf(host) { var w = host && host.parentNode; return (w && w.classList && w.classList.contains("google-slot-wrap")) ? w : null; }
   var view = {
+    // (the "or use your passcode" divider is not part of the block: it belongs to the passcode names, so the page draws it only when there are any;
+    // it used to be here, which showed it twice once the page also drew it, and left it hanging above nothing when nobody has a passcode)
     loginBlockHtml: function () {
       return '<div class="google-block"><div class="google-slot-wrap"><div id="google-signin" class="google-slot"></div>' +
-             '<div class="google-status" role="status" aria-live="polite"></div></div><div class="google-or"><span>or use your passcode</span></div></div>';
+             '<div class="google-status" role="status" aria-live="polite"></div></div></div>';
     },
     renderButton: function (host, g) {
       var w = 320; try { w = Math.max(200, Math.min(380, Math.round(host.getBoundingClientRect().width) || 320)); } catch (e) {}
@@ -562,21 +592,21 @@
         '<div class="claim-pin" hidden><label class="claim-pin-label" for="claim-passcode">Passcode for <b class="claim-who"></b></label>' + pinHtml + "</div>" +
         (canJoin ? '<div class="claim-join" hidden><label class="claim-pin-label" for="claim-newname">Your name</label>' +
                    '<input id="claim-newname" class="claim-name-input" type="text" maxlength="30" autocomplete="nickname" autocapitalize="words" enterkeyhint="done" placeholder="e.g. Sam" aria-describedby="claim-status">' +
-                   '<p class="claim-hint">This is how you appear in the league. You sign in with Google: there is no passcode to choose.</p></div>' : "") +
+                   '<p class="claim-hint">This is how you appear in the league, and it can\u2019t be changed later. You sign in with Google: there is no passcode to choose.</p></div>' : "") +
         '<div id="claim-status" class="google-status" role="status" aria-live="polite"></div>' +
-        '<div class="ui-sheet-actions">' + (can ? '<button type="button" class="btn btn-teal" data-r="primary" disabled>Link and sign in</button>' : "") +
+        '<div class="ui-sheet-actions">' + (can ? '<button type="button" class="btn btn-teal" data-r="primary" disabled>Continue</button>' : "") +
         '<button type="button" class="btn btn-ghost" data-r="secondary">' + (can ? "Not me" : "OK") + "</button></div></div>";
       document.body.appendChild(bd);
       var box = bd.querySelector(".claim-sheet"), pinWrap = bd.querySelector(".claim-pin"), whoEl = bd.querySelector(".claim-who"), inp = bd.querySelector(".pin-input"),
           joinWrap = bd.querySelector(".claim-join"), nameInp = bd.querySelector(".claim-name-input"), newChip = bd.querySelector(".claim-new"),
-          status = bd.querySelector(".google-status"), go = bd.querySelector('[data-r="primary"]'), selected = null, joining = false, working = false, self = {};
+          status = bd.querySelector(".google-status"), go = bd.querySelector('[data-r="primary"]'), notMe = bd.querySelector('[data-r="secondary"]'), selected = null, joining = false, working = false, self = {};
       function say(text, kind) { status.textContent = text || ""; status.className = "google-status" + (kind ? " " + kind : ""); }
       function digits() { return String(inp ? inp.value : "").replace(/\D/g, ""); }
       function newName() { return String(nameInp ? nameInp.value : "").replace(/\s+/g, " ").trim(); }
       function sync() {
         if (!go) return;
         go.disabled = working || (joining ? newName().length < 1 : (!selected || digits().length !== 4));
-        go.textContent = joining ? "Join the league" : "Link and sign in";
+        go.textContent = joining ? "Join the league" : (selected ? "Link and sign in" : "Continue");   // neutral until the member has chosen a way: a new member has nothing to link
       }
       function marks() {
         [].forEach.call(bd.querySelectorAll(".claim-chip"), function (b) {
@@ -606,8 +636,14 @@
         if (bd.parentNode) bd.parentNode.removeChild(bd);
         var i = openSheets.indexOf(self); if (i >= 0) openSheets.splice(i, 1);
       };
-      self.dismiss = function () { self.close(); if (o.cancel) o.cancel(); };
-      self.busy = function (on) { working = !!on; box.classList.toggle("busy", working); if (on) say(joining ? "Joining\u2026" : "Linking\u2026", ""); sync(); };
+      // While a request is running the sheet stays: closing it would lose the answer (a wrong passcode would vanish without a word, a success would sign in behind the member's back).
+      self.dismiss = function () { if (working) return; self.close(); if (o.cancel) o.cancel(); };
+      self.busy = function (on) {
+        working = !!on; box.classList.toggle("busy", working);
+        if (notMe) { notMe.disabled = working; }
+        if (on) say(joining ? "Joining\u2026" : "Linking\u2026", "");
+        sync();
+      };
       self.fail = function (text, opts) {
         opts = opts || {};
         say(text, "error");
@@ -644,7 +680,7 @@
         nameInp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); submit(); } });
       }
       if (go) go.onclick = submit;
-      bd.querySelector('[data-r="secondary"]').onclick = function () { self.dismiss(); };
+      notMe.onclick = function () { self.dismiss(); };
       bd.addEventListener("mousedown", function (e) { if (e.target === bd) self.dismiss(); });
       document.addEventListener("keydown", onKey, true);
       openSheets.push(self);
@@ -659,6 +695,8 @@
     config: config, forgetConfig: forgetConfig,
     enabled: function () { return !!(cfg && cfg.enabled); },
     pinEnabled: function () { return !cfg || cfg.pinEnabled !== false; },
+    pinMembers: function () { return cfg && cfg.pinMembers ? cfg.pinMembers.slice() : null; },
+    configPending: function () { return !cfg && !cfgDown; },      // no answer yet (and none given up on): the sign-in card is not drawn from a guess
     embeddedBrowser: embeddedBrowser,
     account: function () { return account; },
     setAccount: setAccount, wasLinked: wasLinked, remember: remember,
@@ -666,7 +704,7 @@
     mount: mount, openSwitch: openSwitch, offerSwitch: offerSwitch, offerSwitchWhenReady: offerSwitchWhenReady,
     signInAgain: signInAgain, closeSheets: closeSheets,
     appShell: appShell, offerHandoff: offerHandoff, handoffNoteHtml: handoffNoteHtml, redeeming: function () { return redeeming; },
-    _test: { setView: function (v) { view = v; }, getView: function () { return view; }, reset: function () { cfg = cfgP = account = nonce = nonceP = gisP = current = null; nonceAt = 0; offered = false; pendingChallenge = pendingCode = handoffSheet = null; redeeming = false; if (ticker) { clearInterval(ticker); ticker = null; } } }
+    _test: { setView: function (v) { view = v; }, getView: function () { return view; }, reset: function () { cfg = cfgP = account = nonce = nonceP = gisP = current = null; cfgStale = cfgDown = false; stopConfigTimer(); nonceAt = 0; offered = false; pendingChallenge = pendingCode = handoffSheet = null; redeeming = false; if (ticker) { clearInterval(ticker); ticker = null; } } }
   };
 
   // At load: the address may carry the way into (or back from) the browser sign-in for the app. Never allowed to break the page.

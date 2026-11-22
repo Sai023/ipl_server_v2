@@ -236,6 +236,100 @@ t('MODULE: enabled needs BOTH the flag and the client id; pin_enabled false is c
   assert.strictEqual(mod().IplGoogle.pinEnabled(), true, 'before the answer is known nothing is hidden');
 });
 
+// ====================================================================== THE PASSCODE NAMES AND THE SIGN-IN CARD'S WAIT FOR THE SERVER (UX pass 2026-11-22)
+const CFG = (extra) => Object.assign({ ok: true, google: { enabled: true, client_id: 'CID.apps.googleusercontent.com' }, pin_enabled: true, pin_members: ['Buddy', 'Moe', 'Sai'] }, extra || {});
+const configCalls = (c) => c.calls.filter((x) => x === 'config').length;
+
+t('MODULE: the names that still have a passcode come with the config: a copy, only strings, and null when the server does not list them (an older server) or sends something else', async () => {
+  const c = mod({ config: CFG() });
+  assert.strictEqual(c.IplGoogle.pinMembers(), null, 'before the answer nobody is hidden');
+  await c.IplGoogle.config();
+  assert.deepStrictEqual(plain(c.IplGoogle.pinMembers()), ['Buddy', 'Moe', 'Sai']);
+  c.IplGoogle.pinMembers().push('Zed'); assert.deepStrictEqual(plain(c.IplGoogle.pinMembers()), ['Buddy', 'Moe', 'Sai'], 'the list handed out is a copy');
+  for (const odd of [undefined, null, 'Moe', { 0: 'Moe' }, 7]) {
+    const k = mod({ config: CFG({ pin_members: odd }) }); await k.IplGoogle.config();
+    assert.strictEqual(k.IplGoogle.pinMembers(), null, 'not a list: ' + JSON.stringify(odd));
+  }
+  const mixed = mod({ config: CFG({ pin_members: ['Buddy', 7, null, { a: 1 }, 'Moe'] }) }); await mixed.IplGoogle.config();
+  assert.deepStrictEqual(plain(mixed.IplGoogle.pinMembers()), ['Buddy', 'Moe'], 'only strings survive');
+  const none = mod({ config: CFG({ pin_members: [] }) }); await none.IplGoogle.config();
+  assert.deepStrictEqual(plain(none.IplGoogle.pinMembers()), [], 'an empty list is an answer: nobody has a passcode');
+});
+
+t('MODULE: the sign-in card is not drawn from a guess: configPending until the first answer and never again after it; an answer of "not set up" and a failed request both say so once', async () => {
+  const c = mod({ config: CFG() });
+  assert.strictEqual(c.IplGoogle.configPending(), true, 'nothing asked yet: nothing known');
+  const p = c.IplGoogle.config(); assert.strictEqual(c.IplGoogle.configPending(), true, 'asked, no answer yet');
+  const wait = c.timeouts.filter((h) => h.ms === 4000); assert.strictEqual(wait.length, 1, 'a 4 s wait is running');
+  await p; assert.strictEqual(c.IplGoogle.configPending(), false); assert.ok(wait[0].cleared, 'the wait is cancelled once the answer is in');
+  assert.strictEqual(ev(c, 'ipl:google-unavailable').length, 0); assert.strictEqual(ev(c, 'ipl:google-config').length, 1);
+  const off = mod({ config: { ok: true, google: { enabled: false, client_id: null }, pin_enabled: true } });      // Google is not set up: that is an answer too, and the page redraws
+  await off.IplGoogle.config(); assert.strictEqual(off.IplGoogle.configPending(), false);
+  assert.strictEqual(ev(off, 'ipl:google-unavailable').length, 1); assert.strictEqual(ev(off, 'ipl:google-config').length, 0, 'ipl:google-config still only means "Google IS available"');
+  const bad = mod({ configError: new Error('HTTP 500') });                                                    // the request fails: the card falls back to passcodes
+  await bad.IplGoogle.config().catch(() => {});
+  assert.strictEqual(bad.IplGoogle.configPending(), false); assert.strictEqual(ev(bad, 'ipl:google-unavailable').length, 1);
+  const again = bad.IplGoogle.config().catch(() => {}); assert.strictEqual(bad.IplGoogle.configPending(), false, 'a retry does not flip the card back to "getting ready"'); await again;
+  assert.strictEqual(ev(bad, 'ipl:google-unavailable').length, 1, 'told once, not at every retry');
+  assert.ok(bad.timeouts.filter((h) => h.ms === 4000).every((h) => h.cleared), 'no wait is left running after a failure');
+});
+
+t('MODULE: no answer within 4 s: the page is told to show the passcode card; an answer that comes later still turns it into the Google card', async () => {
+  let answer; const c = mod(); c.IplApi.authConfig = () => { c.calls.push('config'); return new Promise((res) => { answer = res; }); };
+  const p = c.IplGoogle.config();
+  c.timeouts.find((h) => h.ms === 4000).fn();
+  assert.strictEqual(c.IplGoogle.configPending(), false); assert.strictEqual(ev(c, 'ipl:google-unavailable').length, 1); assert.strictEqual(c.IplGoogle.enabled(), false);
+  answer(CFG()); await p;
+  assert.strictEqual(c.IplGoogle.enabled(), true); assert.strictEqual(ev(c, 'ipl:google-config').length, 1, 'now the card is redrawn with Google on it');
+  assert.strictEqual(ev(c, 'ipl:google-unavailable').length, 1, 'and the late answer does not say "unavailable" again');
+});
+
+t('MODULE: after a switch or a sign-in the answer is KEPT (the card must not flash back to the passcode-only card): the member leaves the passcode names at once and the config is asked again once, in the background', async () => {
+  const c = mod({ config: CFG() });
+  await c.IplGoogle.config();
+  c.IplGoogle.forgetConfig('Sai');
+  assert.strictEqual(c.IplGoogle.configPending(), false, 'what was known stays'); assert.strictEqual(c.IplGoogle.enabled(), true);
+  assert.deepStrictEqual(plain(c.IplGoogle.pinMembers()), ['Buddy', 'Moe'], 'Sai has no passcode now'); assert.strictEqual(c.IplGoogle.pinEnabled(), true);
+  const got = await c.IplGoogle.config(); assert.strictEqual(got.enabled, true, 'answered at once from what is known');
+  await flush(); assert.strictEqual(configCalls(c), 2, '...and the server is asked again once');
+  await c.IplGoogle.config(); await flush(); assert.strictEqual(configCalls(c), 2, 'fresh again: no more requests');
+  assert.strictEqual(ev(c, 'ipl:google-config').length, 2, 'the page is told again, so a sign-in card on screen picks up the new names');
+  const k = mod({ config: CFG({ pin_members: ['Moe'] }) }); await k.IplGoogle.config();                       // the last passcode goes: no passcode card is needed any more
+  k.IplGoogle.forgetConfig('Moe'); assert.deepStrictEqual(plain(k.IplGoogle.pinMembers()), []); assert.strictEqual(k.IplGoogle.pinEnabled(), false);
+  const j = mod({ config: CFG() }); await j.IplGoogle.config(); j.IplGoogle.forgetConfig('Nina'); j.IplGoogle.forgetConfig();     // a name nobody has, or none: the list is untouched
+  assert.deepStrictEqual(plain(j.IplGoogle.pinMembers()), ['Buddy', 'Moe', 'Sai']);
+  const o = mod({ config: CFG({ pin_members: undefined }) }); await o.IplGoogle.config(); o.IplGoogle.forgetConfig('Moe');       // an older server sent no list: nothing to drop
+  assert.strictEqual(o.IplGoogle.pinMembers(), null);
+});
+
+t('MODULE: a refresh that fails keeps what was known and is not "unavailable"; it is tried once, not at every draw', async () => {
+  let fail = false; const c = mod({ config: CFG() }); const real = c.IplApi.authConfig;
+  c.IplApi.authConfig = () => (fail ? (c.calls.push('config'), Promise.reject(new Error('HTTP 500'))) : real());
+  await c.IplGoogle.config(); fail = true;
+  c.IplGoogle.forgetConfig('Sai'); c.IplGoogle.afterRender(); await flush();
+  assert.strictEqual(c.IplGoogle.enabled(), true, 'still known'); assert.strictEqual(ev(c, 'ipl:google-unavailable').length, 0, 'a failed refresh is not "unavailable"');
+  assert.strictEqual(configCalls(c), 2, 'one try');
+  c.IplGoogle.afterRender(); await flush(); assert.strictEqual(configCalls(c), 2, 'not asked again at every draw');
+});
+
+t('MODULE: a switch (link), a claim and a join each take that member off the passcode names (a switch used to leave their chip on the card until a reload)', async () => {
+  const sw = mod({ config: CFG() });                                  // the stand-in link reply names Moe
+  await sw.IplGoogle.mount({ id: 'host' }, 'link'); lastInit(sw).callback({ credential: 'CRED-1' }); await flush();
+  assert.deepStrictEqual(plain(sw.IplGoogle.pinMembers()), ['Buddy', 'Sai'], 'Moe switched: no passcode chip for Moe');
+  const cl = await offered({ config: CFG() });
+  await cl.claims[0].opts.submit('Buddy', '3333'); await flush();
+  assert.deepStrictEqual(plain(cl.IplGoogle.pinMembers()), ['Moe', 'Sai'], 'Buddy claimed their name with Google: no passcode any more');
+  const jn = await offered({ config: CFG() });
+  await jn.claims[0].opts.submitJoin('Nina'); await flush();
+  assert.deepStrictEqual(plain(jn.IplGoogle.pinMembers()), ['Buddy', 'Moe', 'Sai'], 'a new member never had a passcode: nothing to drop');
+  assert.strictEqual(jn.IplGoogle.enabled(), true);
+});
+
+t('MODULE: once Google sign-in is set up the sign-in card is rebuilt from the answer without the module drawing its own "or use your passcode" divider', async () => {
+  const c = mod({ config: CFG() }); await c.IplGoogle.config();
+  assert.ok(!/or use your passcode/.test(c.IplGoogle.loginBlockHtml()), 'the divider belongs to the passcode names, which only the page knows');
+});
+
 t('MODULE: nothing is loaded, fetched or drawn while Google sign-in is not set up', async () => {
   const c = mod({ config: { ok: true, google: { enabled: false, client_id: null }, pin_enabled: true }, gis: 'none' });
   await c.IplGoogle.mount({ id: 'host' }, 'signin');
@@ -625,7 +719,148 @@ t('MODULE: the real view (as shipped) escapes every text it draws and asks Googl
   assert.deepStrictEqual(plain(g.got), { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'left', width: 300 });
   real.renderButton(box({ getBoundingClientRect: () => ({ width: 900 }) }), g); assert.strictEqual(g.got.width, 380, 'never wider than Google allows a sensible button');
   real.renderButton(box({ getBoundingClientRect: () => ({ width: 40 }) }), g); assert.strictEqual(g.got.width, 200);
-  assert.ok(/id="google-signin"/.test(real.loginBlockHtml()) && /or use your passcode/.test(real.loginBlockHtml()) && /role="status"/.test(real.loginBlockHtml()));
+  assert.ok(/id="google-signin"/.test(real.loginBlockHtml()) && /role="status"/.test(real.loginBlockHtml()));
+  assert.ok(!/or use your passcode/.test(real.loginBlockHtml()), 'the divider belongs to the passcode names (the page draws it only when there are any): in the block it showed twice, and hung above nothing when nobody has a passcode');
+});
+
+// ====================================================================== THE REAL CLAIM SHEET (a fake DOM that knows the sheet's own markup)
+// The sheet is built from one HTML string and then looked up with querySelector. Nothing here parses HTML: the fake reads the few facts it needs out of the string
+// (the chips, whether a "new here" way and a primary button exist) and hands back recording elements for the selectors the sheet uses. An unknown selector throws, so
+// a change to the sheet that this fake does not know about fails loudly instead of passing for the wrong reason.
+function claimDom(c) {
+  const dom = { log: [], keydown: [], els: null, mountedEl: null };
+  const el = (name, props) => {
+    const e = Object.assign({
+      name, hidden: false, disabled: false, value: '', textContent: '', className: '', attrs: {}, handlers: {}, parentNode: null, classes: new Set(),
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, removeAttribute(k) { delete this.attrs[k]; },
+      addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); }, fire(type, ev) { (this.handlers[type] || []).forEach((f) => f(ev)); },
+      focus() { dom.focused = name; }, insertAdjacentHTML() {}, closest() { return this; }, querySelector() { return null; },
+    }, props || {});
+    e.classList = { contains: (x) => e.classes.has(x), add: (x) => e.classes.add(x), remove: (x) => e.classes.delete(x), toggle: (x, on) => { const v = on === undefined ? !e.classes.has(x) : !!on; if (v) e.classes.add(x); else e.classes.delete(x); return v; } };
+    return e;
+  };
+  c.document.addEventListener = (type, fn) => { if (type === 'keydown') dom.keydown.push(fn); };
+  c.document.removeEventListener = (type, fn) => { if (type === 'keydown') dom.keydown = dom.keydown.filter((f) => f !== fn); };
+  c.document.body.appendChild = (b) => { b.parentNode = c.document.body; dom.mountedEl = b; return b; };
+  c.document.body.removeChild = (b) => { b.parentNode = null; if (dom.mountedEl === b) dom.mountedEl = null; return b; };
+  c.document.createElement = () => {
+    const bd = el('backdrop'); let html = '';
+    Object.defineProperty(bd, 'innerHTML', { get: () => html, set: (v) => { html = v; build(); } });
+    const build = () => {
+      const chips = [];
+      html.replace(/<button type="button" class="login-chip claim-chip" data-name="([^"]*)"( aria-pressed="false"| disabled)>/g, (m, name, flag) => { chips.push(el('chip:' + name, { disabled: flag === ' disabled', attrs: { 'data-name': name } })); return m; });
+      const canJoin = html.indexOf('claim-join') >= 0, hasGo = html.indexOf('data-r="primary"') >= 0;
+      dom.els = { bd, chips, members: el('members'), box: el('box'), pinWrap: el('pinWrap', { hidden: true }), who: el('who'), inp: el('inp'), status: el('status'), notMe: el('notMe'),
+        go: hasGo ? el('go', { disabled: true }) : null,
+        joinWrap: canJoin ? el('joinWrap', { hidden: true }) : null, nameInp: canJoin ? el('nameInp') : null,
+        newChip: canJoin ? el('newChip', { classes: new Set(['claim-new']), parentNode: el('w', { parentNode: el('w2', { removeChild() {} }) }) }) : null,
+        or: canJoin ? el('or', { parentNode: { removeChild() {} } }) : null };
+      dom.els.chips.forEach((ch) => { ch.classes = new Set(['claim-chip']); });
+    };
+    bd.querySelector = (sel) => {
+      const e = dom.els;
+      switch (sel) {
+        case '.claim-sheet': return e.box; case '.claim-pin': return e.pinWrap; case '.claim-who': return e.who; case '.pin-input': return e.inp;
+        case '.claim-join': return e.joinWrap; case '.claim-name-input': return e.nameInp; case '.claim-new': return e.newChip; case '.google-status': return e.status;
+        case '[data-r="primary"]': return e.go; case '[data-r="secondary"]': return e.notMe; case '.claim-members': return e.members; case '.claim-or': return e.or;
+        case '.claim-chip:not([disabled])': return e.chips.filter((x) => !x.disabled)[0] || null;
+        default: throw new Error('the fake DOM does not know the selector ' + sel);
+      }
+    };
+    bd.querySelectorAll = (sel) => { if (sel === '.claim-chip') return dom.els.chips.concat(dom.els.newChip ? [dom.els.newChip] : []); throw new Error('the fake DOM does not know the selector ' + sel); };
+    return bd;
+  };
+  dom.html = () => dom.els.bd.innerHTML;
+  dom.mounted = () => !!dom.mountedEl;
+  dom.press = (key) => dom.keydown.slice().forEach((f) => f({ key, preventDefault() {}, stopPropagation() {} }));
+  return dom;
+}
+function openClaim(o = {}) {
+  const c = mod(), dom = claimDom(c);
+  c.Ui.pinReset = (inp) => { if (inp) { inp.value = ''; inp.focus(); } };      // (the page has it: it clears the four boxes; "clear" in fail() depends on it)
+  const opts = Object.assign({
+    emailMasked: 'n***@gmail.com', members: [{ name: 'Moe', status: 'free' }, { name: 'Sai', status: 'linked' }], join: { allowed: true },
+    submit: (n, p) => dom.log.push(['submit', n, p]), submitJoin: (n) => dom.log.push(['join', n]), cancel: () => dom.log.push(['cancel']),
+  }, o);
+  const sheet = c.realView.claimSheet(opts);
+  return { c, dom, sheet, e: dom.els };
+}
+const cancels = (dom) => dom.log.filter((x) => x[0] === 'cancel').length;
+
+t('CLAIM SHEET: starts with a neutral "Continue" (a new member has nothing to link), warns that the name cannot be changed later, and has a way out', () => {
+  const { dom } = openClaim();
+  assert.ok(/data-r="primary" disabled>Continue<\/button>/.test(dom.html()), 'the first label says nothing about linking: ' + dom.html().slice(-300));
+  assert.ok(!/data-r="primary" disabled>Link and sign in/.test(dom.html()));
+  assert.ok(/This is how you appear in the league, and it can\u2019t be changed later\. You sign in with Google: there is no passcode to choose\./.test(dom.html()), 'the join hint');
+  assert.ok(/data-r="secondary">Not me<\/button>/.test(dom.html()));
+  const closed = openClaim({ members: [{ name: 'Sai', status: 'linked' }], join: { allowed: false, why: 'closed' } }).dom;
+  assert.ok(!/data-r="primary"/.test(closed.html()) && /data-r="secondary">OK<\/button>/.test(closed.html()), 'nothing to choose: only OK');
+});
+
+t('CLAIM SHEET: the button follows the choice: "Link and sign in" with a name and four digits (the fourth digit sends), "Join the league" with a new name', () => {
+  const { dom, e } = openClaim();
+  e.members.fire('click', { target: e.chips[0] });
+  assert.strictEqual(e.go.textContent, 'Link and sign in'); assert.strictEqual(e.go.disabled, true, 'it needs four digits'); assert.strictEqual(e.who.textContent, 'Moe'); assert.strictEqual(e.pinWrap.hidden, false);
+  e.inp.value = '12'; e.inp.fire('input'); assert.strictEqual(e.go.disabled, true); assert.deepStrictEqual(dom.log, []);
+  e.inp.value = '1234'; e.inp.fire('input');
+  assert.strictEqual(e.go.disabled, false); assert.deepStrictEqual(dom.log, [['submit', 'Moe', '1234']]);
+  e.newChip.fire('click');
+  assert.strictEqual(e.go.textContent, 'Join the league'); assert.strictEqual(e.go.disabled, true, 'a new member must type a name first');
+  assert.strictEqual(e.pinWrap.hidden, true); assert.strictEqual(e.joinWrap.hidden, false); assert.strictEqual(dom.focused, 'nameInp', 'the cursor is in the name box');
+  e.nameInp.value = '  Sam   Lee '; e.nameInp.fire('input');
+  assert.strictEqual(e.go.disabled, false); e.go.onclick();
+  assert.deepStrictEqual(dom.log[1], ['join', 'Sam Lee'], 'the name is tidied: no padding, one space between words');
+});
+
+t('CLAIM SHEET: a name that has a Google account can never be picked: its chip is off and says why', () => {
+  const { dom, e, sheet } = openClaim({ members: [{ name: 'Moe', status: 'free' }, { name: 'Sai', status: 'linked' }, { name: 'Zed', status: 'temp' }] });
+  assert.deepStrictEqual(e.chips.map((x) => [x.attrs['data-name'], x.disabled]), [['Moe', false], ['Sai', true], ['Zed', true]]);
+  assert.ok(/Sai<small>has Google<\/small>/.test(dom.html()) && /Zed<small>temporary passcode<\/small>/.test(dom.html()));
+  e.members.fire('click', { target: e.chips[1] }); assert.strictEqual(e.who.textContent, '', 'a tap on a taken name does nothing');
+  // a name that turns out to be taken a moment after the sheet opened (somebody linked it): the sheet goes back to choosing and the button is neutral again
+  e.members.fire('click', { target: e.chips[0] }); assert.strictEqual(e.go.textContent, 'Link and sign in');
+  sheet.fail('That member already has a Google account linked.', { clear: true, notFree: 'Moe' });
+  assert.strictEqual(e.chips[0].disabled, true, 'Moe is shown as taken'); assert.strictEqual(e.pinWrap.hidden, true, 'the passcode boxes go away');
+  assert.strictEqual(e.go.textContent, 'Continue', 'nothing is chosen any more: the button no longer says it will link'); assert.strictEqual(e.go.disabled, true);
+  assert.strictEqual(e.status.textContent, 'That member already has a Google account linked.');
+});
+
+t('CLAIM SHEET: while a request is running the sheet cannot be dismissed (Escape, a tap outside, "Not me"): the answer is never lost; afterwards backing out works', () => {
+  const { dom, e, sheet } = openClaim();
+  e.members.fire('click', { target: e.chips[0] }); e.inp.value = '1234'; e.inp.fire('input');
+  sheet.busy(true);
+  assert.strictEqual(e.notMe.disabled, true, '"Not me" is greyed out while it works'); assert.strictEqual(e.go.disabled, true); assert.strictEqual(e.status.textContent, 'Linking\u2026'); assert.ok(e.box.classes.has('busy'));
+  dom.press('Escape'); assert.ok(dom.mounted(), 'Escape did nothing');
+  e.bd.fire('mousedown', { target: e.bd }); assert.ok(dom.mounted(), 'a tap outside did nothing');
+  e.notMe.onclick(); assert.ok(dom.mounted(), '"Not me" did nothing');
+  sheet.dismiss(); assert.ok(dom.mounted()); assert.strictEqual(cancels(dom), 0, 'the page was not told the member backed out');
+  e.members.fire('click', { target: e.chips[0] }); assert.strictEqual(e.who.textContent, 'Moe', 'the choices are frozen too (a tap on a chip does not restart anything)');
+  // the answer comes back: a wrong passcode is shown on the sheet that is still there
+  sheet.busy(false); sheet.fail('That passcode is not right. 4 tries left.', { clear: true });
+  assert.strictEqual(e.status.textContent, 'That passcode is not right. 4 tries left.'); assert.strictEqual(e.status.className, 'google-status error');
+  assert.strictEqual(e.notMe.disabled, false); assert.strictEqual(e.inp.value, '', 'the boxes are cleared for the next try');
+  dom.press('Escape'); assert.strictEqual(dom.mounted(), false, 'now Escape backs out'); assert.strictEqual(cancels(dom), 1);
+  assert.strictEqual(dom.keydown.length, 0, 'and the key listener is gone');
+});
+
+t('CLAIM SHEET: joining while a request is running is just as safe; a refused name keeps the sheet and the name box', () => {
+  const { dom, e, sheet } = openClaim();
+  e.newChip.fire('click'); e.nameInp.value = 'Sam'; e.nameInp.fire('input');
+  e.go.onclick(); sheet.busy(true);
+  assert.strictEqual(e.status.textContent, 'Joining\u2026'); dom.press('Escape'); e.bd.fire('mousedown', { target: e.bd }); assert.ok(dom.mounted());
+  sheet.busy(false); sheet.fail('Someone already has that name. Try another.', { keepName: true });
+  assert.ok(dom.mounted()); assert.strictEqual(dom.focused, 'nameInp'); assert.strictEqual(e.go.disabled, false, 'they can fix the name and send again');
+  assert.strictEqual(cancels(dom), 0);
+});
+
+t('CLAIM SHEET: backing out when nothing is running closes the sheet and tells the page exactly once, whichever way (Escape, a tap outside, "Not me")', () => {
+  for (const how of ['escape', 'outside', 'notme']) {
+    const { dom, e } = openClaim();
+    if (how === 'escape') dom.press('Escape'); else if (how === 'outside') e.bd.fire('mousedown', { target: e.bd }); else e.notMe.onclick();
+    assert.strictEqual(dom.mounted(), false, how + ': closed'); assert.strictEqual(cancels(dom), 1, how + ': the page is told once (the Google button gets a fresh nonce)');
+  }
+  const { dom, e } = openClaim();
+  e.bd.fire('mousedown', { target: e.box }); assert.ok(dom.mounted(), 'a tap INSIDE the sheet is not a tap outside');
 });
 
 // ====================================================================== THE PAGE
@@ -641,6 +876,7 @@ function page(o = {}) {
     c.IplGoogle = {
       loginBlockHtml: () => (g.block === false ? '' : '<div id="google-signin"></div>'), pinEnabled: () => g.pin !== false, enabled: () => g.enabled !== false,
       account: () => g.account || null, setAccount: (a) => c.calls.push(['setAccount', plain(a)]), offerSwitchWhenReady: (x) => c.calls.push(['offer', plain(x)]), openSwitch: () => {},
+      pinMembers: () => (g.pinMembers === undefined ? null : g.pinMembers),      // the names that still have a passcode (null: the server did not say, so everybody)
       redeeming: () => false, handoffNoteHtml: () => '', offerHandoff: () => {},      // (the browser hand-off for the app: tests/js/app_handoff.test.js)
     };
   }
@@ -683,20 +919,21 @@ t('PAGE: after a sign-in the module learns what kind it was, and a member who ha
 
 t('PAGE: the account menu: Reset passcode and the switch for a passcode member, a plain note for a Google member', () => {
   const labels = (g) => plain(page({ google: g, fns: ['_userMenuItems'] })._userMenuItems().filter((x) => !x.divider).map((x) => x.label));
-  assert.deepStrictEqual(labels({ account: { linked: false }, enabled: true }), ['Scoring rules', 'Reset passcode', 'Switch to Google sign-in', 'Switch user']);
-  assert.deepStrictEqual(labels({ account: { linked: false }, enabled: false }), ['Scoring rules', 'Reset passcode', 'Switch user'], 'no switch where Google is not set up');
-  assert.deepStrictEqual(labels({ account: { linked: true, emailMasked: 'm***@gmail.com' }, enabled: true }), ['Scoring rules', 'Signed in with Google', 'Switch user'], 'a Google member has no passcode to reset');
-  assert.deepStrictEqual(labels({ account: null, enabled: true }), ['Scoring rules', 'Reset passcode', 'Switch to Google sign-in', 'Switch user']);
-  assert.deepStrictEqual(labels(false), ['Scoring rules', 'Reset passcode', 'Switch user'], 'without the module: exactly as before');
+  assert.deepStrictEqual(labels({ account: { linked: false }, enabled: true }), ['Scoring rules', 'Reset passcode', 'Switch to Google sign-in', 'Sign out']);
+  assert.deepStrictEqual(labels({ account: { linked: false }, enabled: false }), ['Scoring rules', 'Reset passcode', 'Sign out'], 'no switch where Google is not set up');
+  assert.deepStrictEqual(labels({ account: { linked: true, emailMasked: 'm***@gmail.com' }, enabled: true }), ['Scoring rules', 'Signed in with Google', 'Sign out'], 'a Google member has no passcode to reset; the last item signs out and says so (it used to say "Switch user")');
+  assert.deepStrictEqual(labels({ account: null, enabled: true }), ['Scoring rules', 'Reset passcode', 'Switch to Google sign-in', 'Sign out']);
+  assert.deepStrictEqual(labels(false), ['Scoring rules', 'Reset passcode', 'Sign out'], 'without the module: exactly as before, apart from the honest label');
   const g = page({ google: { account: { linked: true, emailMasked: 'm***@gmail.com' } }, fns: ['_userMenuItems'] })._userMenuItems().find((x) => x.label === 'Signed in with Google');
   assert.strictEqual(g.hint, 'm***@gmail.com'); g.onClick();
 });
 
 t('PAGE: the sign-in card: the Google block on top, the passcode chips below; only Google when nobody has a passcode any more; unchanged without the module', () => {
-  const card = (g, names = ['Moe', 'Sai']) => page({ google: g, fns: ['_buildLoginCard'] })._buildLoginCard(names);
+  const card = (g, names = ['Moe', 'Sai']) => page({ google: g, fns: ['_buildLoginCard', '_hasPasscode'] })._buildLoginCard(names);
   const withG = card({}); assert.ok(withG.indexOf('id="google-signin"') >= 0); assert.ok(withG.indexOf('login-chip') >= 0, 'members can still pick their name'); assert.ok(/Continue with Google, or pick your name/.test(withG));
   assert.ok(withG.indexOf('google-signin') < withG.indexOf('login-chip'), 'Google first');
   const only = card({ pin: false }); assert.ok(only.indexOf('id="google-signin"') >= 0); assert.strictEqual(only.indexOf('login-chip'), -1); assert.strictEqual(only.indexOf('register-input'), -1); assert.ok(/Sign in with Google to continue/.test(only));
+  assert.ok(/New here\? Continue with Google, then choose/.test(only), 'once nobody has a passcode a newcomer must still be told how to join (the hint used to vanish with the chips)');
   const notReady = card({ block: false }); assert.strictEqual(notReady.indexOf('google-signin'), -1); assert.ok(notReady.indexOf('login-chip') >= 0); assert.ok(/Pick your name to sign in\./.test(notReady));
   const none = card(false); assert.strictEqual(none.indexOf('google'), -1); assert.ok(/Pick your name to sign in\./.test(none));
   const empty = card({ block: false }, []); assert.ok(empty.indexOf('register-input') >= 0, 'no members yet: registration as before');
@@ -742,7 +979,7 @@ t('PAGE: an admin who unlinks SOMEONE ELSE sees the temporary passcode and nothi
 });
 
 t('PAGE: with Google sign-in on the sign-in card has NO passcode registration: a new member is pointed at Continue with Google ("I\'m new here"); with Google off it is as before', () => {
-  const card = (g, names = ['Moe', 'Sai']) => page({ google: g, fns: ['_buildLoginCard'] })._buildLoginCard(names);
+  const card = (g, names = ['Moe', 'Sai']) => page({ google: g, fns: ['_buildLoginCard', '_hasPasscode'] })._buildLoginCard(names);
   const on = card({});
   for (const gone of ['register-input', 'register-passcode', 'Join League', 'Register here']) assert.strictEqual(on.indexOf(gone), -1, gone + ' must not be on the card while Google is on');
   assert.ok(/New here\? Continue with Google, then choose/.test(on)); assert.ok(on.indexOf('login-chip') >= 0, 'members can still pick their name');
@@ -812,7 +1049,7 @@ t('PAGE: a claim says what happened: the page listens for ipl:google-claimed and
 t('PAGE WIRING: the module is loaded, the card is drawn into after every render, events are handled, sign-out ends the session on the server first', () => {
   assert.ok(/<script src="\/static\/auth_google\.js\?v=[\w.]+"><\/script>/.test(HTML), 'the page does not load auth_google.js');
   assert.ok(/\$app\.innerHTML=html;\s*\n\s*if\(!_username&&window\.IplGoogle\)IplGoogle\.afterRender\(\);/.test(HTML), 'render() does not call IplGoogle.afterRender() for the sign-in card');
-  for (const e of ['ipl:google-signed-in', 'ipl:google-linked', 'ipl:google-config', 'ipl:google-claimed', 'ipl:google-joined']) assert.ok(HTML.indexOf('addEventListener("' + e + '"') >= 0, 'no listener for ' + e);
+  for (const e of ['ipl:google-signed-in', 'ipl:google-linked', 'ipl:google-config', 'ipl:google-unavailable', 'ipl:google-claimed', 'ipl:google-joined']) assert.ok(HTML.indexOf('addEventListener("' + e + '"') >= 0, 'no listener for ' + e);
   const lo = fnSource('logout');
   assert.ok(lo.indexOf('IplApi.authLogout()') >= 0 && lo.indexOf('IplApi.authLogout()') < lo.indexOf('IplApi.logoutClearToken()'), 'logout must end the server session BEFORE it forgets the token');
   assert.ok(/_establishSession\(d\.name,d\.is_admin,d\.must_change,d\)/.test(HTML), 'the saved-session check and the Google sign-in pass whoami / the reply on');

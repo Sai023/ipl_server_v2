@@ -14,16 +14,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Nunito:wght@400;600;700;800;900&family=Noto+Emoji:wght@500&display=swap"></noscript>
-  <link rel="stylesheet" href="/static/theme.css?v=paper14">
-  <link rel="stylesheet" href="/static/style.css?v=paper14">
-  <link rel="stylesheet" href="/static/ui.css?v=paper14">
-  <link rel="stylesheet" href="/static/screens.css?v=paper14">
-  <link rel="stylesheet" href="/static/paper.css?v=paper14">
+  <link rel="stylesheet" href="/static/theme.css?v=paper15">
+  <link rel="stylesheet" href="/static/style.css?v=paper15">
+  <link rel="stylesheet" href="/static/ui.css?v=paper15">
+  <link rel="stylesheet" href="/static/screens.css?v=paper15">
+  <link rel="stylesheet" href="/static/paper.css?v=paper15">
 </head>
 <body>
 <div id="app-loading"><img class="logo-img" src="/static/brand/logo-sketch.png" width="250" height="242" alt="" /><h1 class="wordmark"><span class="ui-sr-only">BCL </span><span class="bn-fan">Fantasy</span></h1><div class="spinner" role="presentation"></div><p>Loading your league…</p></div>
 <div id="app"></div>
-<script src="/static/ui.js?v=paper14"></script>
+<script src="/static/ui.js?v=paper15"></script>
 <script>
 "use strict";
 var BUDGET_TOTAL=100.0,XI_SIZE=11;
@@ -139,10 +139,17 @@ function _googleSignInAgain(name,onCancel,passcodeNote,reauth){
     else _showPasscodePromptModal(name,passcodeNote,reauth);
   },function(){_showPasscodePromptModal(name,passcodeNote,reauth);});
 }
-// attemptLogin(name) is what every member-chip / pill click calls. It opens
-// the passcode prompt. Form submits route to IplApi.login → _establishSession.
+// Can this member still sign in with a passcode? With Google on, only the names the server lists (a member who switched to Google, or joined with it, has none);
+// otherwise everybody. Until the server has said, everybody: the prompt copes (an answer of pin_retired carries on with Google).
+function _hasPasscode(name){
+  var only=(window.IplGoogle&&IplGoogle.pinMembers)?IplGoogle.pinMembers():null;
+  return !only||only.indexOf(name)>=0;
+}
+// attemptLogin(name) is what every member-chip / pill click calls. It opens the passcode prompt (form submits route to IplApi.login → _establishSession), or
+// Google's sheet for a member who has no passcode to type: asking for one would be a dead end.
 function attemptLogin(name){
   if(!name)return false;
+  if(!_hasPasscode(name)){_googleSignInAgain(name);return true;}
   _showPasscodePromptModal(name);
   return true;
 }
@@ -153,7 +160,7 @@ function logout(){
   _username=null;_isAdmin=false;_mustChange=false;
   _sessionLost=false;_reauth=false;_unverified=false;_verifyTries=0;clearTimeout(_verifyTimer);if(_sessionSheet){_sessionSheet.close();_sessionSheet=null;}
   try{localStorage.removeItem("ipl_is_admin");}catch(e){}
-  clearUsername();_historyData=null;_historyViewWk=null;
+  clearUsername();_historyData=null;_historyViewWk=null;_historyFailed=false;_historySeq++;clearTimeout(_historyTimer);
   _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwTouched=false;_nwTarget=null;_nwRestored=false;_lockedWeek=null;_adminMatches=null;_adminMembersList=null;
   if(_state)render(_state);
 }
@@ -168,16 +175,33 @@ function switchTab(tab){
 }
 
 // ─── HISTORY ────────────────────────────────────────────────────────────────
+// _historyFailed: the member's own rows (their XI, their weeks) did not come. My team and Pick then say so and offer "Try again" instead of a spinner that never ends
+// (or, on Pick, an empty editor that looks like a lost team). _historySeq: only the newest request counts (a competition switch, a sign-out or a retry makes the older ones moot).
+var _historyFailed=false,_historySeq=0,_historyTimer=null;
 function _loadHistory(){
   if(!_username||!window.IplApi)return;
-  var sq=_bootSeq;   // ignore a reply that arrives after the competition was switched
-  window.IplApi.getHistory(_username).then(function(data){
-    if(!data||!data.ok||sq!==_bootSeq)return;
+  var sq=_bootSeq,who=_username,hs=++_historySeq;   // a reply for another competition, another member or an older request is ignored
+  _historyFailed=false;clearTimeout(_historyTimer);
+  // A server that is waking up can take a minute: after 25 s the card offers "Try again" (an answer that comes later still lands).
+  _historyTimer=setTimeout(function(){if(hs===_historySeq&&!_historyData){_historyFailed=true;if(_state)render(_state);}},25000);
+  function mine(){return hs===_historySeq&&sq===_bootSeq&&_username===who;}
+  function failed(why){
+    if(!mine())return;
+    console.error("[IPL] history:",why);
+    clearTimeout(_historyTimer);
+    if(!_historyData){_historyFailed=true;if(_state)render(_state);}
+  }
+  window.IplApi.getHistory(who).then(function(data){
+    if(!mine())return;
+    if(!data||!data.ok){failed("no answer");return;}
+    clearTimeout(_historyTimer);_historyFailed=false;
     _historyData=data;_currentWeek=data.current_week;_weekKnown=true;
     _nwInit(_getCurrentWeekRow(data));
     if(_state)render(_state);
-  }).catch(function(e){console.error("[IPL] history:",e);});
+  },failed);
 }
+function _retryHistory(){_loadHistory();if(_state)render(_state);}
+function _historyErrorHtml(){return Ui.stateHtml("error",{title:"Could not load your team",message:"Your saved picks are safe. Check your connection and try again.",retry:"_retryHistory()",retryLabel:"Try again"});}
 
 // ─── ADMIN MATCHES ────────────────────────────────────────────────────────────
 function _loadAdminMatches(){
@@ -540,7 +564,7 @@ function _doStateRefresh(onDone){
     if(state&&!_staleState(state)){
       if(history&&history.ok){
         var _wasWk=_currentWeek,_hadWk=_weekKnown,_wasTarget=_nwTarget;
-        _historyData=history;_currentWeek=history.current_week;_weekKnown=true;
+        _historyData=history;_historyFailed=false;_currentWeek=history.current_week;_weekKnown=true;
         var _newTarget=state.deadline?_nwTargetWeek(state.deadline):null;
         // a handover moves the week a draft is for, even when the current week keeps its number (the first week starts)
         if(_hadWk&&(_currentWeek!==_wasWk||(_wasTarget!==null&&_newTarget!==null&&_newTarget!==_wasTarget)))_nwNewWeek(_getCurrentWeekRow(history),_newTarget);
@@ -853,19 +877,20 @@ function _buildPitchView(teamArr,capId,vcId){
 // ─── SECTION BUILDERS ────────────────────────────────────────────────────────
 function _buildLoginCard(memberNames){
   if(window.IplGoogle&&IplGoogle.redeeming())return '<div class="card login-hero"><h2>Signing you in\u2026</h2><p>Finishing the sign-in you started in your browser.</p></div>';   // the app is redeeming the browser's code
+  // The server has not said yet whether Google sign-in is set up (one quick request): a neutral card, not the passcode card for a moment. (After a few seconds, or if the request fails, the passcode card shows.)
+  if(window.IplGoogle&&IplGoogle.configPending&&IplGoogle.configPending())return '<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p role="status">Getting sign-in ready\u2026</p>'+IplGoogle.handoffNoteHtml()+'</div>';
   var g=window.IplGoogle?IplGoogle.loginBlockHtml():"";   // the Google button block (empty until the server says Google sign-in is set up)
   var pin=!g||IplGoogle.pinEnabled();                       // the passcode screens go only when Google is on AND nobody has a passcode any more
-  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>'+(g?(pin?'Continue with Google, or pick your name to use your passcode.':'Sign in with Google to continue.'):'Pick your name to sign in.')+'</p>'+(window.IplGoogle?IplGoogle.handoffNoteHtml():'')+g;
-  if(!pin){
-    return h+'</div>';
-  }
+  var names=g?memberNames.filter(_hasPasscode):memberNames;   // with Google on, a chip only for a member who still has a passcode: for anybody else it would ask for something that does not exist
+  var h='<div class="card login-hero"><img class="login-logo" src="/static/brand/logo-sketch.png" width="230" height="222" alt="" aria-hidden="true"><h2>Who\'s playing?</h2><p>'+(g?(pin&&names.length>0?'Continue with Google, or pick your name to use your passcode.':'Sign in with Google to continue.'):'Pick your name to sign in.')+'</p>'+(window.IplGoogle?IplGoogle.handoffNoteHtml():'')+g;
   if(g){   // Google sign-in is on: a NEW member joins WITH Google (a display name, no passcode to choose), so there is no register form here
-    if(memberNames.length>0){
-      h+='<div class="login-member-chips">';
-      memberNames.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
+    h+='<p class="register-hint login-new">New here? Continue with Google, then choose <b>“I’m new here”</b>.</p>';   // right under the button, where a newcomer looks first (and it stays once nobody has a passcode)
+    if(pin&&names.length>0){
+      h+='<div class="google-or"><span>or use your passcode</span></div><div class="login-member-chips">';
+      names.forEach(function(n){h+='<button class="login-chip" onclick="attemptLogin(\''+escAttr(n)+'\')">'+esc(n)+'</button>';});
       h+='</div>';
     }
-    return h+'<p class="register-hint">New here? Continue with Google, then choose <b>“I’m new here”</b>.</p></div>';
+    return h+'</div>';
   }
   if(memberNames.length>0){
     h+='<div class="login-member-chips">';
@@ -922,15 +947,19 @@ function _buildThisWeekCard(){
   h+='<h3 class="section-title">'+(isCur?'\u26A1 This Week\'s XI <span style="font-size:11px;color:var(--muted);font-weight:400">(read-only)</span>':'Week '+viewWk+'\'s XI')+'</h3>';
   if(row&&typeof row.week_pts==='number')h+='<p class="wk-pts"><b>'+row.week_pts+'</b> points '+(isCur?'so far':'that week')+'</p>';
   if(!tw||!tw.team||tw.team.length===0){
-    if(_username&&!_historyData)h+=Ui.stateHtml("loading",{title:"Loading your team\u2026"});
-    else h+=Ui.stateHtml("empty",{title:isCur?"No XI locked for this week":"No XI recorded for week "+viewWk,message:(isCur?(_currentWeek<=1?"Pick your team before the lock and it will appear here.":"You did not have a team locked this week."):"You did not have a team locked that week."),retry:(isCur&&_lockIn()?"switchTab('next')":""),retryLabel:"Pick your team"});
+    if(_username&&!_historyData)h+=_historyFailed?_historyErrorHtml():Ui.stateHtml("loading",{title:"Loading your team\u2026"});
+    else h+=Ui.stateHtml("empty",{title:isCur?"No XI locked for this week":"No XI recorded for week "+viewWk,message:(isCur?((_deadlineLocked()&&_activeCompObj().status!=="completed")?(_finalWeek()?"This is the final week and no XI was locked, so it scores 0 points.":"No XI was locked for this week, so it scores 0 points. Next week\u2019s picks open after the next rollover."):(_currentWeek<=1?"Pick your team before the lock and it will appear here.":"You did not have a team locked this week.")):"You did not have a team locked that week."),retry:(isCur&&_lockIn()?"switchTab('next')":""),retryLabel:"Pick your team"});
     return h+'</div>';
   }
   h+=_buildPitchView(tw.team,tw.cap,tw.vc);
   return h+'</div>';
 }
 function _buildNextWeekCard(){
-  if(_activeCompObj().status==="completed")return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:"Picks are closed. Switch competition (top left) to pick for the next one."})+'</div>';
+  if(_activeCompObj().status==="completed"){
+    var _nx=_nextComp();   // a finished competition hands over: say where, with a button
+    return '<div class="card">'+Ui.stateHtml("empty",{title:"This competition has finished",message:_nx?"Picks are closed. "+_nx.name+" "+(_nx.status==="active"?"is live now":"starts soon")+": pick your team there.":"Picks are closed.",retry:_nx?"_switchComp('"+escAttr(_nx.slug)+"')":"",retryLabel:_nx?"Go to "+_nx.name:""})+'</div>';
+  }
+  if(_username&&!_historyData&&_historyFailed)return '<div class="card">'+_historyErrorHtml()+'</div>';   // the saved XI did not load: never an empty editor that looks like a lost team
   var locked=_deadlineLocked();
   var h='<div class="card card-teal">';
   h+='<div class="week-label" style="color:var(--teal-ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+(_finalWeek()?'Final week':_nwTargetWeek()<=1?'Pick your team':'Week '+_nwTargetWeek()+' draft')+' &nbsp;<span id="nw-countdown" class="nw-countdown'+(_lockUrgent()?' urgent':'')+'">'+(_deadlineText()||'Locks Mon 14:00 UTC')+'</span><button class="btn btn-ghost btn-sm nw-rules" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="_showRulesModal()">📖 Scoring Rules</button></div>'+_nwWhenLine()+_nwNotices();
@@ -1400,7 +1429,7 @@ function _showPasscodePromptModal(name,note,reauth){
   _reauth=!!reauth;
   var existing=document.getElementById('passcode-prompt-modal');
   if(existing)existing.remove();
-  var h='<div id="passcode-prompt-modal" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
+  var h='<div id="passcode-prompt-modal" role="dialog" aria-modal="true" aria-label="Sign in" onclick="if(event.target.id===\'passcode-prompt-modal\')_closePasscodePrompt()" style="position:fixed;inset:0;z-index:999;background:color-mix(in srgb, var(--backdrop) 58%, transparent);display:flex;align-items:flex-end;justify-content:center;">';
   h+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:420px;padding:18px 16px 24px;">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:15px;font-weight:800;color:var(--gold-ink);">🔒 Welcome back, '+esc(name)+'</div><button type="button" class="modal-x" aria-label="Close" onclick="_closePasscodePrompt()">×</button></div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-bottom:14px;">'+esc(note||'Enter your 4-digit passcode to sign in.')+'</div>';
@@ -1435,6 +1464,7 @@ function _submitPasscode(name){
   var inp=document.getElementById('passcode-input');
   var errEl=document.getElementById('passcode-error');
   var btn=document.getElementById('passcode-submit-btn');
+  if(btn&&btn.disabled)return;   // a sign-in is already on its way (the fourth digit and Enter can both send it)
   var pc=inp?inp.value.trim():'';
   if(!/^\d{4}$/.test(pc)){
     if(errEl)errEl.textContent='Passcode must be exactly 4 digits.';
@@ -1452,7 +1482,9 @@ function _submitPasscode(name){
     if(Ui.errorReason(e)==="pin_retired"&&window.IplGoogle){   // this member switched to Google (maybe on another phone): carry on with Google, here
       IplGoogle.remember(true);_closePasscodePrompt(true);_googleSignInAgain(name,null,"");return;
     }
-    var msg=(e&&e.serverMessage)?e.serverMessage:'Wrong passcode';
+    // The name was picked from the list, so "wrong name or passcode" (the API wording) is just "that passcode is not right". Anything else says what it is: a good
+    // passcode must never be called wrong because the server did not answer (no connection, a server that is waking up) or because of too many tries.
+    var msg=(Ui.errorReason(e)==='bad_credentials')?'That passcode is not right.':Ui.errorMessage(e,'Could not sign in. Please try again.');
     if(errEl)errEl.textContent='⚠ '+msg;
     Ui.pinReset(inp,true);
     if(btn){btn.disabled=false;btn.textContent='Sign in';}
@@ -1702,7 +1734,7 @@ function _userMenuItems(){
     items.push({icon:"key",label:"Reset passcode",onClick:function(){_showResetPasscodeModal(false);}});
     if(window.IplGoogle&&IplGoogle.enabled())items.push({icon:"key",label:"Switch to Google sign-in",onClick:function(){IplGoogle.openSwitch();}});
   }
-  items.push({divider:true},{icon:"logout",label:"Switch user",danger:true,onClick:logout});
+  items.push({divider:true},{icon:"logout",label:"Sign out",danger:true,onClick:logout});
   return items;
 }
 function _openUserMenu(){Ui.sheet({title:_username+(_isAdmin?" · Admin":""),items:_userMenuItems()});}
@@ -1740,7 +1772,7 @@ function render(state){
   } else {
     var _lbl=_tabList().filter(function(t){return t.id===_activeTab;})[0];
     html+='<h2 class="ui-sr-only">'+esc(_lbl?_lbl.label:"")+'</h2>';
-    if(["match-centre","leaderboard","team"].indexOf(_activeTab)>-1)html+=_buildActionBanner();
+    if(["match-centre","leaderboard","team"].indexOf(_activeTab)>-1)html+=_buildActionBanner()+_buildNextCompBanner();
     if     (_activeTab==="team")         html+=_buildThisWeekCard();
     else if(_activeTab==="next")         html+=_buildNextWeekCard();
     else if(_activeTab==="leaderboard")  html+=_lbGrid();
@@ -1796,7 +1828,7 @@ function _withComp(url){
 // draft, filters, admin lists or Match Centre under the new name. Modules with their own caches (mc_hub.js) listen for "ipl:comp-changed".
 // RULE: any new competition-scoped client state must be reset in this function.
 function _resetCompScope(){
-  _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_adminMatches=null;_adminFilter="all";
+  _players=null;_leaderboard=null;_historyData=null;_historyViewWk=null;_historyFailed=false;_historySeq++;clearTimeout(_historyTimer);_adminMatches=null;_adminFilter="all";
   _nwDraft={team:[],cap:null,vc:null};_nwSaved=null;_nwCarry=false;_nwTouched=false;_nwTarget=null;_nwRestored=false;_lockedWeek=null;
   _pickerSearch="";_pickerRole="All";_pickerTeams=[];_pickerSort="season";_pickerMaxPrice=null;_pickerFiltersOpen=false;_pickerXiOpen=false;
   _weekKnown=false;
@@ -1909,6 +1941,7 @@ document.addEventListener("keydown",function(e){            // Escape closes the
   if(e.key!=="Escape"||document.querySelector(".ui-backdrop"))return;
   var m=document.getElementById("rules-modal")||document.getElementById("swap-modal");
   if(m){m.remove();return;}
+  if(document.getElementById("passcode-prompt-modal")){_closePasscodePrompt();return;}   // the passcode prompt closes like every other sheet (and returns to "You've been signed out" when it came from there)
   if(typeof _closeMatchModal==="function"&&document.querySelector(".match-modal-backdrop"))_closeMatchModal();
 });
 var _rsz=null;window.addEventListener("resize",function(){clearTimeout(_rsz);_rsz=setTimeout(function(){if(_state&&(_activeTab==="admin"||_pickOpen))render(_state);},200);});
@@ -1925,6 +1958,20 @@ function _lockIn(){
   var ms=new Date(dl.next_lock_utc).getTime()-_nowMs();if(ms<=0)return "";
   var s=Math.floor(ms/1000),d=Math.floor(s/86400),hh=Math.floor((s%86400)/3600),mm=Math.floor((s%3600)/60),ss=s%60;
   return d>0?(d+"d "+hh+"h "+mm+"m"):(hh>0?(hh+"h "+mm+"m "+ss+"s"):(mm+"m "+ss+"s"));
+}
+// The competition a finished one hands over to: the one that is live now, else the first that is still to come (null when this one is not finished, or there is none).
+function _nextComp(){
+  var cur=_activeCompObj(),pick=null;
+  if(!cur||cur.status!=="completed")return null;
+  (_competitions||[]).forEach(function(c){if(!pick&&c.slug!==cur.slug&&c.status==="active")pick=c;});
+  (_competitions||[]).forEach(function(c){if(!pick&&c.slug!==cur.slug&&c.status==="upcoming")pick=c;});
+  return pick;
+}
+// A member on a finished competition has nothing left to pick here; the banner says where the game goes on (the new member's first screen is usually this one).
+function _buildNextCompBanner(){
+  if(!_username)return "";
+  var cur=_activeCompObj(),nx=_nextComp();if(!nx)return "";
+  return '<div class="action-banner" role="region" aria-label="Next competition"><div class="ab-text"><div class="ab-title">'+esc(cur.name||"This competition")+' has finished</div><div class="ab-sub">'+esc(nx.name)+' '+(nx.status==="active"?'is live now':'starts soon')+'. Pick your team there.</div></div><button type="button" class="btn btn-gold btn-sm" onclick="_switchComp(\''+escAttr(nx.slug)+'\')">Go to '+esc(nx.name)+'</button></div>';
 }
 function _buildActionBanner(){
   if(!_username)return "";
@@ -2082,6 +2129,7 @@ window.addEventListener("ipl:google-claimed",function(e){
   Ui.success("Linked"+(d.email_masked?" "+d.email_masked:"")+(d.name?" to "+d.name:"")+". Your passcode is retired: from now on just tap Continue with Google.",{duration:6000});
 });
 window.addEventListener("ipl:google-config",function(){if(!_username&&_state)render(_state);});        // Google sign-in is available: the sign-in card gets its button
+window.addEventListener("ipl:google-unavailable",function(){if(!_username&&_state)render(_state);});   // it is not (or no answer came): the card shows the passcode choices
 window.addEventListener("online",function(){if(_unverified)_recheckSession();});
 function _bootstrap(){
   var seq=_bootSeq;   // replies that arrive after a competition switch belong to the old competition: every handler below drops them
@@ -2132,9 +2180,9 @@ function _bootstrap(){
     var state=results[0],history=results[1];
     if(seq!==_bootSeq||!state||_staleState(state))return;
     if(history&&history.ok){
-      _historyData=history;_currentWeek=history.current_week;_weekKnown=true;
+      _historyData=history;_historyFailed=false;_currentWeek=history.current_week;_weekKnown=true;
       if(_nwDraft.team.length===0)_nwInit(_getCurrentWeekRow(history));
-    }
+    }else if(savedUser&&_username&&!_historyData)_loadHistory();   // the member rows did not come: the standard loader takes over (it says so, with "Try again", if it fails too)
     render(state);
   }).catch(function(){});
   plP.then(function(pl){if(seq!==_bootSeq)return;if(pl&&pl.ok!==false){setPlayers(pl);window.dispatchEvent(new CustomEvent("ipl:players-updated",{detail:pl}));}});
@@ -2157,8 +2205,8 @@ window.addEventListener("ipl:leaderboard-updated",function(e){renderLeaderboard(
 window.addEventListener("ipl:players-updated",function(e){setPlayers(e.detail);});
 window.addEventListener("ipl:saved",function(){_bootstrap();});
 </script>
-<script src="/static/ipl_glue.js?v=paper14"></script>
-<script src="/static/mc_hub.js?v=paper14"></script>
-<script src="/static/auth_google.js?v=paper14"></script>
+<script src="/static/ipl_glue.js?v=paper15"></script>
+<script src="/static/mc_hub.js?v=paper15"></script>
+<script src="/static/auth_google.js?v=paper15"></script>
 </body>
 </html>

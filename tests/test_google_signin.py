@@ -71,6 +71,9 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         self.assertEqual((c["ok"], c["google"], c["pin_enabled"]), (True, {"enabled": True, "client_id": CLIENT}, True))
         off = self.r("a_off_config")["body"]
         self.assertEqual(off["google"], {"enabled": False, "client_id": None})
+        self.assertEqual(c["pin_members"], ["Buddy", "Moe", "Sai", "Zed"], "everybody still has a passcode: the card offers a chip to each, in name order")
+        self.assertEqual(off["pin_members"], c["pin_members"], "the passcode names do not depend on whether Google is set up")
+        self.assertEqual(sorted(c), ["google", "ok", "pin_enabled", "pin_members"], "and the config carries nothing else (no secret, no address)")
 
     def test_nothing_works_until_a_client_id_is_set(self):
         self.refused("a_off_nonce", 503, "google_not_configured")
@@ -160,6 +163,10 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
         w = self.r("c_buddy_whoami")["body"]
         self.assertEqual((w["linked"], w["pin_enabled"]), (False, True))
         self.assertTrue(self.r("c_config_still_pin")["body"]["pin_enabled"])
+        names = self.r("c_config_still_pin")["body"]["pin_members"]
+        self.assertEqual(names, self.r("c_pin_names_db"), "the config names exactly the members whose passcode still exists")
+        self.assertNotIn("Moe", names, "Moe switched to Google: a passcode chip for Moe would be a dead end")
+        self.assertIn("Buddy", names)
 
     def test_nobody_can_take_another_members_google_account(self):
         self.refused("c_buddy_takes_moes_account", 409, "google_account_in_use")
@@ -226,6 +233,7 @@ class TheRealRoutesOnScratchData(unittest.TestCase):
     def test_once_everybody_has_switched_nobody_has_a_passcode(self):
         self.assertEqual(self.r("g_pins_left"), [])
         self.assertFalse(self.r("g_config")["body"]["pin_enabled"])
+        self.assertEqual(self.r("g_config")["body"]["pin_members"], [], "and nobody is offered a passcode chip")
 
     # ── H. the budget ──
     def test_sign_ins_have_their_own_rate_limit(self):

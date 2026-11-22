@@ -42,7 +42,9 @@ const LOADED = ['_teamCost', '_remaining', '_priceBounds', '_nwSig', '_nwDirty',
   '_nwPickRole', '_nwOpenPlayer', '_nowMs', '_deadlineLocked', '_finalWeek', '_deadlineText', '_lockUrgent', '_pickerRowsHtml', '_lockIn', '_buildActionBanner', '_nwShown', '_buildNwSquad', '_barParts', '_pickerXiHtml', '_pickerBarHtml', '_buildBudgetBar', '_pageStripHtml', '_statusChip', '_syncBarH', '_buildNextWeekCard', '_focusKey', '_focusFind', '_navDot',
   // Phase 1.6: the week a draft is for, Keep this XI, a draft from a week that moved on, the lock card wording, notices, local time
   '_nwTargetWeek', '_nwSameAsXi', '_nwCarried', '_nwKeep', '_nwWeekMoved', '_nwOfferStale', '_nwAdopt', '_nwLetGo', '_nwSyncTarget', '_whenLocal', '_hhmm', '_nwWhenLine',
-  '_lockCardText', '_nwSeenKey', '_nwSeenWeek', '_nwDismissNotice', '_nwNotices'];
+  '_lockCardText', '_nwSeenKey', '_nwSeenWeek', '_nwDismissNotice', '_nwNotices',
+  // the UX pass (2026-11-22): a finished competition says where to go; a failed history load says so
+  '_nextComp', '_historyErrorHtml', '_buildNextCompBanner'];
 
 function load(o = {}) {
   const c = { toasts: [], warns: [], fails: [], events: [], confirms: [], sheets: [], sent: [], timers: [], renders: 0, backs: 0, saveImpl: () => Promise.resolve({ ok: true }), store: o.store || new Map(), storeBroken: false };
@@ -64,7 +66,7 @@ function load(o = {}) {
     _nwDraft: { team: [], cap: null, vc: null }, _nwSaved: null, _nwCarry: false, _nwRestored: false, _lockedWeek: null, _nwSaving: false, _nwSlow: false, _nwSlowT: null,
     _nwTouched: false, _nwKeeping: false, _nwTarget: null, _nwOffer: false,
     _pickerSearch: '', _pickerRole: 'All', _pickerTeams: [], _pickerSort: 'season', _pickerMaxPrice: null, _pickerFiltersOpen: false, _pickerXiOpen: false, matches: [], _barH: 0,
-    _pickOpen: false, _historyData: null, _state: { deadline: { next_lock_utc: FUTURE(), status: 'active' } }, $app: null,
+    _pickOpen: false, _historyData: null, _historyFailed: false, _competitions: [], _state: { deadline: { next_lock_utc: FUTURE(), status: 'active' } }, $app: null,
   });
   const catalogue = o.players || PLAYERS;
   c._allPlayers = () => catalogue.slice().sort((a, b) => (a.name < b.name ? -1 : 1));
@@ -882,6 +884,51 @@ test('the banner on the other tabs keeps a carried-over XI in one tap, and is no
   assert.match(b, /Using last week’s XI\. Keep it, or change it\./); assert.match(b, /onclick="_nwKeep\(\)">Keep this XI</); assert.ok(!/action-banner ok/.test(b));
   row.next_week_touched_at = '2027-01-19T08:00:00+00:00'; c._nwInit(row); b = c._buildActionBanner();
   assert.match(b, /Your XI is ready/); assert.match(b, /action-banner ok/); assert.ok(!/Keep this XI/.test(b));
+});
+
+// ── UX pass 2026-11-22: a failed history load, and a finished competition ──
+const COMPS = [{ slug: 'ipl_2026', name: 'IPL 2026', status: 'completed', champion: 'Sai' }, { slug: 'sa20_2027', name: 'SA20 2027', status: 'upcoming' }];
+const onFinished = (c, comps = COMPS) => { c._competitions = comps; c._activeComp = 'ipl_2026'; c._activeCompObj = () => comps.filter((x) => x.slug === 'ipl_2026')[0] || {}; return c; };
+
+test('Pick card: the saved XI did not load -> an error card with Try again, never an empty editor that looks like a lost team', (c) => {
+  c._historyData = null; c._historyFailed = true;
+  let h = c._buildNextWeekCard();
+  assert.match(h, /Could not load your team/); assert.match(h, /_retryHistory\(\)/); assert.match(h, /Your saved picks are safe/);
+  assert.ok(!/add-players|nw-budget-bar|nw-right|picker-stub|nw-layout/.test(h), 'no editor to start from an empty draft');
+  c._historyFailed = false; h = c._buildNextWeekCard();
+  assert.match(h, /nw-layout/, 'while it is only loading (not failed) the editor shows as before');
+  withSaved(c); c._historyFailed = true; h = c._buildNextWeekCard();
+  assert.match(h, /nw-layout/); assert.ok(!/Could not load your team/.test(h), 'the data is there: a stale failure flag never hides a loaded team');
+});
+
+test('a finished competition: the Pick card names the competition that is live (else the first still to come) and has a button to go there', (c) => {
+  onFinished(c);
+  let h = c._buildNextWeekCard();
+  assert.match(h, /This competition has finished/); assert.match(h, /SA20 2027 starts soon: pick your team there\./); assert.match(h, /onclick="_switchComp\('sa20_2027'\)">Go to SA20 2027</);
+  onFinished(c, [COMPS[0], { slug: 'up_1', name: 'Later Cup', status: 'upcoming' }, { slug: 'sa20_2027', name: 'SA20 2027', status: 'active' }]);
+  h = c._buildNextWeekCard(); assert.match(h, /SA20 2027 is live now/); assert.match(h, /_switchComp\('sa20_2027'\)/, 'live beats an earlier "upcoming" in the list');
+  onFinished(c, [COMPS[0]]);
+  h = c._buildNextWeekCard(); assert.match(h, /Picks are closed\./); assert.ok(!/_switchComp|Go to/.test(h), 'nothing to go to: no button, no sentence about switching');
+});
+
+test('_nextComp: only a finished competition has a next one; never itself; a slug cannot break out of the handler', (c) => {
+  c._competitions = COMPS; c._activeCompObj = () => COMPS[1];
+  assert.strictEqual(c._nextComp(), null, 'the open competition has nothing to hand over to');
+  onFinished(c); assert.strictEqual(c._nextComp().slug, 'sa20_2027');
+  onFinished(c, [Object.assign({}, COMPS[0]), { slug: "x');alert(1);//", name: 'Evil <b>', status: 'active' }]);
+  const b = c._buildNextCompBanner();
+  assert.ok(b.indexOf("_switchComp('x\\');alert(1);//')") >= 0, 'the slug is escaped inside the handler: ' + b); assert.ok(b.indexOf('Evil <b>') === -1 && b.indexOf('Evil &lt;b&gt;') >= 0, 'the name is escaped as text');
+});
+
+test('the banner for a finished competition: signed-in members only, one tap to the next competition; the pick-deadline banner stays out of its way', (c) => {
+  onFinished(c);
+  const b = c._buildNextCompBanner();
+  assert.match(b, /class="action-banner"/); assert.match(b, /role="region" aria-label="Next competition"/);
+  assert.match(b, /IPL 2026 has finished/); assert.match(b, /SA20 2027 starts soon\. Pick your team there\./); assert.match(b, /onclick="_switchComp\('sa20_2027'\)">Go to SA20 2027</);
+  assert.strictEqual(c._buildActionBanner(), '', 'the deadline banner is silent for a finished competition (as before)');
+  c._username = null; assert.strictEqual(c._buildNextCompBanner(), '', 'signed out: the sign-in card is the whole story');
+  c._username = 'Sai'; c._activeCompObj = () => COMPS[1]; assert.strictEqual(c._buildNextCompBanner(), '', 'an open competition has the deadline banner instead');
+  onFinished(c, [COMPS[0]]); assert.strictEqual(c._buildNextCompBanner(), '', 'nothing to point at: no banner');
 });
 
 (async () => {

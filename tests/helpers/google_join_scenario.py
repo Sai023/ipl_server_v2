@@ -106,6 +106,7 @@ out["b_state_has_member"] = "Nina" in ((call("GET", "/api/state")["body"] or {})
 out["b_admin_list"] = call("GET", "/api/admin/members", "tok-sai")
 out["b_pin_login"] = call("POST", "/api/login", None, {"name": "Nina", "passcode": "1234"})
 out["b_google_again"] = sign_in("g-join-one", "person.one@gmail.com")
+out["b_config"] = call("GET", "/api/auth/config")
 out["b_ticket_reuse"] = join(t1, "Nina Two")
 out["b_evil_absent"] = sql("SELECT count(*) AS n FROM identities WHERE subject='evil-sub' OR email='evil@example.com'")[0]["n"] == 0
 out["b_next_offer_statuses"] = {m["name"]: m["status"] for m in fresh("probe")[0]["body"]["claim"]["members"]}

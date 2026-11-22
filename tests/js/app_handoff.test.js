@@ -353,7 +353,7 @@ function page(o = {}) {
 }
 
 t('PAGE: the sign-in card says why the member is here, and while the app redeems its code it shows a card of its own instead of the sign-in choices', () => {
-  const card = (g) => page({ fns: ['_buildLoginCard'], google: g })._buildLoginCard(['Moe', 'Sai']);
+  const card = (g) => page({ fns: ['_buildLoginCard', '_hasPasscode'], google: g })._buildLoginCard(['Moe', 'Sai']);
   const note = '<p class="handoff-note">NOTE</p>';
   assert.ok(card({ note }).indexOf(note) > card({ note }).indexOf('Who\'s playing?'), 'the note sits under the heading');
   assert.strictEqual(card({}).indexOf('handoff-note'), -1, 'no note when the app sent nobody');

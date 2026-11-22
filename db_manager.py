@@ -1555,6 +1555,13 @@ class DatabaseManager:
                 "ORDER BY lower(m.username), m.username", (NO_PIN,)).fetchall()
             return [dict(r) for r in rows]
 
+    def list_pin_members(self) -> list:
+        """The NAMES of the members who can still sign in with a passcode, sorted. The sign-in card offers a passcode chip to these only: a member who joined with Google or has
+        switched has no passcode, and a chip for them is a dead end."""
+        with self._read() as con:
+            rows = con.execute("SELECT username FROM members WHERE passcode_hash <> %s ORDER BY lower(username), username", (NO_PIN,)).fetchall()
+            return [r["username"] for r in rows]
+
     def count_pin_members(self) -> int:
         """How many members can still sign in with a passcode (0 once everybody uses Google: the page then drops the passcode screens)."""
         with self._read() as con:

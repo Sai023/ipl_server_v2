@@ -551,9 +551,12 @@ def _verify_google_body(d):
 
 @bp.route("/api/auth/config", methods=["GET"])
 def api_auth_config():
-    """What the sign-in screen needs: is Google sign-in set up (and our client id, which is public by design), and does anybody still sign in with a passcode?"""
+    """What the sign-in screen needs: is Google sign-in set up (and our client id, which is public by design), and which members can still sign in with a passcode
+    (`pin_members`, names only: the card offers a passcode chip to these and to nobody else; `pin_enabled` is whether there are any). Which names have no passcode is no secret:
+    the member list is public, and a passcode sign-in for a switched member already answers `pin_retired`."""
     cid = _gid.client_id()
-    return jsonify({"ok": True, "google": {"enabled": bool(cid), "client_id": cid or None}, "pin_enabled": db.count_pin_members() > 0})
+    pin_members = db.list_pin_members()
+    return jsonify({"ok": True, "google": {"enabled": bool(cid), "client_id": cid or None}, "pin_enabled": len(pin_members) > 0, "pin_members": pin_members})
 
 
 @bp.route("/api/auth/nonce", methods=["GET"])
