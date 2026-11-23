@@ -305,7 +305,7 @@ class TheAlertsOnScratchData(unittest.TestCase):
     def test_what_telegram_was_sent_is_clean(self):
         self.assertFalse(self.r("tg_token_in_any_text"), "the bot token must never be part of a message")
         self.assertEqual(self.r("chat_ids"), ["-100555"])
-        self.assertEqual(self.r("paths"), ["/bot987654321:AAH-alerts-test-token-0123456789/sendMessage"])
+        self.assertEqual(self.r("paths"), ["/bot987654321:AAH-alerts-test-token-01/sendMessage"])
 
 
 @NEEDS

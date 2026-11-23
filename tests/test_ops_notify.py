@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import ops_notify as notify  # noqa: E402
 
-TOKEN = "123456789:AAH-fake_token_for_the_tests_0123456789"
+TOKEN = "123456789:AAH-fake_test_token_0123"
 CHAT = "-1001234567890"
 
 
@@ -290,7 +290,7 @@ class Scrub(unittest.TestCase):
         env = {"TELEGRAM_BOT_TOKEN": TOKEN, "TELEGRAM_CHAT_ID": CHAT}
         self.assertEqual(notify.scrub("GET /bot%s/sendMessage failed" % TOKEN, env), "GET /bot<token>/sendMessage failed")
         self.assertEqual(notify.scrub("token " + TOKEN, env), "token <token>")
-        other = "bot987654321:ZZZ_another_looking_token_abcdefghij"
+        other = "bot987654321:ZZZ_other_token_abcdef"
         self.assertEqual(notify.scrub("see /%s/x" % other, env), "see /bot<token>/x")
         self.assertEqual(notify.scrub("nothing to hide", env), "nothing to hide")
         self.assertEqual(notify.scrub(None, env), "None")

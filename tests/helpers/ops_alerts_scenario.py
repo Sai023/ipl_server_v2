@@ -29,7 +29,7 @@ NOW = datetime.now(timezone.utc)
 H, D, M = timedelta(hours=1), timedelta(days=1), timedelta(minutes=1)
 TEAM = [f"p{i}" for i in range(1, 12)]
 ADMIN = "tok-alerts-admin"
-TG_TOKEN, TG_CHAT = "987654321:AAH-alerts-test-token-0123456789", "-100555"
+TG_TOKEN, TG_CHAT = "987654321:AAH-alerts-test-token-01", "-100555"
 BASE_URL = "https://league.example.org"
 
 
